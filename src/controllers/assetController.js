@@ -1,0 +1,348 @@
+const alpacaService = require('../services/alpacaService');
+const logger = require('../utils/logger');
+
+const getAssets = async (req, res) => {
+  try {
+    const { status = 'active', assetClass = 'us_equity', exchange } = req.query;
+
+    const assets = await alpacaService.getAssets(status, assetClass, exchange);
+
+    const formattedAssets = assets.map(asset => ({
+      symbol: asset.symbol,
+      name: asset.name,
+      exchange: asset.exchange,
+      assetClass: asset.class,
+      status: asset.status,
+      tradable: asset.tradable,
+      marginable: asset.marginable,
+      shortable: asset.shortable,
+      easyToBorrow: asset.easy_to_borrow,
+      fractionable: asset.fractionable
+    }));
+
+    res.json({
+      success: true,
+      assets: formattedAssets,
+      count: formattedAssets.length,
+      filters: {
+        status,
+        assetClass,
+        exchange: exchange || 'all'
+      }
+    });
+  } catch (error) {
+    logger.error('Get assets error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch assets'
+    });
+  }
+};
+
+const getAsset = async (req, res) => {
+  try {
+    const { symbol } = req.params;
+
+    const asset = await alpacaService.getAsset(symbol.toUpperCase());
+
+    if (!asset) {
+      return res.status(404).json({
+        success: false,
+        message: 'Asset not found'
+      });
+    }
+
+    const formattedAsset = {
+      symbol: asset.symbol,
+      name: asset.name,
+      exchange: asset.exchange,
+      assetClass: asset.class,
+      status: asset.status,
+      tradable: asset.tradable,
+      marginable: asset.marginable,
+      shortable: asset.shortable,
+      easyToBorrow: asset.easy_to_borrow,
+      fractionable: asset.fractionable,
+      attributes: asset.attributes || []
+    };
+
+    try {
+      const quote = await alpacaService.getLatestQuote(symbol.toUpperCase());
+      const bars = await alpacaService.getBars(symbol.toUpperCase(), '1Day', null, null, 2);
+
+      formattedAsset.marketData = {
+        currentPrice: quote.ap || quote.bp,
+        askPrice: quote.ap,
+        bidPrice: quote.bp,
+        askSize: quote.as,
+        bidSize: quote.bs,
+        lastUpdated: quote.t
+      };
+
+      if (bars.length >= 2) {
+        const currentPrice = formattedAsset.marketData.currentPrice;
+        const previousClose = parseFloat(bars[bars.length - 2].c);
+        const change = currentPrice - previousClose;
+        const changePercent = (change / previousClose) * 100;
+
+        formattedAsset.priceInfo = {
+          change: parseFloat(change.toFixed(2)),
+          changePercent: parseFloat(changePercent.toFixed(2)),
+          previousClose,
+          volume: parseInt(bars[bars.length - 1].v || 0),
+          high: parseFloat(bars[bars.length - 1].h),
+          low: parseFloat(bars[bars.length - 1].l),
+          open: parseFloat(bars[bars.length - 1].o)
+        };
+      }
+    } catch (marketDataError) {
+      logger.warn(`Failed to get market data for ${symbol}:`, marketDataError);
+      formattedAsset.marketData = null;
+      formattedAsset.priceInfo = null;
+    }
+
+    res.json({
+      success: true,
+      asset: formattedAsset
+    });
+  } catch (error) {
+    logger.error(`Get asset error for ${symbol}:`, error);
+
+    if (error.message.includes('asset not found') || error.message.includes('404')) {
+      return res.status(404).json({
+        success: false,
+        message: 'Asset not found'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch asset details'
+    });
+  }
+};
+
+const searchAssets = async (req, res) => {
+  try {
+    const { query, limit = 50 } = req.query;
+
+    if (!query || query.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Search query must be at least 2 characters long'
+      });
+    }
+
+    const assets = await alpacaService.getAssets('active', 'us_equity');
+
+    const searchQuery = query.toLowerCase().trim();
+    const filteredAssets = assets.filter(asset =>
+      asset.symbol.toLowerCase().includes(searchQuery) ||
+      asset.name.toLowerCase().includes(searchQuery)
+    );
+
+    const limitedResults = filteredAssets.slice(0, Math.min(parseInt(limit), 100));
+
+    const formattedResults = limitedResults.map(asset => ({
+      symbol: asset.symbol,
+      name: asset.name,
+      exchange: asset.exchange,
+      assetClass: asset.class,
+      tradable: asset.tradable,
+      fractionable: asset.fractionable
+    }));
+
+    res.json({
+      success: true,
+      results: formattedResults,
+      count: formattedResults.length,
+      totalMatches: filteredAssets.length,
+      query: searchQuery,
+      limited: filteredAssets.length > parseInt(limit)
+    });
+  } catch (error) {
+    logger.error('Search assets error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to search assets'
+    });
+  }
+};
+
+const getTradableAssets = async (req, res) => {
+  try {
+    const { exchange, limit = 100 } = req.query;
+
+    const assets = await alpacaService.getAssets('active', 'us_equity', exchange);
+
+    const tradableAssets = assets.filter(asset =>
+      asset.tradable === true && asset.status === 'active'
+    );
+
+    const limitedAssets = tradableAssets.slice(0, Math.min(parseInt(limit), 500));
+
+    const formattedAssets = await Promise.allSettled(
+      limitedAssets.map(async (asset) => {
+        const baseAsset = {
+          symbol: asset.symbol,
+          name: asset.name,
+          exchange: asset.exchange,
+          assetClass: asset.class,
+          marginable: asset.marginable,
+          shortable: asset.shortable,
+          fractionable: asset.fractionable
+        };
+
+        try {
+          const quote = await alpacaService.getLatestQuote(asset.symbol);
+          baseAsset.currentPrice = quote.ap || quote.bp;
+          baseAsset.lastUpdated = quote.t;
+        } catch (quoteError) {
+          baseAsset.currentPrice = null;
+          baseAsset.lastUpdated = null;
+        }
+
+        return baseAsset;
+      })
+    );
+
+    const successfulResults = formattedAssets
+      .filter(result => result.status === 'fulfilled')
+      .map(result => result.value);
+
+    res.json({
+      success: true,
+      assets: successfulResults,
+      count: successfulResults.length,
+      filters: {
+        exchange: exchange || 'all',
+        status: 'active',
+        tradable: true
+      }
+    });
+  } catch (error) {
+    logger.error('Get tradable assets error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch tradable assets'
+    });
+  }
+};
+
+const getPopularAssets = async (req, res) => {
+  try {
+    const popularSymbols = [
+      'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX',
+      'BABA', 'V', 'JPM', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC',
+      'DIS', 'ADBE', 'CRM', 'NFLX', 'PYPL', 'INTC', 'CMCSA', 'PFE',
+      'VZ', 'T', 'ABT', 'NKE'
+    ];
+
+    const assets = {};
+
+    await Promise.allSettled(
+      popularSymbols.map(async (symbol) => {
+        try {
+          const [asset, quote, bars] = await Promise.all([
+            alpacaService.getAsset(symbol),
+            alpacaService.getLatestQuote(symbol),
+            alpacaService.getBars(symbol, '1Day', null, null, 2)
+          ]);
+
+          let changePercent = 0;
+          if (bars.length >= 2) {
+            const currentPrice = quote.ap || quote.bp;
+            const previousClose = parseFloat(bars[bars.length - 2].c);
+            changePercent = ((currentPrice - previousClose) / previousClose) * 100;
+          }
+
+          assets[symbol] = {
+            symbol: asset.symbol,
+            name: asset.name,
+            exchange: asset.exchange,
+            currentPrice: quote.ap || quote.bp,
+            changePercent: parseFloat(changePercent.toFixed(2)),
+            volume: bars.length > 0 ? parseInt(bars[bars.length - 1].v || 0) : 0,
+            tradable: asset.tradable,
+            fractionable: asset.fractionable,
+            lastUpdated: quote.t
+          };
+        } catch (error) {
+          logger.warn(`Failed to get data for popular asset ${symbol}:`, error);
+        }
+      })
+    );
+
+    const popularAssets = Object.values(assets)
+      .sort((a, b) => b.volume - a.volume)
+      .slice(0, 20);
+
+    res.json({
+      success: true,
+      assets: popularAssets,
+      count: popularAssets.length,
+      category: 'popular'
+    });
+  } catch (error) {
+    logger.error('Get popular assets error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch popular assets'
+    });
+  }
+};
+
+const getAssetsByExchange = async (req, res) => {
+  try {
+    const { exchange } = req.params;
+    const { limit = 100 } = req.query;
+
+    const validExchanges = ['NASDAQ', 'NYSE', 'ARCA', 'BATS'];
+    if (!validExchanges.includes(exchange.toUpperCase())) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid exchange. Valid exchanges: ${validExchanges.join(', ')}`
+      });
+    }
+
+    const assets = await alpacaService.getAssets('active', 'us_equity', exchange.toUpperCase());
+
+    const tradableAssets = assets
+      .filter(asset => asset.tradable === true)
+      .slice(0, Math.min(parseInt(limit), 200));
+
+    const formattedAssets = tradableAssets.map(asset => ({
+      symbol: asset.symbol,
+      name: asset.name,
+      exchange: asset.exchange,
+      assetClass: asset.class,
+      tradable: asset.tradable,
+      marginable: asset.marginable,
+      shortable: asset.shortable,
+      fractionable: asset.fractionable
+    }));
+
+    res.json({
+      success: true,
+      assets: formattedAssets,
+      count: formattedAssets.length,
+      exchange: exchange.toUpperCase(),
+      totalAvailable: assets.length
+    });
+  } catch (error) {
+    logger.error(`Get assets by exchange error for ${exchange}:`, error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch exchange assets'
+    });
+  }
+};
+
+module.exports = {
+  getAssets,
+  getAsset,
+  searchAssets,
+  getTradableAssets,
+  getPopularAssets,
+  getAssetsByExchange
+};
