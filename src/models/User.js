@@ -86,13 +86,54 @@ User.init({
     type: DataTypes.BOOLEAN,
     defaultValue: false
   },
+  date_of_birth: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  gender: {
+    type: DataTypes.ENUM('male', 'female', 'other', 'not_specified'),
+    allowNull: true,
+    defaultValue: 'not_specified'
+  },
+  address: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  },
+  city: {
+    type: DataTypes.STRING(100),
+    allowNull: true
+  },
+  county: {
+    type: DataTypes.STRING(100),
+    allowNull: true
+  },
+  postal_code: {
+    type: DataTypes.STRING(20),
+    allowNull: true
+  },
+  citizenship: {
+    type: DataTypes.STRING(3),
+    defaultValue: 'KE'
+  },
+  occupation: {
+    type: DataTypes.STRING(100),
+    allowNull: true
+  },
+  registration_step: {
+    type: DataTypes.ENUM('email_verification', 'personal_info', 'phone_verification', 'address_info', 'kyc_verification', 'kyc_pending', 'kyc_under_review', 'completed', 'initial_completed'),
+    defaultValue: 'email_verification'
+  },
   kyc_status: {
-    type: DataTypes.ENUM('pending', 'submitted', 'approved', 'rejected'),
-    defaultValue: 'pending'
+    type: DataTypes.ENUM('not_started', 'pending', 'submitted', 'approved', 'rejected', 'under_review'),
+    defaultValue: 'not_started'
   },
   kyc_data: {
     type: DataTypes.JSONB,
     defaultValue: {}
+  },
+  account_status: {
+    type: DataTypes.ENUM('pending', 'active', 'suspended', 'closed'),
+    defaultValue: 'pending'
   },
   alpaca_account_id: {
     type: DataTypes.STRING(255),
@@ -118,6 +159,58 @@ User.init({
   lock_until: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+  biometric_enabled: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  two_factor_enabled: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  pin_hash: {
+    type: DataTypes.STRING(255),
+    allowNull: true
+  },
+  security_preferences: {
+    type: DataTypes.JSONB,
+    defaultValue: {
+      require_biometric_for_login: false,
+      require_biometric_for_transactions: true,
+      biometric_timeout_minutes: 15
+    }
+  },
+  terms_accepted: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  privacy_accepted: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  terms_accepted_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  privacy_accepted_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  quiz_answers: {
+    type: DataTypes.JSONB,
+    allowNull: true,
+    defaultValue: null
+  },
+  quiz_completed_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  registration_status: {
+    type: DataTypes.ENUM('started', 'email_verified', 'phone_verified', 'quiz_completed', 'documents_uploaded', 'completed'),
+    allowNull: false,
+    defaultValue: 'started'
   }
 }, {
   sequelize,

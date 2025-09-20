@@ -50,6 +50,78 @@ class EmailService {
     }
   }
 
+  async sendVerificationCodeEmail(user, verificationCode) {
+    const html = `
+      <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #2c5aa0;">Welcome to Trading Platform</h1>
+        </div>
+
+        <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h2 style="color: #333;">Hello ${user.first_name}!</h2>
+          <p style="color: #666; line-height: 1.6;">
+            Thank you for joining our trading platform. To get started, please verify your email address using the verification code below.
+          </p>
+        </div>
+
+        <div style="text-align: center; margin: 30px 0; background: #e3f2fd; padding: 30px; border-radius: 10px;">
+          <p style="color: #1976d2; font-size: 18px; margin-bottom: 10px; font-weight: bold;">Your verification code is:</p>
+          <div style="background: #1976d2; color: white; padding: 20px; border-radius: 8px; font-size: 32px; font-weight: bold; letter-spacing: 4px; font-family: 'Courier New', monospace;">
+            ${verificationCode}
+          </div>
+          <p style="color: #666; font-size: 14px; margin-top: 15px;">
+            This code will expire in 15 minutes for security purposes.
+          </p>
+        </div>
+
+        <div style="background: #e9ecef; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <h3 style="color: #495057; margin-top: 0;">Next Steps After Verification:</h3>
+          <ul style="color: #6c757d;">
+            <li>Complete your personal information</li>
+            <li>Verify your phone number</li>
+            <li>Complete KYC verification</li>
+            <li>Fund your wallet via M-Pesa</li>
+            <li>Start trading US stocks</li>
+          </ul>
+        </div>
+
+        <div style="border-top: 1px solid #dee2e6; padding-top: 20px; text-align: center; color: #6c757d; font-size: 12px;">
+          <p>If you didn't create this account, please ignore this email.</p>
+          <p>For security reasons, never share this verification code with anyone.</p>
+        </div>
+      </div>
+    `;
+
+    const text = `
+      Welcome to Trading Platform!
+
+      Hello ${user.first_name},
+
+      Thank you for joining our trading platform. Please verify your email address using the verification code below:
+
+      Verification Code: ${verificationCode}
+
+      This code will expire in 15 minutes for security purposes.
+
+      Next steps after verification:
+      - Complete your personal information
+      - Verify your phone number
+      - Complete KYC verification
+      - Fund your wallet via M-Pesa
+      - Start trading US stocks
+
+      If you didn't create this account, please ignore this email.
+      For security reasons, never share this verification code with anyone.
+    `;
+
+    return this.sendEmail({
+      to: user.email,
+      subject: 'Email Verification Code - Trading Platform',
+      html,
+      text
+    });
+  }
+
   async sendWelcomeEmail(user, verificationToken) {
     const verificationUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
 

@@ -1,73 +1,175 @@
-const { Notification, User } = require('../models');
-const emailService = require('../services/emailService');
-const alpacaService = require('../services/alpacaService');
-const exchangeService = require('../services/exchangeService');
+const notificationService = require('../services/notificationService');
+const { User, NotificationPreferences, Notification } = require('../models');
 const logger = require('../utils/logger');
 
-const getNotifications = async (req, res) => {
+// Add/Update device token for push notifications
+const addDeviceToken = async (req, res) => {
   try {
-    const { page = 1, limit = 20, type, read, priority } = req.query;
-    const offset = (page - 1) * limit;
+    const { deviceToken, platform, deviceInfo } = req.body;
+    const userId = req.user.id;
 
-    const whereClause = { user_id: req.user.id };
-    if (type) whereClause.type = type;
-    if (read !== undefined) whereClause.is_read = read === 'true';
-    if (priority) whereClause.priority = priority;
+    if (!deviceToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Device token is required'
+      });
+    }
 
-    const { count, rows: notifications } = await Notification.findAndCountAll({
-      where: whereClause,
-      order: [['created_at', 'DESC']],
-      limit: parseInt(limit),
-      offset: parseInt(offset)
-    });
+    const result = await notificationService.addDeviceToken(userId, deviceToken);
 
-    res.json({
+    if (result.success) {
+      // Send test notification to confirm setup
+      await notificationService.sendMultiChannelNotification(userId, 'account_updates', {
+        title: 'Notifications Enabled!',
+        body: 'You\'ll now receive important updates and alerts on this device.',
+        icon: 'notification_icon'
+      }, {
+        type: 'notification_setup_complete',
+        action: 'none'
+      });
+    }
+
+    res.status(200).json({
       success: true,
-      notifications: notifications.map(notification => ({
-        id: notification.id,
-        type: notification.type,
-        title: notification.title,
-        message: notification.message,
-        priority: notification.priority,
-        isRead: notification.is_read,
-        metadata: notification.metadata,
-        actionUrl: notification.action_url,
-        createdAt: notification.created_at,
-        readAt: notification.read_at
-      })),
-      pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(count / limit),
-        totalItems: count,
-        itemsPerPage: parseInt(limit)
-      },
-      summary: {
-        total: count,
-        unread: await Notification.count({
-          where: { user_id: req.user.id, is_read: false }
-        }),
-        highPriority: await Notification.count({
-          where: { user_id: req.user.id, priority: 'high', is_read: false }
-        })
-      }
+      message: 'Device token registered successfully'
     });
+
   } catch (error) {
-    logger.error('Get notifications error:', error);
+    logger.error('Add device token error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch notifications'
+      message: 'Internal server error'
     });
   }
 };
 
+// Remove device token
+const removeDeviceToken = async (req, res) => {
+  try {
+    const { deviceToken } = req.body;
+    const userId = req.user.id;
+
+    if (!deviceToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Device token is required'
+      });
+    }
+
+    await notificationService.removeDeviceToken(userId, deviceToken);
+
+    res.status(200).json({
+      success: true,
+      message: 'Device token removed successfully'
+    });
+
+  } catch (error) {
+    logger.error('Remove device token error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Get notification preferences
+const getPreferences = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const preferences = await NotificationPreferences.getPreferences(userId);
+
+    res.status(200).json({
+      success: true,
+      data: preferences
+    });
+
+  } catch (error) {
+    logger.error('Get preferences error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Update notification preferences
+const updatePreferences = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const updates = req.body;
+
+    const preferences = await NotificationPreferences.getPreferences(userId);
+    await preferences.updatePreferences(updates);
+
+    logger.info(`Notification preferences updated for user ${userId}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Notification preferences updated successfully',
+      data: preferences
+    });
+
+  } catch (error) {
+    logger.error('Update preferences error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Get user notifications (inbox)
+const getNotifications = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { page = 1, limit = 20, unreadOnly = false } = req.query;
+
+    const whereClause = { user_id: userId };
+    if (unreadOnly === 'true') {
+      whereClause.is_read = false;
+    }
+
+    const offset = (page - 1) * limit;
+
+    const notifications = await Notification.findAndCountAll({
+      where: whereClause,
+      order: [['created_at', 'DESC']],
+      limit: parseInt(limit),
+      offset: offset
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        notifications: notifications.rows,
+        pagination: {
+          total: notifications.count,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(notifications.count / limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    logger.error('Get notifications error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Mark notification as read
 const markAsRead = async (req, res) => {
   try {
     const { notificationId } = req.params;
+    const userId = req.user.id;
 
     const notification = await Notification.findOne({
       where: {
         id: notificationId,
-        user_id: req.user.id
+        user_id: userId
       }
     });
 
@@ -78,526 +180,167 @@ const markAsRead = async (req, res) => {
       });
     }
 
-    await notification.update({
-      is_read: true,
-      read_at: new Date()
-    });
+    await notification.update({ is_read: true });
 
-    res.json({
+    res.status(200).json({
       success: true,
       message: 'Notification marked as read'
     });
+
   } catch (error) {
-    logger.error('Mark notification as read error:', error);
+    logger.error('Mark as read error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to mark notification as read'
+      message: 'Internal server error'
     });
   }
 };
 
+// Mark all notifications as read
 const markAllAsRead = async (req, res) => {
   try {
+    const userId = req.user.id;
+
     await Notification.update(
-      {
-        is_read: true,
-        read_at: new Date()
-      },
+      { is_read: true },
       {
         where: {
-          user_id: req.user.id,
+          user_id: userId,
           is_read: false
         }
       }
     );
 
-    const unreadCount = await Notification.count({
-      where: { user_id: req.user.id, is_read: false }
+    res.status(200).json({
+      success: true,
+      message: 'All notifications marked as read'
     });
 
-    res.json({
-      success: true,
-      message: 'All notifications marked as read',
-      unreadCount
-    });
   } catch (error) {
-    logger.error('Mark all notifications as read error:', error);
+    logger.error('Mark all as read error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to mark all notifications as read'
+      message: 'Internal server error'
     });
   }
 };
 
-const deleteNotification = async (req, res) => {
+// Get unread notification count
+const getUnreadCount = async (req, res) => {
   try {
-    const { notificationId } = req.params;
+    const userId = req.user.id;
 
-    const notification = await Notification.findOne({
+    const count = await Notification.count({
       where: {
-        id: notificationId,
-        user_id: req.user.id
+        user_id: userId,
+        is_read: false
       }
     });
 
-    if (!notification) {
-      return res.status(404).json({
-        success: false,
-        message: 'Notification not found'
-      });
-    }
-
-    await notification.destroy();
-
-    res.json({
+    res.status(200).json({
       success: true,
-      message: 'Notification deleted successfully'
+      data: { unreadCount: count }
     });
+
   } catch (error) {
-    logger.error('Delete notification error:', error);
+    logger.error('Get unread count error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to delete notification'
+      message: 'Internal server error'
     });
   }
 };
 
-const createPriceAlert = async (req, res) => {
+// Send test notification (for testing purposes)
+const sendTestNotification = async (req, res) => {
   try {
-    const { symbol, condition, targetPrice, notificationMethod = 'both' } = req.body;
+    const userId = req.user.id;
+    const { type = 'account_updates', title, body } = req.body;
 
-    if (!symbol || !condition || !targetPrice) {
-      return res.status(400).json({
-        success: false,
-        message: 'Symbol, condition, and targetPrice are required'
-      });
-    }
-
-    if (!['above', 'below', 'crosses_up', 'crosses_down'].includes(condition)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid condition. Must be: above, below, crosses_up, or crosses_down'
-      });
-    }
-
-    // Verify symbol exists and get current price
-    try {
-      const asset = await alpacaService.getAsset(symbol.toUpperCase());
-      const quote = await alpacaService.getLatestQuote(symbol.toUpperCase());
-      const currentPrice = quote.ap || quote.bp;
-
-      const notification = await Notification.create({
-        user_id: req.user.id,
-        type: 'price_alert',
-        title: `Price Alert for ${symbol.toUpperCase()}`,
-        message: `Alert when ${symbol.toUpperCase()} ${condition.replace('_', ' ')} $${targetPrice}`,
-        priority: 'medium',
-        is_read: false,
-        metadata: {
-          symbol: symbol.toUpperCase(),
-          condition,
-          targetPrice: parseFloat(targetPrice),
-          currentPrice,
-          notificationMethod,
-          active: true,
-          assetName: asset.name
-        }
-      });
-
-      logger.info('Price alert created:', {
-        userId: req.user.id,
-        symbol: symbol.toUpperCase(),
-        condition,
-        targetPrice,
-        currentPrice
-      });
-
-      res.status(201).json({
-        success: true,
-        message: 'Price alert created successfully',
-        alert: {
-          id: notification.id,
-          symbol: symbol.toUpperCase(),
-          condition,
-          targetPrice: parseFloat(targetPrice),
-          currentPrice,
-          status: 'active'
-        }
-      });
-    } catch (symbolError) {
-      return res.status(404).json({
-        success: false,
-        message: 'Invalid symbol or symbol not found'
-      });
-    }
-  } catch (error) {
-    logger.error('Create price alert error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create price alert'
-    });
-  }
-};
-
-const getPriceAlerts = async (req, res) => {
-  try {
-    const { active, symbol } = req.query;
-
-    const whereClause = {
-      user_id: req.user.id,
-      type: 'price_alert'
-    };
-
-    if (active !== undefined) {
-      whereClause['metadata.active'] = active === 'true';
-    }
-
-    if (symbol) {
-      whereClause['metadata.symbol'] = symbol.toUpperCase();
-    }
-
-    const alerts = await Notification.findAll({
-      where: whereClause,
-      order: [['created_at', 'DESC']]
+    const result = await notificationService.sendMultiChannelNotification(userId, type, {
+      title: title || 'Test Notification',
+      body: body || 'This is a test notification to verify your notification settings.',
+      icon: 'test_icon'
+    }, {
+      type: 'test_notification',
+      timestamp: new Date().toISOString()
     });
 
-    const formattedAlerts = await Promise.all(
-      alerts.map(async (alert) => {
-        const metadata = alert.metadata;
-        let currentPrice = metadata.currentPrice;
-        let priceChange = 0;
-        let changePercent = 0;
-
-        // Get current price for active alerts
-        if (metadata.active) {
-          try {
-            const quote = await alpacaService.getLatestQuote(metadata.symbol);
-            currentPrice = quote.ap || quote.bp;
-            priceChange = currentPrice - metadata.currentPrice;
-            changePercent = (priceChange / metadata.currentPrice) * 100;
-          } catch (priceError) {
-            logger.warn(`Failed to get current price for ${metadata.symbol}:`, priceError);
-          }
-        }
-
-        const distanceToTarget = Math.abs(currentPrice - metadata.targetPrice);
-        const distancePercent = (distanceToTarget / currentPrice) * 100;
-
-        return {
-          id: alert.id,
-          symbol: metadata.symbol,
-          assetName: metadata.assetName,
-          condition: metadata.condition,
-          targetPrice: metadata.targetPrice,
-          currentPrice,
-          priceChange: parseFloat(priceChange.toFixed(2)),
-          changePercent: parseFloat(changePercent.toFixed(2)),
-          distanceToTarget: parseFloat(distanceToTarget.toFixed(2)),
-          distancePercent: parseFloat(distancePercent.toFixed(2)),
-          active: metadata.active,
-          notificationMethod: metadata.notificationMethod,
-          createdAt: alert.created_at,
-          triggered: alert.is_read && metadata.active === false
-        };
-      })
-    );
-
-    res.json({
+    res.status(200).json({
       success: true,
-      alerts: formattedAlerts,
-      count: formattedAlerts.length,
-      summary: {
-        total: formattedAlerts.length,
-        active: formattedAlerts.filter(a => a.active).length,
-        triggered: formattedAlerts.filter(a => a.triggered).length
-      }
+      message: 'Test notification sent',
+      results: result.results
     });
+
   } catch (error) {
-    logger.error('Get price alerts error:', error);
+    logger.error('Send test notification error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch price alerts'
+      message: 'Internal server error'
     });
   }
 };
 
-const updatePriceAlert = async (req, res) => {
+// Trigger specific registration flow notifications (for manual testing/support)
+const triggerRegistrationNotification = async (req, res) => {
   try {
-    const { alertId } = req.params;
-    const { targetPrice, condition, active, notificationMethod } = req.body;
+    const { type } = req.params;
+    const userId = req.user.id;
+    const userName = req.user.first_name;
 
-    const alert = await Notification.findOne({
-      where: {
-        id: alertId,
-        user_id: req.user.id,
-        type: 'price_alert'
-      }
-    });
-
-    if (!alert) {
-      return res.status(404).json({
-        success: false,
-        message: 'Price alert not found'
-      });
-    }
-
-    const updates = { ...alert.metadata };
-    let messageUpdated = false;
-
-    if (targetPrice !== undefined) {
-      updates.targetPrice = parseFloat(targetPrice);
-      messageUpdated = true;
-    }
-
-    if (condition !== undefined) {
-      if (!['above', 'below', 'crosses_up', 'crosses_down'].includes(condition)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid condition'
-        });
-      }
-      updates.condition = condition;
-      messageUpdated = true;
-    }
-
-    if (active !== undefined) {
-      updates.active = active;
-    }
-
-    if (notificationMethod !== undefined) {
-      updates.notificationMethod = notificationMethod;
-    }
-
-    const updateData = { metadata: updates };
-
-    if (messageUpdated) {
-      updateData.message = `Alert when ${updates.symbol} ${updates.condition.replace('_', ' ')} $${updates.targetPrice}`;
-    }
-
-    await alert.update(updateData);
-
-    logger.info('Price alert updated:', {
-      userId: req.user.id,
-      alertId,
-      updates
-    });
-
-    res.json({
-      success: true,
-      message: 'Price alert updated successfully'
-    });
-  } catch (error) {
-    logger.error('Update price alert error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update price alert'
-    });
-  }
-};
-
-const deletePriceAlert = async (req, res) => {
-  try {
-    const { alertId } = req.params;
-
-    const alert = await Notification.findOne({
-      where: {
-        id: alertId,
-        user_id: req.user.id,
-        type: 'price_alert'
-      }
-    });
-
-    if (!alert) {
-      return res.status(404).json({
-        success: false,
-        message: 'Price alert not found'
-      });
-    }
-
-    await alert.destroy();
-
-    logger.info('Price alert deleted:', {
-      userId: req.user.id,
-      alertId,
-      symbol: alert.metadata.symbol
-    });
-
-    res.json({
-      success: true,
-      message: 'Price alert deleted successfully'
-    });
-  } catch (error) {
-    logger.error('Delete price alert error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete price alert'
-    });
-  }
-};
-
-const getNotificationSettings = async (req, res) => {
-  try {
-    const user = await User.findByPk(req.user.id);
-
-    const settings = user.notification_preferences || {
-      email: {
-        orderFilled: true,
-        orderCanceled: true,
-        priceAlerts: true,
-        portfolioUpdates: true,
-        marketNews: false,
-        systemUpdates: true
-      },
-      push: {
-        orderFilled: true,
-        orderCanceled: true,
-        priceAlerts: true,
-        portfolioUpdates: false,
-        marketNews: false,
-        systemUpdates: false
-      },
-      inApp: {
-        orderFilled: true,
-        orderCanceled: true,
-        priceAlerts: true,
-        portfolioUpdates: true,
-        marketNews: true,
-        systemUpdates: true
-      }
-    };
-
-    res.json({
-      success: true,
-      settings
-    });
-  } catch (error) {
-    logger.error('Get notification settings error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch notification settings'
-    });
-  }
-};
-
-const updateNotificationSettings = async (req, res) => {
-  try {
-    const settings = req.body;
-
-    const user = await User.findByPk(req.user.id);
-    await user.update({
-      notification_preferences: settings
-    });
-
-    logger.info('Notification settings updated:', {
-      userId: req.user.id,
-      settings
-    });
-
-    res.json({
-      success: true,
-      message: 'Notification settings updated successfully',
-      settings
-    });
-  } catch (error) {
-    logger.error('Update notification settings error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update notification settings'
-    });
-  }
-};
-
-// Helper function to create trading event notifications
-const createTradingNotification = async (userId, type, data) => {
-  try {
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
-
-    let title, message, priority = 'medium';
+    let result;
 
     switch (type) {
-      case 'order_filled':
-        title = `Order Filled - ${data.symbol}`;
-        message = `Your ${data.side} order for ${data.quantity} shares of ${data.symbol} has been filled at $${data.price} ($${(data.quantity * data.price).toFixed(2)} total)`;
-        priority = 'high';
+      case 'welcome':
+        result = await notificationService.sendRegistrationWelcome(userId, userName);
         break;
-      case 'order_canceled':
-        title = `Order Canceled - ${data.symbol}`;
-        message = `Your ${data.side} order for ${data.quantity} shares of ${data.symbol} has been canceled`;
+      case 'email_verification':
+        result = await notificationService.sendEmailVerificationReminder(userId);
         break;
-      case 'order_rejected':
-        title = `Order Rejected - ${data.symbol}`;
-        message = `Your ${data.side} order for ${data.quantity} shares of ${data.symbol} was rejected: ${data.reason}`;
-        priority = 'high';
+      case 'phone_verification':
+        const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+        result = await notificationService.sendPhoneVerificationCode(userId, verificationCode);
         break;
-      case 'price_alert_triggered':
-        title = `Price Alert Triggered - ${data.symbol}`;
-        message = `${data.symbol} has ${data.condition.replace('_', ' ')} your target price of $${data.targetPrice}. Current price: $${data.currentPrice}`;
-        priority = 'high';
+      case 'kyc_approved':
+        result = await notificationService.sendKYCStatusUpdate(userId, 'approved', 'Your KYC verification has been approved! You can now access all trading features.');
         break;
-      case 'portfolio_update':
-        title = 'Portfolio Update';
-        message = `Your portfolio value is now $${data.totalValue.toFixed(2)} (${data.changePercent > 0 ? '+' : ''}${data.changePercent.toFixed(2)}% today)`;
+      case 'account_activated':
+        result = await notificationService.sendAccountActivated(userId, userName);
         break;
-      case 'margin_call':
-        title = 'Margin Call Warning';
-        message = `Your account is approaching margin requirements. Current equity: $${data.equity.toFixed(2)}`;
-        priority = 'high';
-        break;
-      case 'account_restricted':
-        title = 'Account Restriction';
-        message = `Your account has been restricted for ${data.reason}. Contact support for assistance.`;
-        priority = 'high';
+      case 'biometric_setup':
+        result = await notificationService.sendBiometricSetupComplete(userId);
         break;
       default:
-        title = 'Trading Update';
-        message = 'You have a new trading update';
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid notification type'
+        });
     }
 
-    const notification = await Notification.create({
-      user_id: userId,
-      type,
-      title,
-      message,
-      priority,
-      is_read: false,
-      metadata: {
-        ...data,
-        exchangeRate,
-        timestamp: new Date().toISOString()
-      }
+    res.status(200).json({
+      success: true,
+      message: `${type} notification triggered`,
+      result: result
     });
 
-    // Send email if user has email notifications enabled
-    const user = await User.findByPk(userId);
-    const emailEnabled = user.notification_preferences?.email?.[type] ||
-                        user.notification_preferences?.email?.orderFilled;
-
-    if (emailEnabled) {
-      await emailService.sendNotificationEmail(user, {
-        type,
-        title,
-        message,
-        data
-      });
-    }
-
-    return notification;
   } catch (error) {
-    logger.error('Create trading notification error:', error);
-    throw error;
+    logger.error('Trigger notification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
   }
 };
 
 module.exports = {
+  addDeviceToken,
+  removeDeviceToken,
+  getPreferences,
+  updatePreferences,
   getNotifications,
   markAsRead,
   markAllAsRead,
-  deleteNotification,
-  createPriceAlert,
-  getPriceAlerts,
-  updatePriceAlert,
-  deletePriceAlert,
-  getNotificationSettings,
-  updateNotificationSettings,
-  createTradingNotification
+  getUnreadCount,
+  sendTestNotification,
+  triggerRegistrationNotification
 };

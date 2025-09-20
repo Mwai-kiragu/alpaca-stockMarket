@@ -1,18 +1,13 @@
 const { DataTypes, Model } = require('sequelize');
 const { sequelize } = require('../config/database');
-const crypto = require('crypto');
 
-class EmailVerificationToken extends Model {
-  static generateToken() {
-    return crypto.randomBytes(32).toString('hex');
-  }
-
+class PhoneVerificationToken extends Model {
   isExpired() {
     return new Date() > this.expires_at;
   }
 }
 
-EmailVerificationToken.init({
+PhoneVerificationToken.init({
   id: {
     type: DataTypes.UUID,
     defaultValue: DataTypes.UUIDV4,
@@ -26,19 +21,14 @@ EmailVerificationToken.init({
       key: 'id'
     }
   },
-  token: {
-    type: DataTypes.STRING(255),
-    allowNull: false,
-    unique: true
-  },
   verification_code: {
     type: DataTypes.STRING(10),
-    allowNull: true
+    allowNull: false
   },
   expires_at: {
     type: DataTypes.DATE,
     allowNull: false,
-    defaultValue: () => new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours from now
+    defaultValue: () => new Date(Date.now() + 10 * 60 * 1000) // 10 minutes from now
   },
   used: {
     type: DataTypes.BOOLEAN,
@@ -46,15 +36,14 @@ EmailVerificationToken.init({
   }
 }, {
   sequelize,
-  modelName: 'EmailVerificationToken',
-  tableName: 'email_verification_tokens',
+  modelName: 'PhoneVerificationToken',
+  tableName: 'phone_verification_tokens',
   indexes: [
     {
       fields: ['user_id']
     },
     {
-      fields: ['token'],
-      unique: true
+      fields: ['verification_code']
     },
     {
       fields: ['expires_at']
@@ -62,4 +51,4 @@ EmailVerificationToken.init({
   ]
 });
 
-module.exports = EmailVerificationToken;
+module.exports = PhoneVerificationToken;
