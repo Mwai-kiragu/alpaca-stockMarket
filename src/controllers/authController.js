@@ -59,11 +59,11 @@ const register = async (req, res) => {
     });
 
     // Send verification email with code
-    const emailResult = await emailService.sendVerificationCodeEmail(user, verificationCode);
+    // const emailResult = await emailService.sendVerificationCodeEmail(user, verificationCode);
 
-    if (!emailResult.success) {
-      logger.error(`Failed to send verification email to ${email}:`, emailResult.error);
-    }
+    // if (!emailResult.success) {
+    //   logger.error(`Failed to send verification email to ${email}:`, emailResult.error);
+    // }
 
     // Send welcome notification
     try {
