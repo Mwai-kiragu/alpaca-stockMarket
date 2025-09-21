@@ -12,8 +12,11 @@ const { connectDB } = require('./config/database');
 const logger = require('./utils/logger');
 const errorHandler = require('./middleware/errorHandler');
 
+// Core onboarding and authentication routes
 const authRoutes = require('./routes/auth');
-const registrationRoutes = require('./routes/registration');
+const onboardingRoutes = require('./routes/onboarding');
+
+// Additional platform routes
 const biometricRoutes = require('./routes/biometric');
 const walletRoutes = require('./routes/wallet');
 const orderRoutes = require('./routes/orders');
@@ -25,8 +28,6 @@ const updatesRoutes = require('./routes/updates');
 const searchRoutes = require('./routes/search');
 const notificationRoutes = require('./routes/notifications');
 const supportRoutes = require('./routes/support');
-const questionRoutes = require('./routes/questions');
-const kycRoutes = require('./routes/kyc');
 
 const app = express();
 const server = createServer(app);
@@ -55,8 +56,15 @@ app.use(limiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Serve static files for uploads
+app.use('/uploads', express.static('uploads'));
+
+// Core authentication and onboarding endpoints
 app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/registration', registrationRoutes);
+app.use('/api/v1/user', onboardingRoutes);
+app.use('/api/v1/onboarding', onboardingRoutes);
+
+// Trading platform endpoints
 app.use('/api/v1/biometric', biometricRoutes);
 app.use('/api/v1/wallet', walletRoutes);
 app.use('/api/v1/orders', orderRoutes);
@@ -68,8 +76,6 @@ app.use('/api/v1/updates', updatesRoutes);
 app.use('/api/v1/search', searchRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/support', supportRoutes);
-app.use('/api/v1', questionRoutes);
-app.use('/api/v1', kycRoutes);
 
 app.get('/health', (req, res) => {
   res.status(200).json({

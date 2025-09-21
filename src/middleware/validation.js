@@ -13,19 +13,15 @@ const handleValidationErrors = (req, res, next) => {
 };
 
 const registerValidation = [
-  body('firstName')
+  body('fullName')
     .trim()
     .isLength({ min: 2 })
-    .withMessage('First name must be at least 2 characters'),
-  body('lastName')
-    .trim()
-    .isLength({ min: 2 })
-    .withMessage('Last name must be at least 2 characters'),
+    .withMessage('Full name must be at least 2 characters'),
   body('email')
     .isEmail()
     .normalizeEmail()
     .withMessage('Valid email is required'),
-  body('phone')
+  body('phoneNumber')
     .isMobilePhone('any')
     .withMessage('Valid phone number is required'),
   body('password')

@@ -8,8 +8,6 @@ const EmailVerificationToken = require('./EmailVerificationToken');
 const PhoneVerificationToken = require('./PhoneVerificationToken');
 const BiometricAuth = require('./BiometricAuth');
 const NotificationPreferences = require('./NotificationPreferences');
-const Question = require('./Question');
-const KYCDocument = require('./KYCDocument');
 
 // Define associations
 User.hasOne(Wallet, { foreignKey: 'user_id', as: 'wallet' });
@@ -45,10 +43,6 @@ BiometricAuth.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasOne(NotificationPreferences, { foreignKey: 'user_id', as: 'notificationPreferences' });
 NotificationPreferences.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
-// KYC document associations
-User.hasMany(KYCDocument, { foreignKey: 'registrationId', as: 'kycDocuments' });
-KYCDocument.belongsTo(User, { foreignKey: 'registrationId', as: 'user' });
-
 module.exports = {
   sequelize,
   User,
@@ -61,7 +55,5 @@ module.exports = {
   EmailVerificationToken,
   PhoneVerificationToken,
   BiometricAuth,
-  NotificationPreferences,
-  Question,
-  KYCDocument
+  NotificationPreferences
 };

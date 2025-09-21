@@ -428,6 +428,119 @@ class EmailService {
     });
   }
 
+  async sendOnboardingCompleteEmail(user, alpacaAccountCreated = false) {
+    const html = `
+      <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #28a745;">🎉 Welcome to Riven Trading!</h1>
+        </div>
+
+        <div style="background: #d4edda; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #28a745;">
+          <h2 style="color: #155724; margin-top: 0;">Onboarding Complete!</h2>
+          <p style="color: #155724; line-height: 1.6; margin-bottom: 0;">
+            Congratulations ${user.first_name}! You have successfully completed your onboarding process.
+          </p>
+        </div>
+
+        ${alpacaAccountCreated ? `
+        <div style="background: #e3f2fd; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h3 style="color: #1976d2; margin-top: 0;">🚀 Your Trading Account is Ready!</h3>
+          <p style="color: #1976d2; line-height: 1.6;">
+            Your Alpaca trading account has been successfully created and is ready for use. You can now start trading US stocks immediately.
+          </p>
+        </div>
+        ` : `
+        <div style="background: #fff3cd; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h3 style="color: #856404; margin-top: 0;">⏳ Trading Account Setup in Progress</h3>
+          <p style="color: #856404; line-height: 1.6;">
+            Your trading account is being set up. You'll receive another email once it's ready for trading.
+          </p>
+        </div>
+        `}
+
+        <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h3 style="color: #495057; margin-top: 0;">What's Next?</h3>
+          <ul style="color: #6c757d; line-height: 1.8; padding-left: 20px;">
+            ${alpacaAccountCreated ? `
+            <li>🏦 <strong>Fund Your Account</strong> - Add money via M-Pesa to start trading</li>
+            <li>📈 <strong>Explore Markets</strong> - Browse and research US stocks</li>
+            <li>💼 <strong>Build Your Portfolio</strong> - Start investing in your favorite companies</li>
+            <li>📱 <strong>Set Price Alerts</strong> - Stay updated on stock movements</li>
+            ` : `
+            <li>⏳ <strong>Wait for Account Activation</strong> - We'll notify you when your trading account is ready</li>
+            <li>📚 <strong>Learn About Trading</strong> - Explore our educational resources</li>
+            <li>📱 <strong>Explore the App</strong> - Familiarize yourself with the platform</li>
+            <li>🔔 <strong>Enable Notifications</strong> - Stay updated on your account status</li>
+            `}
+          </ul>
+        </div>
+
+        <div style="background: #e9ecef; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <h4 style="color: #495057; margin-top: 0;">Welcome Bonus! 🎁</h4>
+          <p style="color: #6c757d; margin-bottom: 10px;">
+            As a welcome gift, we've credited your account with <strong>$10 USD</strong> to help you get started!
+          </p>
+          <p style="color: #6c757d; margin-bottom: 0; font-size: 12px;">
+            *Terms and conditions apply. Bonus funds available for trading after account funding.
+          </p>
+        </div>
+
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${process.env.CLIENT_URL || 'http://134.209.217.111'}/dashboard"
+             style="background: #28a745; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+            Go to Dashboard
+          </a>
+        </div>
+
+        <div style="border-top: 1px solid #dee2e6; padding-top: 20px; text-align: center; color: #6c757d; font-size: 12px;">
+          <p>Need help? Contact our support team anytime.</p>
+          <p>Thank you for choosing Riven Trading Platform!</p>
+        </div>
+      </div>
+    `;
+
+    const text = `
+      🎉 Welcome to Riven Trading!
+
+      Hello ${user.first_name},
+
+      Congratulations! You have successfully completed your onboarding process.
+
+      ${alpacaAccountCreated ?
+        '🚀 Your trading account is ready! You can now start trading US stocks immediately.' :
+        '⏳ Your trading account is being set up. You\'ll receive another email once it\'s ready for trading.'
+      }
+
+      What's Next:
+      ${alpacaAccountCreated ? `
+      - Fund your account via M-Pesa to start trading
+      - Explore and research US stocks
+      - Build your investment portfolio
+      - Set price alerts for your favorite stocks
+      ` : `
+      - Wait for account activation notification
+      - Learn about trading with our educational resources
+      - Explore the platform features
+      - Enable notifications for account updates
+      `}
+
+      Welcome Bonus: $10 USD credited to your account! 🎁
+
+      Visit your dashboard: ${process.env.CLIENT_URL || 'http://134.209.217.111'}/dashboard
+
+      Thank you for choosing Riven Trading Platform!
+    `;
+
+    return this.sendEmail({
+      to: user.email,
+      subject: alpacaAccountCreated ?
+        '🎉 Welcome to Riven! Your Trading Account is Ready' :
+        '🎉 Welcome to Riven! Account Setup in Progress',
+      html,
+      text
+    });
+  }
+
   async sendSupportTicketEmail(user, ticketData) {
     let html, subject;
 
