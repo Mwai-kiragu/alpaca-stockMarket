@@ -212,6 +212,7 @@ User.init({
     allowNull: false,
     defaultValue: 'started'
   }
+  
 }, {
   sequelize,
   modelName: 'User',
