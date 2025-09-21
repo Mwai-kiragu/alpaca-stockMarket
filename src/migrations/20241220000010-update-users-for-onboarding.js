@@ -93,6 +93,12 @@ module.exports = {
 
       // Update existing ENUM columns to include new values if needed
       if (tableInfo.registration_step) {
+        // First remove the default value
+        await queryInterface.changeColumn('users', 'registration_step', {
+          type: Sequelize.ENUM('email_verification', 'personal_info', 'phone_verification', 'address_info', 'kyc_verification', 'kyc_pending', 'kyc_under_review', 'completed', 'initial_completed'),
+          allowNull: true
+        });
+        // Then set the new default value
         await queryInterface.changeColumn('users', 'registration_step', {
           type: Sequelize.ENUM('email_verification', 'personal_info', 'phone_verification', 'address_info', 'kyc_verification', 'kyc_pending', 'kyc_under_review', 'completed', 'initial_completed'),
           allowNull: true,
@@ -101,6 +107,12 @@ module.exports = {
       }
 
       if (tableInfo.kyc_status) {
+        // First remove the default value
+        await queryInterface.changeColumn('users', 'kyc_status', {
+          type: Sequelize.ENUM('not_started', 'pending', 'submitted', 'approved', 'rejected', 'under_review'),
+          allowNull: true
+        });
+        // Then set the new default value
         await queryInterface.changeColumn('users', 'kyc_status', {
           type: Sequelize.ENUM('not_started', 'pending', 'submitted', 'approved', 'rejected', 'under_review'),
           allowNull: true,
