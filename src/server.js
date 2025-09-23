@@ -48,7 +48,28 @@ const limiter = rateLimit({
   message: 'Too many requests from this IP, please try again later.',
 });
 
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+
+// Block suspicious requests
+app.use((req, res, next) => {
+  const suspiciousPaths = [
+    '/wp-config',
+    '/appsettings',
+    '/cgi-bin',
+    '/.env',
+    '/config',
+    '/parameters.yml'
+  ];
+
+  if (suspiciousPaths.some(path => req.path.includes(path))) {
+    logger.warn(`Blocked suspicious request: ${req.ip} ${req.method} ${req.path}`);
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  next();
+});
 app.use(cors());
 app.use(compression());
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
