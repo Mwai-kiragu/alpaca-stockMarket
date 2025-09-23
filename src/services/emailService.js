@@ -4,17 +4,22 @@ const logger = require('../utils/logger');
 class EmailService {
   constructor() {
     this.transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-      port: parseInt(process.env.EMAIL_PORT) || 587,
-      secure: false, // true for 465, false for other ports
+      host: process.env.SMTP_HOST || 'mail.rivenapp.com',
+      port: parseInt(process.env.SMTP_PORT) || 587,
+      secure: process.env.SMTP_PORT === '465', // true for 465, false for other ports
       auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
       },
+      tls: {
+        rejectUnauthorized: false // Accept self-signed certificates
+      },
+      connectionTimeout: 10000, // 10 seconds
+      socketTimeout: 10000, // 10 seconds
     });
 
     // Verify connection configuration
-    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+    if (process.env.SMTP_USER && process.env.SMTP_PASS) {
       this.transporter.verify((error, success) => {
         if (error) {
           logger.error('Email service connection failed:', error);
@@ -27,13 +32,13 @@ class EmailService {
 
   async sendEmail({ to, subject, html, text }) {
     try {
-      if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-        logger.warn('Email credentials not configured. Email not sent.');
+      if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+        logger.warn('SMTP credentials not configured. Email not sent.');
         return { success: false, message: 'Email service not configured' };
       }
 
       const mailOptions = {
-        from: `"Trading Platform" <${process.env.EMAIL_USER}>`,
+        from: `"Trading Platform" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
         to,
         subject,
         text,

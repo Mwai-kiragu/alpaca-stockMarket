@@ -58,12 +58,24 @@ const register = async (req, res) => {
       expires_at: new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
     });
 
-    // Send verification email with code
-    // const emailResult = await emailService.sendVerificationCodeEmail(user, verificationCode);
+    // Send verification email with code (with timeout)
+    try {
+      const emailPromise = emailService.sendVerificationCodeEmail(user, verificationCode);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Email timeout')), 5000)
+      );
 
-    // if (!emailResult.success) {
-    //   logger.error(`Failed to send verification email to ${email}:`, emailResult.error);
-    // }
+      const emailResult = await Promise.race([emailPromise, timeoutPromise]);
+
+      if (!emailResult.success) {
+        logger.error(`Failed to send verification email to ${email}:`, emailResult.error);
+      } else {
+        logger.info(`Verification email sent successfully to ${email}`);
+      }
+    } catch (emailError) {
+      logger.error(`Email service error for ${email}:`, emailError.message);
+      // Continue with registration even if email fails
+    }
 
     // Send welcome notification
     try {

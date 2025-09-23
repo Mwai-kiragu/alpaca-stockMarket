@@ -146,7 +146,7 @@ class NotificationService {
 
   // Registration flow notifications
   async sendRegistrationWelcome(userId, userName) {
-    return this.sendMultiChannelNotification(userId, 'account_updates', {
+    return this.sendMultiChannelNotification(userId, 'welcome', {
       title: 'Welcome to RIVEN!',
       body: `Hi ${userName}! Your account has been created successfully. Complete your profile to start trading.`,
       icon: 'welcome_icon'
