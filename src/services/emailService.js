@@ -12,10 +12,12 @@ class EmailService {
         pass: process.env.SMTP_PASS,
       },
       tls: {
-        rejectUnauthorized: false // Accept self-signed certificates
+        rejectUnauthorized: false, // Accept self-signed certificates
+        minVersion: 'TLSv1.2'
       },
-      connectionTimeout: 10000, // 10 seconds
-      socketTimeout: 10000, // 10 seconds
+      connectionTimeout: 5000, // 5 seconds
+      greetingTimeout: 5000, // 5 seconds
+      socketTimeout: 5000, // 5 seconds
     });
 
     // Verify connection configuration
@@ -38,11 +40,15 @@ class EmailService {
       }
 
       const mailOptions = {
-        from: `"Trading Platform" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
+        from: `${process.env.SMTP_FROM || process.env.SMTP_USER}`,
         to,
         subject,
-        text,
-        html
+        text: text || 'This email requires HTML support to view properly.',
+        html,
+        headers: {
+          'X-Priority': '3',
+          'X-Mailer': 'RIVEN Platform'
+        }
       };
 
       const info = await this.transporter.sendMail(mailOptions);
@@ -121,7 +127,7 @@ class EmailService {
 
     return this.sendEmail({
       to: user.email,
-      subject: 'Email Verification Code - Trading Platform',
+      subject: `Verify Your Email - Code: ${verificationCode}`,
       html,
       text
     });

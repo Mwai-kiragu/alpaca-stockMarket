@@ -69,12 +69,16 @@ const register = async (req, res) => {
 
       if (!emailResult.success) {
         logger.error(`Failed to send verification email to ${email}:`, emailResult.error);
+        // TEMPORARY: Log verification code for testing when email fails
+        logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
       } else {
         logger.info(`Verification email sent successfully to ${email}`);
       }
     } catch (emailError) {
       logger.error(`Email service error for ${email}:`, emailError.message);
       // Continue with registration even if email fails
+      // TEMPORARY: Log verification code for testing
+      logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
     }
 
     // Send welcome notification
