@@ -22,10 +22,28 @@ class AlpacaService {
         return '900' + Math.floor(Math.random() * 90 + 10) + Math.floor(Math.random() * 9000 + 1000);
       };
 
-      // Format phone number for Alpaca (remove + and spaces)
+      // Format phone number for Alpaca (must be US format for now)
       const formatPhone = (phone) => {
         if (!phone) return '15551234567'; // Default test phone
-        return phone.replace(/[\+\-\s\(\)]/g, '');
+
+        // Remove all non-digits
+        const digitsOnly = phone.replace(/\D/g, '');
+
+        // If it's an international number (like +254...), convert to US format for Alpaca
+        if (digitsOnly.length > 10) {
+          // For testing purposes, generate a US phone number
+          const areaCode = Math.floor(Math.random() * 900) + 100; // 100-999
+          const exchange = Math.floor(Math.random() * 900) + 100; // 100-999
+          const number = Math.floor(Math.random() * 9000) + 1000; // 1000-9999
+          return `1${areaCode}${exchange}${number}`;
+        }
+
+        // If it's already 10 digits, assume US and add country code
+        if (digitsOnly.length === 10) {
+          return `1${digitsOnly}`;
+        }
+
+        return '15551234567'; // Fallback
       };
 
       // For Alpaca Broker API, we need proper account creation data
@@ -33,21 +51,21 @@ class AlpacaService {
         contact: {
           email_address: userData.email,
           phone_number: formatPhone(userData.phone),
-          street_address: [userData.personalInfo?.address || '123 Main St'],
-          city: userData.personalInfo?.city || 'New York',
-          state: userData.personalInfo?.state || 'NY',
-          postal_code: userData.personalInfo?.postalCode || '10001',
-          country: 'USA' // Alpaca requires USA
+          street_address: [userData.address?.street || '123 Main St'],
+          city: userData.address?.city || 'New York',
+          state: userData.address?.state || 'NY',
+          postal_code: userData.address?.postalCode || '10001',
+          country: 'USA' // Alpaca requires USA even for international users
         },
         identity: {
-          given_name: userData.firstName || userData.personalInfo?.firstName,
-          family_name: userData.lastName || userData.personalInfo?.lastName,
-          date_of_birth: userData.personalInfo?.dateOfBirth || '1990-01-01',
+          given_name: userData.firstName,
+          family_name: userData.lastName,
+          date_of_birth: userData.dateOfBirth?.split('T')[0] || '1990-01-01', // Extract date part only
           tax_id_type: 'USA_SSN',
           tax_id: generateTestSSN(), // Generate realistic test SSN for sandbox
-          country_of_citizenship: 'USA',
-          country_of_birth: 'USA',
-          country_of_tax_residence: 'USA',
+          country_of_citizenship: 'USA', // Required by Alpaca for now
+          country_of_birth: 'USA', // Required by Alpaca for now
+          country_of_tax_residence: 'USA', // Required by Alpaca for now
           funding_source: ['employment_income']
         },
         disclosures: {
@@ -55,10 +73,10 @@ class AlpacaService {
           is_affiliated_exchange_or_finra: false,
           is_politically_exposed: false,
           immediate_family_exposed: false,
-          employment_status: userData.employmentInfo?.status || 'employed',
-          employer_name: userData.employmentInfo?.employer || 'Self Employed',
-          employer_address: userData.employmentInfo?.address || '123 Main St',
-          employment_position: userData.employmentInfo?.position || 'Developer'
+          employment_status: userData.employment?.status?.toLowerCase() || 'employed',
+          employer_name: userData.employment?.employerName || 'Self Employed',
+          employer_address: userData.address?.street || '123 Main St',
+          employment_position: userData.employment?.jobTitle || 'Developer'
         },
         agreements: [
           {
@@ -89,7 +107,23 @@ class AlpacaService {
         }));
       }
 
-      console.log('Creating Alpaca account with data:', JSON.stringify(accountData, null, 2));
+      logger.info('Creating Alpaca account with formatted data:', {
+        originalData: {
+          name: `${userData.firstName} ${userData.lastName}`,
+          email: userData.email,
+          phone: userData.phone,
+          address: userData.address,
+          employment: userData.employment
+        },
+        alpacaData: {
+          contact: accountData.contact,
+          identity: {
+            ...accountData.identity,
+            tax_id: '[HIDDEN]' // Don't log SSN
+          },
+          disclosures: accountData.disclosures
+        }
+      });
 
       const response = await axios.post(`${this.baseUrl}/v1/accounts`, accountData, {
         headers: this.tradingHeaders,
