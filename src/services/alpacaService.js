@@ -17,25 +17,37 @@ class AlpacaService {
 
   async createAccount(userData) {
     try {
+      // Generate a realistic test SSN for sandbox
+      const generateTestSSN = () => {
+        return '900' + Math.floor(Math.random() * 90 + 10) + Math.floor(Math.random() * 9000 + 1000);
+      };
+
+      // Format phone number for Alpaca (remove + and spaces)
+      const formatPhone = (phone) => {
+        if (!phone) return '15551234567'; // Default test phone
+        return phone.replace(/[\+\-\s\(\)]/g, '');
+      };
+
+      // For Alpaca Broker API, we need proper account creation data
       const accountData = {
         contact: {
           email_address: userData.email,
-          phone_number: userData.phone,
-          street_address: [userData.address || '123 Main St'],
-          city: 'Nairobi',
-          state: 'NY',
-          postal_code: '10001',
-          country: 'KE'
+          phone_number: formatPhone(userData.phone),
+          street_address: [userData.personalInfo?.address || '123 Main St'],
+          city: userData.personalInfo?.city || 'New York',
+          state: userData.personalInfo?.state || 'NY',
+          postal_code: userData.personalInfo?.postalCode || '10001',
+          country: 'USA' // Alpaca requires USA
         },
         identity: {
-          given_name: userData.firstName,
-          family_name: userData.lastName,
-          date_of_birth: userData.dateOfBirth,
+          given_name: userData.firstName || userData.personalInfo?.firstName,
+          family_name: userData.lastName || userData.personalInfo?.lastName,
+          date_of_birth: userData.personalInfo?.dateOfBirth || '1990-01-01',
           tax_id_type: 'USA_SSN',
-          tax_id: '123456789',
-          country_of_citizenship: 'KE',
-          country_of_birth: 'KE',
-          country_of_tax_residence: 'KE',
+          tax_id: generateTestSSN(), // Generate realistic test SSN for sandbox
+          country_of_citizenship: 'USA',
+          country_of_birth: 'USA',
+          country_of_tax_residence: 'USA',
           funding_source: ['employment_income']
         },
         disclosures: {
@@ -43,17 +55,12 @@ class AlpacaService {
           is_affiliated_exchange_or_finra: false,
           is_politically_exposed: false,
           immediate_family_exposed: false,
-          employment_status: 'employed',
-          employer_name: 'Trading Platform',
-          employer_address: '123 Main St',
-          employment_position: 'Trader'
+          employment_status: userData.employmentInfo?.status || 'employed',
+          employer_name: userData.employmentInfo?.employer || 'Self Employed',
+          employer_address: userData.employmentInfo?.address || '123 Main St',
+          employment_position: userData.employmentInfo?.position || 'Developer'
         },
         agreements: [
-          {
-            agreement: 'margin_agreement',
-            signed_at: new Date().toISOString(),
-            ip_address: '127.0.0.1'
-          },
           {
             agreement: 'account_agreement',
             signed_at: new Date().toISOString(),
@@ -63,27 +70,54 @@ class AlpacaService {
             agreement: 'customer_agreement',
             signed_at: new Date().toISOString(),
             ip_address: '127.0.0.1'
-          }
-        ],
-        documents: [
+          },
           {
-            document_type: 'identity_verification',
-            document_sub_type: 'passport',
-            content: '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcU...',
-            mime_type: 'image/jpeg'
+            agreement: 'margin_agreement',
+            signed_at: new Date().toISOString(),
+            ip_address: '127.0.0.1'
           }
         ]
       };
 
+      // Add documents if available
+      if (userData.documents && userData.documents.length > 0) {
+        accountData.documents = userData.documents.map(doc => ({
+          document_type: 'identity_verification',
+          document_sub_type: doc.type || 'passport',
+          content: doc.base64Content || doc.content,
+          mime_type: doc.mimeType || 'image/jpeg'
+        }));
+      }
+
+      console.log('Creating Alpaca account with data:', JSON.stringify(accountData, null, 2));
+
       const response = await axios.post(`${this.baseUrl}/v1/accounts`, accountData, {
-        headers: this.tradingHeaders
+        headers: this.tradingHeaders,
+        timeout: 30000 // 30 second timeout
       });
 
-      logger.info('Alpaca account created:', { userId: userData.userId, accountId: response.data.id });
+      logger.info('Alpaca account created successfully:', {
+        userId: userData.userId,
+        accountId: response.data.id,
+        status: response.data.status
+      });
+
       return response.data;
     } catch (error) {
-      logger.error('Alpaca account creation error:', error.response?.data || error.message);
-      throw new Error('Failed to create Alpaca account');
+      const errorMessage = error.response?.data?.message || error.message;
+      const errorDetails = error.response?.data || {};
+
+      logger.error('Alpaca account creation error:', {
+        message: errorMessage,
+        status: error.response?.status,
+        details: errorDetails,
+        userData: {
+          email: userData.email,
+          userId: userData.userId
+        }
+      });
+
+      throw new Error(`Failed to create Alpaca account: ${errorMessage}`);
     }
   }
 
