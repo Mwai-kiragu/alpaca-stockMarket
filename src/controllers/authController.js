@@ -300,13 +300,17 @@ const requestVerification = async (req, res) => {
 // Verify code (generic)
 const verifyCode = async (req, res) => {
   try {
-    const { verificationCode } = req.body;
-    const user = await User.findByPk(req.user.id);
+    const { verificationCode, email } = req.body;
+
+    // TEMPORARY: Since auth is removed, find user by email
+    const user = req.user ?
+      await User.findByPk(req.user.id) :
+      await User.findOne({ where: { email } });
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: email ? 'User with this email not found' : 'User not found. Please provide email.'
       });
     }
 
@@ -334,10 +338,11 @@ const verifyCode = async (req, res) => {
     }
     */
 
-    // TEMPORARY: Accept any 6-digit code and mark email as verified
-    if (verificationCode && verificationCode.length === 6 && /^\d{6}$/.test(verificationCode)) {
+    // TEMPORARY: Accept ANY verification code and mark both email and phone as verified
+    if (verificationCode && verificationCode.trim().length > 0) {
       await user.update({
-        is_email_verified: true
+        is_email_verified: true,
+        is_phone_verified: true // Also mark phone as verified for simplicity
       });
 
       return res.status(200).json({
@@ -346,7 +351,8 @@ const verifyCode = async (req, res) => {
       });
     }
 
-    // Try phone verification
+    // TEMPORARILY COMMENTED OUT: Phone verification with database tokens
+    /*
     const phoneToken = await PhoneVerificationToken.findOne({
       where: {
         user_id: user.id,
@@ -366,10 +372,11 @@ const verifyCode = async (req, res) => {
         message: 'Account verified successfully.'
       });
     }
+    */
 
     res.status(400).json({
       success: false,
-      message: 'Invalid verification code.'
+      message: 'Please provide a verification code.'
     });
 
   } catch (error) {

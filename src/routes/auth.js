@@ -20,7 +20,8 @@ router.post('/login', loginValidation, login);
 
 // Verification endpoints
 router.post('/request-verification', auth, requestVerification);
-router.post('/verify', auth, verifyCode);
+// TEMPORARILY REMOVED AUTH: Will add back when email service is ready
+router.post('/verify', verifyCode);
 
 // User profile
 router.get('/me', auth, getMe);
