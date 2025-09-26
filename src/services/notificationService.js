@@ -173,7 +173,21 @@ class NotificationService {
     });
 
     if (user && user.phone) {
+      logger.info(`Sending SMS verification code to ${user.phone} for user ${userId}`);
       return smsService.sendVerificationCode(user.phone, verificationCode, user.first_name);
+    }
+
+    return { success: false, error: 'User phone number not found' };
+  }
+
+  async sendWelcomeSMSNotification(userId) {
+    const user = await User.findByPk(userId, {
+      attributes: ['first_name', 'phone']
+    });
+
+    if (user && user.phone) {
+      logger.info(`Sending welcome SMS to ${user.phone} for user ${userId}`);
+      return smsService.sendWelcomeSMS(user.phone, user.first_name);
     }
 
     return { success: false, error: 'User phone number not found' };

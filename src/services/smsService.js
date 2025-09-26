@@ -3,8 +3,8 @@ const logger = require('../utils/logger');
 
 class SMSService {
   constructor() {
-    // Support multiple SMS providers
-    this.provider = process.env.SMS_PROVIDER || 'twilio'; // twilio, africastalking, etc.
+    // Support multiple SMS providers: twilio, africastalking, testsms
+    this.provider = process.env.SMS_PROVIDER || 'testsms';
     this.initialized = this.initialize();
   }
 
@@ -21,6 +21,9 @@ class SMSService {
           apiKey: process.env.AFRICASTALKING_API_KEY,
           username: process.env.AFRICASTALKING_USERNAME
         });
+        break;
+      case 'testsms':
+        this.testSmsService = require('./testSmsService');
         break;
       default:
         logger.warn('No SMS provider configured');
@@ -44,6 +47,9 @@ class SMSService {
           break;
         case 'africastalking':
           result = await this.sendAfricasTalkingSMS(phoneNumber, message, options);
+          break;
+        case 'testsms':
+          result = await this.sendTestSMS(phoneNumber, message, options);
           break;
         default:
           return { success: false, error: 'Unsupported SMS provider' };
@@ -97,6 +103,18 @@ class SMSService {
       status: result.SMSMessageData.Recipients[0].status,
       cost: result.SMSMessageData.Recipients[0].cost,
       provider: 'africastalking'
+    };
+  }
+
+  async sendTestSMS(phoneNumber, message, options) {
+    const result = await this.testSmsService.sendSMS(phoneNumber, message);
+
+    return {
+      success: result.success,
+      messageId: result.messageId || null,
+      status: result.success ? 'sent' : 'failed',
+      provider: 'testsms',
+      error: result.error || null
     };
   }
 

@@ -275,8 +275,22 @@ const requestVerification = async (req, res) => {
         expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
       });
 
-      // In production, send SMS
-      logger.info(`Phone verification code sent for ${user.phone}: ${phoneCode}`);
+      // Send SMS verification code via TestSMS
+      try {
+        const smsResult = await notificationService.sendPhoneVerificationCode(user.id, phoneCode);
+
+        if (smsResult.success) {
+          logger.info(`SMS verification code sent successfully to ${user.phone}`);
+        } else {
+          logger.warn(`SMS sending failed for ${user.phone}:`, smsResult.error);
+          // Continue anyway and log the code for testing
+          logger.info(`PHONE VERIFICATION CODE for ${user.phone}: ${phoneCode}`);
+        }
+      } catch (smsError) {
+        logger.error('SMS service error:', smsError);
+        // Log verification code for testing when SMS fails
+        logger.info(`PHONE VERIFICATION CODE for ${user.phone}: ${phoneCode}`);
+      }
 
       res.status(200).json({
         success: true,
