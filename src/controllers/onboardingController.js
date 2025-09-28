@@ -160,7 +160,21 @@ const onboardingController = {
         });
       }
 
-      const { employmentStatus, employerName, jobTitle, monthlyIncome, workAddress, yearsAtCurrentJob } = req.body;
+      const {
+        employmentStatus,
+        employerName,
+        jobTitle,
+        monthlyIncome,
+        workAddress,
+        yearsAtCurrentJob,
+        // Self-employment specific fields
+        businessName,
+        businessType,
+        businessDescription,
+        businessAddress,
+        yearsInBusiness,
+        industryType
+      } = req.body;
 
       const user = await User.findByPk(req.user.id);
       if (!user) {
@@ -170,32 +184,250 @@ const onboardingController = {
         });
       }
 
+      // Validate required fields based on employment status
+      const validationErrors = [];
+
+      if (!employmentStatus) {
+        validationErrors.push('Employment status is required');
+      }
+
+      // Valid employment statuses
+      const validStatuses = [
+        'Employed', 'Self-Employed', 'Student', 'Unemployed', 'Retired',
+        'Freelancer', 'Contract Worker', 'Part-Time', 'Homemaker',
+        'Disabled', 'Other'
+      ];
+
+      if (!validStatuses.includes(employmentStatus)) {
+        validationErrors.push(`Employment status must be one of: ${validStatuses.join(', ')}`);
+      }
+
+      // Income validation - required for most statuses except unemployed and some others
+      const incomeNotRequired = ['Unemployed', 'Student', 'Homemaker', 'Disabled'];
+      if (!incomeNotRequired.includes(employmentStatus)) {
+        if (!monthlyIncome || monthlyIncome <= 0) {
+          validationErrors.push('Monthly income is required for your employment status');
+        }
+      }
+
+      // Profession/job title - always required except for unemployed
+      if (employmentStatus !== 'Unemployed') {
+        if (!jobTitle) {
+          validationErrors.push('Profession/job title is required');
+        }
+      }
+
+      // Employment status specific validations
+      if (employmentStatus === 'Employed' || employmentStatus === 'Part-Time') {
+        if (!employerName) {
+          validationErrors.push('Employer name is required');
+        }
+        if (!yearsAtCurrentJob && yearsAtCurrentJob !== 0) {
+          validationErrors.push('Years at current job is required');
+        }
+      }
+
+      else if (employmentStatus === 'Self-Employed' || employmentStatus === 'Freelancer') {
+        if (!businessName && !jobTitle) {
+          validationErrors.push('Business name or professional title is required');
+        }
+        if (!businessType && !industryType) {
+          validationErrors.push('Business type or industry is required');
+        }
+        if (!yearsInBusiness && yearsInBusiness !== 0) {
+          validationErrors.push('Years in business/freelancing is required');
+        }
+      }
+
+      else if (employmentStatus === 'Student') {
+        // Students need educational info instead of employment
+        if (!req.body.institution) {
+          validationErrors.push('Educational institution is required for students');
+        }
+        if (!req.body.studyField) {
+          validationErrors.push('Field of study is required for students');
+        }
+      }
+
+      else if (employmentStatus === 'Retired') {
+        // Retired individuals might have pension income
+        if (!req.body.retirementYear) {
+          validationErrors.push('Retirement year is required');
+        }
+      }
+
+      if (validationErrors.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Validation failed',
+          errors: validationErrors
+        });
+      }
+
+      // Prepare employment data based on employment status
+      let employmentData = {
+        status: employmentStatus,
+        updatedAt: new Date()
+      };
+
+      // Common fields for all statuses
+      if (jobTitle) employmentData.jobTitle = jobTitle;
+      if (monthlyIncome) employmentData.monthlyIncome = monthlyIncome;
+
+      // Employment-specific data
+      switch (employmentStatus) {
+        case 'Employed':
+        case 'Part-Time':
+          employmentData = {
+            ...employmentData,
+            employerName,
+            jobTitle,
+            monthlyIncome,
+            workAddress,
+            yearsAtCurrentJob,
+            employmentType: 'traditional'
+          };
+          break;
+
+        case 'Self-Employed':
+        case 'Freelancer':
+          employmentData = {
+            ...employmentData,
+            businessName: businessName || jobTitle,
+            businessType: businessType || industryType,
+            businessDescription,
+            businessAddress: businessAddress || workAddress,
+            profession: jobTitle,
+            monthlyIncome,
+            yearsInBusiness,
+            industryType: industryType || businessType,
+            employmentType: 'business'
+          };
+          break;
+
+        case 'Contract Worker':
+          employmentData = {
+            ...employmentData,
+            employerName: employerName || 'Various Clients',
+            jobTitle,
+            monthlyIncome,
+            workAddress: workAddress || businessAddress,
+            yearsAtCurrentJob: yearsAtCurrentJob || yearsInBusiness,
+            contractType: req.body.contractType || 'Independent',
+            employmentType: 'contract'
+          };
+          break;
+
+        case 'Student':
+          employmentData = {
+            ...employmentData,
+            institution: req.body.institution,
+            studyField: req.body.studyField,
+            yearOfStudy: req.body.yearOfStudy,
+            graduationYear: req.body.graduationYear,
+            partTimeWork: req.body.partTimeWork || false,
+            monthlyIncome: monthlyIncome || 0, // Students might have allowances/part-time income
+            employmentType: 'education'
+          };
+          break;
+
+        case 'Retired':
+          employmentData = {
+            ...employmentData,
+            retirementYear: req.body.retirementYear,
+            previousOccupation: req.body.previousOccupation || jobTitle,
+            pensionIncome: monthlyIncome,
+            pensionProvider: req.body.pensionProvider,
+            employmentType: 'retired'
+          };
+          break;
+
+        case 'Unemployed':
+          employmentData = {
+            ...employmentData,
+            unemploymentDuration: req.body.unemploymentDuration,
+            previousOccupation: req.body.previousOccupation,
+            seekingEmployment: req.body.seekingEmployment !== false, // Default true
+            lastEmployer: req.body.lastEmployer,
+            monthlyIncome: req.body.monthlyIncome || 0, // Might have benefits
+            employmentType: 'unemployed'
+          };
+          break;
+
+        case 'Homemaker':
+          employmentData = {
+            ...employmentData,
+            dependentOn: req.body.dependentOn, // Spouse, family, etc.
+            previousOccupation: req.body.previousOccupation,
+            yearsAsHomemaker: req.body.yearsAsHomemaker,
+            monthlyIncome: req.body.monthlyIncome || 0, // Might have allowances
+            employmentType: 'homemaker'
+          };
+          break;
+
+        case 'Disabled':
+          employmentData = {
+            ...employmentData,
+            disabilityBenefits: req.body.disabilityBenefits,
+            ableToWork: req.body.ableToWork || false,
+            previousOccupation: req.body.previousOccupation,
+            monthlyIncome: req.body.monthlyIncome || 0, // Disability benefits
+            employmentType: 'disabled'
+          };
+          break;
+
+        case 'Other':
+          employmentData = {
+            ...employmentData,
+            description: req.body.description || 'Other employment status',
+            jobTitle: jobTitle || 'Not specified',
+            monthlyIncome: monthlyIncome || 0,
+            additionalInfo: req.body.additionalInfo,
+            employmentType: 'other'
+          };
+          break;
+
+        default:
+          employmentData.employmentType = 'unknown';
+      }
+
       // Update kyc_data with employment information
       const currentKycData = user.kyc_data || {};
-      const employmentData = {
+      const updatedKycData = {
         ...currentKycData,
-        employment: {
-          status: employmentStatus,
-          employerName,
-          jobTitle,
-          monthlyIncome,
-          workAddress,
-          yearsAtCurrentJob,
-          updatedAt: new Date()
-        }
+        employment: employmentData
       };
 
       await user.update({
         occupation: jobTitle,
-        kyc_data: employmentData
+        kyc_data: updatedKycData
       });
+
+      // Customize success message based on employment status
+      const statusMessages = {
+        'Employed': 'Employment details saved successfully.',
+        'Self-Employed': 'Business details saved successfully.',
+        'Student': 'Educational information saved successfully.',
+        'Unemployed': 'Employment status information saved successfully.',
+        'Retired': 'Retirement information saved successfully.',
+        'Freelancer': 'Freelancer details saved successfully.',
+        'Contract Worker': 'Contract work details saved successfully.',
+        'Part-Time': 'Part-time employment details saved successfully.',
+        'Homemaker': 'Homemaker information saved successfully.',
+        'Disabled': 'Disability status information saved successfully.',
+        'Other': 'Employment information saved successfully.'
+      };
+
+      const successMessage = statusMessages[employmentStatus] || 'Employment information saved successfully.';
 
       res.status(200).json({
         success: true,
-        message: 'Employment details saved successfully.',
+        message: successMessage,
         data: {
           stepCompleted: 2,
-          nextStep: 3
+          nextStep: 3,
+          employmentStatus,
+          employmentType: employmentData.employmentType
         }
       });
 
