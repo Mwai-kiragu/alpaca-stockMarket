@@ -59,8 +59,9 @@ User.init({
     allowNull: false,
     unique: true,
     validate: {
-      isEmail: true,
       notEmpty: true
+      // Removed isEmail validation - handled in middleware instead
+      // This allows Gmail aliases like user+tag@gmail.com
     }
   },
   phone: {

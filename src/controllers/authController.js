@@ -20,16 +20,21 @@ const register = async (req, res) => {
     const { fullName, email, password, phoneNumber } = req.body;
 
     // Check for existing email
+    logger.info(`Registration attempt for email: ${email}`);
+
     const existingUser = await User.findOne({
       where: { email }
     });
 
     if (existingUser) {
+      logger.warn(`Registration failed - email already exists: ${email}`);
       return res.status(400).json({
         success: false,
-        message: 'Email already exists.'
+        message: `Email already exists: ${email}`
       });
     }
+
+    logger.info(`Email is unique, proceeding with registration: ${email}`);
 
     // Split full name into first and last name
     const nameParts = fullName.trim().split(' ');
@@ -402,6 +407,197 @@ const verifyCode = async (req, res) => {
   }
 };
 
+// Get Alpaca terms and privacy policy
+const getAlpacaTerms = async (req, res) => {
+  try {
+    const axios = require('axios');
+    const cheerio = require('cheerio');
+
+    const urls = {
+      terms: 'https://alpaca.markets/disclosures', // Will extract Terms & Conditions from disclosures page
+      privacy: 'https://alpaca.markets/disclosures', // Will extract Privacy Notice from disclosures page
+      disclosures: 'https://alpaca.markets/disclosures'
+    };
+
+    const fetchDocument = async (url, type) => {
+      try {
+        const response = await axios.get(url, {
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; Trading-Platform/1.0)'
+          }
+        });
+
+        const $ = cheerio.load(response.data);
+
+        // Extract title based on document type
+        let title, content;
+
+        if (type === 'terms') {
+          title = 'Alpaca Terms & Conditions';
+          // Look for Terms & Conditions links in the disclosures page
+          const termsLink = $('a[href*="terms"], a:contains("Terms"), a:contains("Conditions")').first();
+          if (termsLink.length > 0) {
+            content = `Please review the complete Terms & Conditions document.\n\nKey Points from Alpaca Disclosures:\n\n${$('body').text().substring(0, 2000)}...`;
+          } else {
+            content = 'Please visit https://alpaca.markets/disclosures to access the complete Terms & Conditions document.';
+          }
+        } else if (type === 'privacy') {
+          title = 'Alpaca Privacy Notice';
+          // Look for Privacy Notice links
+          const privacyLink = $('a[href*="privacy"], a:contains("Privacy")').first();
+          if (privacyLink.length > 0) {
+            content = `Please review the complete Privacy Notice document.\n\nKey Points from Alpaca Disclosures:\n\n${$('body').text().substring(0, 2000)}...`;
+          } else {
+            content = 'Please visit https://alpaca.markets/disclosures to access the complete Privacy Notice document.';
+          }
+        } else {
+          // For disclosures, extract full content
+          title = $('title').text().trim() || 'Alpaca Disclosures and Agreements';
+
+          // Extract main content - try different selectors
+          const contentSelectors = [
+            'main',
+            '.content',
+            '.document-content',
+            '.legal-content',
+            'article',
+            '.container .row',
+            'body'
+          ];
+
+          for (const selector of contentSelectors) {
+            const element = $(selector);
+            if (element.length > 0) {
+              content = element.text().trim();
+              if (content.length > 500) break; // Use if substantial content found
+            }
+          }
+
+          // Clean up content
+          content = content
+            .replace(/\s+/g, ' ')
+            .replace(/\n+/g, '\n')
+            .trim()
+            .substring(0, 10000); // Limit to 10KB
+        }
+
+        // Extract last modified date from meta tags or content
+        let lastUpdated = $('meta[name="last-modified"]').attr('content') ||
+                         $('meta[property="article:modified_time"]').attr('content') ||
+                         new Date().toISOString().split('T')[0];
+
+        return {
+          title,
+          url,
+          content: content || 'Content could not be extracted from this document.',
+          lastUpdated: lastUpdated.split('T')[0], // Format as YYYY-MM-DD
+          fetchedAt: new Date().toISOString()
+        };
+
+      } catch (fetchError) {
+        logger.error(`Error fetching ${type} from ${url}:`, fetchError.message);
+        return {
+          title: `Alpaca ${type.charAt(0).toUpperCase() + type.slice(1)}`,
+          url,
+          content: `Unable to fetch content. Please visit ${url} directly.`,
+          lastUpdated: new Date().toISOString().split('T')[0],
+          fetchedAt: new Date().toISOString(),
+          error: 'Content fetch failed'
+        };
+      }
+    };
+
+    logger.info('Fetching Alpaca legal documents...');
+
+    // Fetch all documents in parallel
+    const [terms, privacy, disclosures] = await Promise.all([
+      fetchDocument(urls.terms, 'terms'),
+      fetchDocument(urls.privacy, 'privacy'),
+      fetchDocument(urls.disclosures, 'disclosures')
+    ]);
+
+    const alpacaTerms = {
+      terms,
+      privacy,
+      disclosures
+    };
+
+    logger.info('Successfully fetched Alpaca legal documents');
+
+    res.json({
+      success: true,
+      data: alpacaTerms,
+      fetchedAt: new Date().toISOString()
+    });
+
+  } catch (error) {
+    logger.error('Get Alpaca terms error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Alpaca terms and privacy policy',
+      error: error.message
+    });
+  }
+};
+
+// Accept terms and privacy policy
+const acceptTermsAndPrivacy = async (req, res) => {
+  try {
+    const { termsAccepted, privacyAccepted } = req.body;
+    const user = await User.findByPk(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (typeof termsAccepted !== 'boolean' || typeof privacyAccepted !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        message: 'Both termsAccepted and privacyAccepted must be boolean values'
+      });
+    }
+
+    if (!termsAccepted || !privacyAccepted) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both terms and privacy policy must be accepted'
+      });
+    }
+
+    const now = new Date();
+    await user.update({
+      terms_accepted: termsAccepted,
+      privacy_accepted: privacyAccepted,
+      terms_accepted_at: now,
+      privacy_accepted_at: now
+    });
+
+    logger.info(`Terms and privacy accepted by user: ${user.email}`);
+
+    res.json({
+      success: true,
+      message: 'Terms and privacy policy accepted successfully',
+      user: {
+        id: user.id,
+        termsAccepted: user.terms_accepted,
+        privacyAccepted: user.privacy_accepted,
+        termsAcceptedAt: user.terms_accepted_at,
+        privacyAcceptedAt: user.privacy_accepted_at
+      }
+    });
+  } catch (error) {
+    logger.error('Accept terms and privacy error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
 // Get user profile
 const getMe = async (req, res) => {
   try {
@@ -427,7 +623,9 @@ const getMe = async (req, res) => {
         isEmailVerified: user.is_email_verified,
         isPhoneVerified: user.is_phone_verified,
         registrationStatus: user.registration_status,
-        onboardingComplete: user.registration_status === 'completed'
+        onboardingComplete: user.registration_status === 'completed',
+        termsAccepted: user.terms_accepted,
+        privacyAccepted: user.privacy_accepted
       }
     });
   } catch (error) {
@@ -444,5 +642,7 @@ module.exports = {
   login,
   requestVerification,
   verifyCode,
+  getAlpacaTerms,
+  acceptTermsAndPrivacy,
   getMe
 };
