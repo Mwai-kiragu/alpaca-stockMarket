@@ -19,26 +19,26 @@ const registerValidation = [
     .withMessage('Full name must be at least 2 characters'),
   body('email')
     .custom((value) => {
-      // More permissive email validation for testing
-      // Allow emails with missing @ for testing purposes
+      // Enhanced email validation to support Gmail aliases and testing
       if (!value || value.trim().length === 0) {
         throw new Error('Email is required');
       }
 
-      // If it contains @, validate it properly
-      if (value.includes('@')) {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(value)) {
-          throw new Error('Invalid email format');
-        }
-      } else {
-        // For testing: allow emails without @ but must contain gmail.com
-        if (!value.includes('gmail.com') && !value.includes('test.com')) {
-          throw new Error('Email must be valid or contain gmail.com/test.com for testing');
-        }
+      // Gmail alias pattern: allows + symbol before @gmail.com
+      // Examples: user+tag@gmail.com, test+123@gmail.com
+      const gmailAliasRegex = /^[a-zA-Z0-9._%+-]+\+[a-zA-Z0-9._%-]*@gmail\.com$/;
+
+      // Standard email pattern (supports most valid emails)
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+      // Test email pattern for development
+      const testEmailRegex = /^[a-zA-Z0-9._%+-]+@test\.com$/;
+
+      if (gmailAliasRegex.test(value) || emailRegex.test(value) || testEmailRegex.test(value)) {
+        return true;
       }
 
-      return true;
+      throw new Error('Please enter a valid email address');
     })
     .withMessage('Valid email is required'),
   body('phoneNumber')
@@ -68,25 +68,26 @@ const registerValidation = [
 const loginValidation = [
   body('email')
     .custom((value) => {
-      // More permissive email validation for testing
+      // Enhanced email validation to support Gmail aliases and testing
       if (!value || value.trim().length === 0) {
         throw new Error('Email is required');
       }
 
-      // If it contains @, validate it properly
-      if (value.includes('@')) {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(value)) {
-          throw new Error('Invalid email format');
-        }
-      } else {
-        // For testing: allow emails without @ but must contain gmail.com
-        if (!value.includes('gmail.com') && !value.includes('test.com')) {
-          throw new Error('Email must be valid or contain gmail.com/test.com for testing');
-        }
+      // Gmail alias pattern: allows + symbol before @gmail.com
+      // Examples: user+tag@gmail.com, test+123@gmail.com
+      const gmailAliasRegex = /^[a-zA-Z0-9._%+-]+\+[a-zA-Z0-9._%-]*@gmail\.com$/;
+
+      // Standard email pattern (supports most valid emails)
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+      // Test email pattern for development
+      const testEmailRegex = /^[a-zA-Z0-9._%+-]+@test\.com$/;
+
+      if (gmailAliasRegex.test(value) || emailRegex.test(value) || testEmailRegex.test(value)) {
+        return true;
       }
 
-      return true;
+      throw new Error('Please enter a valid email address');
     })
     .withMessage('Valid email is required'),
   body('password')
