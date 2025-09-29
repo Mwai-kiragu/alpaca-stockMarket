@@ -6,7 +6,8 @@ const {
   verifyCode,
   getAlpacaTerms,
   acceptTermsAndPrivacy,
-  getMe
+  getMe,
+  checkKYCStatus
 } = require('../controllers/authController');
 const { auth } = require('../middleware/auth');
 const {
@@ -33,5 +34,8 @@ router.post('/accept-terms', auth, acceptTermsAndPrivacy);
 
 // User profile
 router.get('/me', auth, getMe);
+
+// Check KYC status from Alpaca
+router.get('/kyc-status', auth, checkKYCStatus);
 
 module.exports = router;

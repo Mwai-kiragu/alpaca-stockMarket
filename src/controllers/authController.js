@@ -625,7 +625,9 @@ const getMe = async (req, res) => {
         registrationStatus: user.registration_status,
         onboardingComplete: user.registration_status === 'completed',
         termsAccepted: user.terms_accepted,
-        privacyAccepted: user.privacy_accepted
+        privacyAccepted: user.privacy_accepted,
+        alpacaAccountId: user.alpaca_account_id,
+        tradingEnabled: user.kyc_status === 'approved'
       }
     });
   } catch (error) {
@@ -637,6 +639,90 @@ const getMe = async (req, res) => {
   }
 };
 
+// Check KYC status from Alpaca
+const checkKYCStatus = async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (!user.alpaca_account_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'No Alpaca account found. Please complete onboarding first.',
+        kycStatus: user.kyc_status
+      });
+    }
+
+    // Get fresh status from Alpaca
+    try {
+      const alpacaService = require('../services/alpacaService');
+      const alpacaStatus = await alpacaService.getAccountStatus(user.alpaca_account_id);
+
+      // Update local status if different
+      if (alpacaStatus.kycStatus !== user.kyc_status) {
+        const currentKycData = user.kyc_data || {};
+        const updatedKycData = {
+          ...currentKycData,
+          alpacaSync: {
+            lastSynced: new Date(),
+            alpacaStatus: alpacaStatus.status,
+            tradingEnabled: alpacaStatus.tradingEnabled,
+            syncSource: 'user_check'
+          }
+        };
+
+        await user.update({
+          kyc_status: alpacaStatus.kycStatus,
+          kyc_data: updatedKycData,
+          account_status: alpacaStatus.tradingEnabled ? 'active' : 'pending'
+        });
+
+        logger.info(`KYC status updated for user ${user.email}: ${user.kyc_status} -> ${alpacaStatus.kycStatus}`);
+      }
+
+      res.json({
+        success: true,
+        data: {
+          kycStatus: alpacaStatus.kycStatus,
+          alpacaStatus: alpacaStatus.status,
+          tradingEnabled: alpacaStatus.tradingEnabled,
+          accountId: alpacaStatus.accountId,
+          lastChecked: new Date(),
+          statusUpdated: alpacaStatus.kycStatus !== user.kyc_status
+        }
+      });
+
+    } catch (alpacaError) {
+      logger.error('Failed to check Alpaca status:', alpacaError);
+
+      // Return current local status if Alpaca is unavailable
+      res.json({
+        success: true,
+        data: {
+          kycStatus: user.kyc_status,
+          tradingEnabled: user.kyc_status === 'approved',
+          lastChecked: new Date(),
+          note: 'Using cached status - Alpaca unavailable',
+          error: 'Could not fetch live status from Alpaca'
+        }
+      });
+    }
+
+  } catch (error) {
+    logger.error('Check KYC status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while checking KYC status'
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -644,5 +730,6 @@ module.exports = {
   verifyCode,
   getAlpacaTerms,
   acceptTermsAndPrivacy,
-  getMe
+  getMe,
+  checkKYCStatus
 };

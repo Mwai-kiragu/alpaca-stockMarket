@@ -15,6 +15,278 @@ class AlpacaService {
     };
   }
 
+  // Map international addresses to valid US equivalents for Alpaca
+  mapToUSState(state) {
+    if (!state) return 'NY';
+
+    // Common international to US state mappings
+    const stateMapping = {
+      // Kenya
+      'Nairobi County': 'NY',
+      'Mombasa County': 'CA',
+      'Kisumu County': 'IL',
+      'Nakuru County': 'TX',
+      'Eldoret': 'FL',
+
+      // Other common patterns
+      'Lagos': 'NY',
+      'Johannesburg': 'CA',
+      'Cape Town': 'FL',
+      'London': 'NY',
+      'Toronto': 'NY',
+      'Vancouver': 'CA',
+
+      // Default patterns
+      'County': 'NY',
+      'State': 'CA',
+      'Province': 'TX'
+    };
+
+    // Check for exact match first
+    if (stateMapping[state]) {
+      return stateMapping[state];
+    }
+
+    // Check for partial matches
+    for (const [key, value] of Object.entries(stateMapping)) {
+      if (state.toLowerCase().includes(key.toLowerCase())) {
+        return value;
+      }
+    }
+
+    // Default fallback
+    return 'NY';
+  }
+
+  mapToUSCity(city) {
+    if (!city) return 'New York';
+
+    // Map international cities to US equivalents
+    const cityMapping = {
+      'Nairobi': 'New York',
+      'Mombasa': 'Los Angeles',
+      'Kisumu': 'Chicago',
+      'Nakuru': 'Dallas',
+      'Eldoret': 'Miami',
+      'Lagos': 'New York',
+      'Johannesburg': 'Los Angeles',
+      'Cape Town': 'San Francisco',
+      'London': 'Boston',
+      'Toronto': 'Detroit',
+      'Vancouver': 'Seattle'
+    };
+
+    return cityMapping[city] || city;
+  }
+
+  mapToUSZipCode(zipCode) {
+    if (!zipCode) return '10001';
+
+    // Map international zip patterns to US equivalents
+    if (zipCode.startsWith('00')) return '10001'; // Kenya 00xxx -> NY
+    if (zipCode.startsWith('20')) return '90210'; // Kenya 20xxx -> CA
+    if (zipCode.startsWith('40')) return '60601'; // Kenya 40xxx -> IL
+    if (zipCode.startsWith('30')) return '75201'; // Kenya 30xxx -> TX
+
+    // If it's already US format (5 digits), keep it
+    if (/^\d{5}(-\d{4})?$/.test(zipCode)) {
+      return zipCode;
+    }
+
+    // Default fallback
+    return '10001';
+  }
+
+  mapCountryToAlpacaFormat(country) {
+    if (!country) return 'USA';
+
+    const countryMappings = {
+      // Major markets
+      'kenya': 'KEN',
+      'united states': 'USA',
+      'usa': 'USA',
+      'united kingdom': 'GBR',
+      'uk': 'GBR',
+      'canada': 'CAN',
+      'australia': 'AUS',
+      'south africa': 'ZAF',
+
+      // African countries
+      'nigeria': 'NGA',
+      'ghana': 'GHA',
+      'uganda': 'UGA',
+      'tanzania': 'TZA',
+      'rwanda': 'RWA',
+      'ethiopia': 'ETH',
+      'egypt': 'EGY',
+      'morocco': 'MAR',
+      'botswana': 'BWA',
+      'zambia': 'ZMB',
+      'zimbabwe': 'ZWE',
+      'malawi': 'MWI',
+      'mozambique': 'MOZ',
+      'namibia': 'NAM',
+      'burundi': 'BDI',
+      'sudan': 'SDN',
+      'south sudan': 'SSD',
+      'somalia': 'SOM',
+      'democratic republic of congo': 'COD',
+      'congo': 'COG',
+      'cameroon': 'CMR',
+      'ivory coast': 'CIV',
+      'senegal': 'SEN',
+      'mali': 'MLI',
+      'burkina faso': 'BFA',
+      'niger': 'NER',
+      'chad': 'TCD',
+      'benin': 'BEN',
+      'togo': 'TGO',
+      'liberia': 'LBR',
+      'sierra leone': 'SLE',
+      'guinea': 'GIN',
+      'gambia': 'GMB',
+      'mauritania': 'MRT',
+      'algeria': 'DZA',
+      'tunisia': 'TUN',
+      'libya': 'LBY',
+      'madagascar': 'MDG',
+      'mauritius': 'MUS',
+      'seychelles': 'SYC',
+      'angola': 'AGO',
+      'gabon': 'GAB',
+      'equatorial guinea': 'GNQ',
+      'central african republic': 'CAF',
+      'djibouti': 'DJI',
+      'eritrea': 'ERI',
+      'lesotho': 'LSO',
+      'swaziland': 'SWZ',
+      'eswatini': 'SWZ',
+
+      // Asian countries
+      'china': 'CHN',
+      'india': 'IND',
+      'japan': 'JPN',
+      'indonesia': 'IDN',
+      'malaysia': 'MYS',
+      'singapore': 'SGP',
+      'thailand': 'THA',
+      'vietnam': 'VNM',
+      'philippines': 'PHL',
+      'south korea': 'KOR',
+      'taiwan': 'TWN',
+      'hong kong': 'HKG',
+      'pakistan': 'PAK',
+      'bangladesh': 'BGD',
+      'sri lanka': 'LKA',
+      'myanmar': 'MMR',
+      'cambodia': 'KHM',
+      'laos': 'LAO',
+      'brunei': 'BRN',
+
+      // European countries
+      'germany': 'DEU',
+      'france': 'FRA',
+      'italy': 'ITA',
+      'spain': 'ESP',
+      'netherlands': 'NLD',
+      'belgium': 'BEL',
+      'switzerland': 'CHE',
+      'austria': 'AUT',
+      'sweden': 'SWE',
+      'norway': 'NOR',
+      'denmark': 'DNK',
+      'finland': 'FIN',
+      'poland': 'POL',
+      'czech republic': 'CZE',
+      'slovakia': 'SVK',
+      'hungary': 'HUN',
+      'romania': 'ROU',
+      'bulgaria': 'BGR',
+      'greece': 'GRC',
+      'portugal': 'PRT',
+      'ireland': 'IRL',
+      'iceland': 'ISL',
+      'luxembourg': 'LUX',
+      'malta': 'MLT',
+      'cyprus': 'CYP',
+      'croatia': 'HRV',
+      'slovenia': 'SVN',
+      'serbia': 'SRB',
+      'montenegro': 'MNE',
+      'bosnia and herzegovina': 'BIH',
+      'macedonia': 'MKD',
+      'albania': 'ALB',
+      'estonia': 'EST',
+      'latvia': 'LVA',
+      'lithuania': 'LTU',
+      'ukraine': 'UKR',
+      'belarus': 'BLR',
+      'russia': 'RUS',
+      'moldova': 'MDA',
+
+      // Middle East
+      'saudi arabia': 'SAU',
+      'united arab emirates': 'ARE',
+      'uae': 'ARE',
+      'qatar': 'QAT',
+      'kuwait': 'KWT',
+      'bahrain': 'BHR',
+      'oman': 'OMN',
+      'israel': 'ISR',
+      'palestine': 'PSE',
+      'jordan': 'JOR',
+      'lebanon': 'LBN',
+      'syria': 'SYR',
+      'iraq': 'IRQ',
+      'iran': 'IRN',
+      'turkey': 'TUR',
+      'yemen': 'YEM',
+
+      // Americas
+      'brazil': 'BRA',
+      'argentina': 'ARG',
+      'chile': 'CHL',
+      'colombia': 'COL',
+      'peru': 'PER',
+      'venezuela': 'VEN',
+      'ecuador': 'ECU',
+      'bolivia': 'BOL',
+      'paraguay': 'PRY',
+      'uruguay': 'URY',
+      'guyana': 'GUY',
+      'suriname': 'SUR',
+      'french guiana': 'GUF',
+      'mexico': 'MEX',
+      'guatemala': 'GTM',
+      'belize': 'BLZ',
+      'honduras': 'HND',
+      'el salvador': 'SLV',
+      'nicaragua': 'NIC',
+      'costa rica': 'CRI',
+      'panama': 'PAN',
+      'jamaica': 'JAM',
+      'haiti': 'HTI',
+      'dominican republic': 'DOM',
+      'cuba': 'CUB',
+      'puerto rico': 'PRI',
+      'trinidad and tobago': 'TTO',
+      'barbados': 'BRB',
+
+      // Oceania
+      'new zealand': 'NZL',
+      'fiji': 'FJI',
+      'papua new guinea': 'PNG',
+      'solomon islands': 'SLB',
+      'vanuatu': 'VUT',
+      'samoa': 'WSM',
+      'tonga': 'TON',
+      'palau': 'PLW'
+    };
+
+    const normalizedCountry = country.toLowerCase().trim();
+    return countryMappings[normalizedCountry] || 'USA'; // Default to USA for Alpaca compatibility
+  }
+
   async createAccount(userData) {
     try {
       // Generate a realistic test SSN for sandbox
@@ -52,20 +324,24 @@ class AlpacaService {
           email_address: userData.email,
           phone_number: formatPhone(userData.phone),
           street_address: [userData.address?.street || '123 Main St'],
-          city: userData.address?.city || 'New York',
-          state: userData.address?.state || 'NY',
-          postal_code: userData.address?.postalCode || '10001',
+          city: this.mapToUSCity(userData.address?.city) || 'New York',
+          state: this.mapToUSState(userData.address?.state) || 'NY',
+          postal_code: this.mapToUSZipCode(userData.address?.postalCode) || '10001',
           country: 'USA' // Alpaca requires USA even for international users
         },
         identity: {
           given_name: userData.firstName,
           family_name: userData.lastName,
-          date_of_birth: userData.dateOfBirth?.split('T')[0] || '1990-01-01', // Extract date part only
+          date_of_birth: userData.dateOfBirth instanceof Date
+            ? userData.dateOfBirth.toISOString().split('T')[0]
+            : (typeof userData.dateOfBirth === 'string'
+              ? userData.dateOfBirth.split('T')[0]
+              : '1990-01-01'), // Handle both Date objects and strings
           tax_id_type: 'USA_SSN',
           tax_id: generateTestSSN(), // Generate realistic test SSN for sandbox
-          country_of_citizenship: 'USA', // Required by Alpaca for now
-          country_of_birth: 'USA', // Required by Alpaca for now
-          country_of_tax_residence: 'USA', // Required by Alpaca for now
+          country_of_citizenship: this.mapCountryToAlpacaFormat(userData.address?.country),
+          country_of_birth: this.mapCountryToAlpacaFormat(userData.identity?.nationality || userData.address?.country),
+          country_of_tax_residence: this.mapCountryToAlpacaFormat(userData.address?.country),
           funding_source: ['employment_income']
         },
         disclosures: {
@@ -155,15 +431,78 @@ class AlpacaService {
     }
   }
 
-  async getAccount() {
+  async getAccount(accountId = null) {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/account`, {
+      const endpoint = accountId
+        ? `${this.baseUrl}/v1/accounts/${accountId}`
+        : `${this.baseUrl}/v2/account`;
+
+      const response = await axios.get(endpoint, {
         headers: this.tradingHeaders
       });
       return response.data;
     } catch (error) {
       logger.error('Get Alpaca account error:', error.response?.data || error.message);
       throw new Error('Failed to get account information');
+    }
+  }
+
+  // Get account status from Alpaca for Broker API accounts
+  async getAccountStatus(accountId) {
+    try {
+      const response = await axios.get(`${this.baseUrl}/v1/accounts/${accountId}`, {
+        headers: this.tradingHeaders
+      });
+
+      const account = response.data;
+
+      // Map Alpaca account status to our KYC status
+      const statusMapping = {
+        'SUBMITTED': 'submitted',
+        'ACCOUNT_UPDATED': 'under_review',
+        'APPROVAL_PENDING': 'pending',
+        'APPROVED': 'approved',
+        'REJECTED': 'rejected',
+        'ACTIVE': 'approved',
+        'INACTIVE': 'rejected'
+      };
+
+      return {
+        accountId: account.id,
+        status: account.status,
+        kycStatus: statusMapping[account.status] || 'pending',
+        tradingEnabled: account.status === 'ACTIVE',
+        accountType: account.account_type,
+        createdAt: account.created_at,
+        updatedAt: account.updated_at,
+        alpacaData: account
+      };
+    } catch (error) {
+      logger.error('Get Alpaca account status error:', error.response?.data || error.message);
+      throw new Error('Failed to get account status from Alpaca');
+    }
+  }
+
+  // Check multiple accounts for admin dashboard
+  async getAccountStatuses(accountIds) {
+    try {
+      const promises = accountIds.map(id => this.getAccountStatus(id));
+      const results = await Promise.allSettled(promises);
+
+      return results.map((result, index) => {
+        if (result.status === 'fulfilled') {
+          return result.value;
+        } else {
+          return {
+            accountId: accountIds[index],
+            error: result.reason.message,
+            kycStatus: 'unknown'
+          };
+        }
+      });
+    } catch (error) {
+      logger.error('Get multiple account statuses error:', error);
+      throw new Error('Failed to get account statuses');
     }
   }
 

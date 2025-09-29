@@ -3,6 +3,7 @@ const { validationResult } = require('express-validator');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
+const logger = require('../utils/logger');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -73,8 +74,8 @@ const onboardingController = {
       // Calculate onboarding progress
       const progress = {
         personalDetails: user.date_of_birth && user.gender && user.address ? 'complete' : 'incomplete',
-        employerDetails: user.occupation ? 'complete' : 'incomplete',
-        kyc: user.kyc_status === 'approved' ? 'complete' : 'incomplete',
+        employerDetails: user.kyc_data?.employment ? 'complete' : 'incomplete',
+        kyc: user.kyc_data?.kyc ? 'complete' : 'incomplete',
         trustedContact: user.kyc_data?.trustedContact ? 'complete' : 'incomplete',
         imageUpload: user.kyc_data?.profileImage ? 'complete' : 'incomplete',
         agreement: user.terms_accepted && user.privacy_accepted ? 'complete' : 'incomplete'
@@ -84,6 +85,10 @@ const onboardingController = {
         id: user.id,
         fullName: `${user.first_name} ${user.last_name}`,
         email: user.email,
+        kycStatus: user.kyc_status,
+        tradingEnabled: user.kyc_status === 'approved',
+        onboardingComplete: user.registration_status === 'completed',
+        alpacaAccountId: user.alpaca_account_id,
         onboardingProgress: progress
       });
 
@@ -884,7 +889,9 @@ const onboardingController = {
           lastName: user.last_name,
           email: user.email,
           phone: user.phone,
-          dateOfBirth: user.date_of_birth,
+          dateOfBirth: user.date_of_birth instanceof Date
+            ? user.date_of_birth.toISOString().split('T')[0]
+            : user.date_of_birth,
 
           // Address information
           address: {
@@ -947,7 +954,17 @@ const onboardingController = {
         const alpacaAccount = await alpacaService.createAccount(alpacaAccountData);
 
         updates.alpaca_account_id = alpacaAccount.id;
-        updates.kyc_status = 'approved'; // Alpaca will handle KYC verification
+
+        // Get initial status from Alpaca
+        try {
+          const alpacaStatus = await alpacaService.getAccountStatus(alpacaAccount.id);
+          updates.kyc_status = alpacaStatus.kycStatus;
+          logger.info(`Alpaca account status: ${alpacaStatus.status} -> KYC: ${alpacaStatus.kycStatus}`);
+        } catch (statusError) {
+          logger.warn('Could not get initial Alpaca status, defaulting to submitted:', statusError.message);
+          updates.kyc_status = 'submitted';
+        }
+
         alpacaAccountCreated = true;
 
         console.log(`Alpaca account created successfully: ${alpacaAccount.id}`);
@@ -1028,8 +1045,8 @@ const onboardingController = {
       // Calculate progress
       const steps = {
         personalDetails: user.date_of_birth && user.gender && user.address ? 'complete' : 'incomplete',
-        employerDetails: user.occupation ? 'complete' : 'incomplete',
-        kyc: user.kyc_status === 'approved' ? 'complete' : 'incomplete',
+        employerDetails: user.kyc_data?.employment ? 'complete' : 'incomplete',
+        kyc: user.kyc_data?.kyc ? 'complete' : 'incomplete',
         trustedContact: user.kyc_data?.trustedContact ? 'complete' : 'incomplete',
         documentUpload: user.kyc_data?.documents ? 'complete' : 'incomplete',
         imageUpload: user.kyc_data?.profileImage ? 'complete' : 'incomplete',

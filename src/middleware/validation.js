@@ -12,6 +12,83 @@ const handleValidationErrors = (req, res, next) => {
   next();
 };
 
+// Kenya's 47 counties for validation
+const KENYA_COUNTIES = [
+  'Baringo County', 'Bomet County', 'Bungoma County', 'Busia County', 'Elgeyo-Marakwet County',
+  'Embu County', 'Garissa County', 'Homa Bay County', 'Isiolo County', 'Kajiado County',
+  'Kakamega County', 'Kericho County', 'Kiambu County', 'Kilifi County', 'Kirinyaga County',
+  'Kisii County', 'Kisumu County', 'Kitui County', 'Kwale County', 'Laikipia County',
+  'Lamu County', 'Machakos County', 'Makueni County', 'Mandera County', 'Marsabit County',
+  'Meru County', 'Migori County', 'Mombasa County', 'Murang\'a County', 'Nairobi County',
+  'Nakuru County', 'Nandi County', 'Narok County', 'Nyamira County', 'Nyandarua County',
+  'Nyeri County', 'Samburu County', 'Siaya County', 'Taita-Taveta County', 'Tana River County',
+  'Tharaka-Nithi County', 'Trans-Nzoia County', 'Turkana County', 'Uasin Gishu County',
+  'Vihiga County', 'Wajir County', 'West Pokot County'
+];
+
+// Major cities in Kenya for validation
+const KENYA_CITIES = [
+  'Nairobi', 'Mombasa', 'Kisumu', 'Nakuru', 'Eldoret', 'Thika', 'Malindi', 'Kitale',
+  'Garissa', 'Kakamega', 'Nyeri', 'Meru', 'Embu', 'Machakos', 'Kericho', 'Bomet',
+  'Homa Bay', 'Bungoma', 'Narok', 'Voi', 'Kilifi', 'Lamu', 'Isiolo', 'Nanyuki',
+  'Chuka', 'Wajir', 'Mandera', 'Marsabit', 'Moyale', 'Lodwar', 'Kapenguria', 'Kisii',
+  'Kerugoya', 'Murang\'a', 'Kiambu', 'Limuru', 'Ruiru'
+];
+
+// Flexible international address validation
+const validateInternationalAddress = (value) => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Address must be a valid object');
+  }
+
+  const { street, city, state, country, zipCode } = value;
+
+  // Required fields - basic validation only
+  if (!street || street.trim().length === 0) {
+    throw new Error('Street address is required');
+  }
+
+  if (!city || city.trim().length === 0) {
+    throw new Error('City is required');
+  }
+
+  if (!state || state.trim().length === 0) {
+    throw new Error('State/Province/County is required');
+  }
+
+  if (!country || country.trim().length === 0) {
+    throw new Error('Country is required');
+  }
+
+  // Optional: Validate postal code format based on country
+  if (zipCode) {
+    const countryLower = country.toLowerCase();
+
+    // Only validate postal codes for countries where we know the format
+    if (countryLower === 'kenya' && !/^\d{5}$/.test(zipCode)) {
+      throw new Error('Kenyan postal code should be 5 digits');
+    } else if (countryLower === 'usa' && !/^\d{5}(-\d{4})?$/.test(zipCode)) {
+      throw new Error('US zip code should be 5 digits or 5+4 format');
+    } else if (countryLower === 'uk' && !/^[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}$/i.test(zipCode)) {
+      throw new Error('UK postal code format is invalid');
+    }
+    // For other countries, accept any postal code format
+  }
+
+  // Validate that county is in the correct format for Kenya (helpful but not required)
+  if (country.toLowerCase() === 'kenya') {
+    const isValidCounty = KENYA_COUNTIES.some(county =>
+      county.toLowerCase() === state.toLowerCase()
+    );
+
+    if (!isValidCounty && !state.toLowerCase().includes('county')) {
+      console.log(`Note: ${state} doesn't match known Kenyan counties. Consider using format: "${state} County"`);
+    }
+  }
+
+  return true;
+};
+
 const registerValidation = [
   body('fullName')
     .trim()
@@ -173,6 +250,20 @@ const supportTicketValidation = [
   handleValidationErrors
 ];
 
+// Personal details validation with international address support
+const personalDetailsValidation = [
+  body('dateOfBirth')
+    .isISO8601()
+    .withMessage('Valid date of birth is required (YYYY-MM-DD format)'),
+  body('gender')
+    .isIn(['Male', 'Female', 'Other', 'male', 'female', 'other'])
+    .withMessage('Gender must be Male, Female, or Other'),
+  body('address')
+    .custom(validateInternationalAddress)
+    .withMessage('Valid address is required'),
+  handleValidationErrors
+];
+
 const paginationValidation = [
   query('page')
     .optional()
@@ -192,6 +283,9 @@ module.exports = {
   depositValidation,
   kycValidation,
   supportTicketValidation,
+  personalDetailsValidation,
   paginationValidation,
-  handleValidationErrors
+  handleValidationErrors,
+  KENYA_COUNTIES, // Export for use in other parts of the app
+  KENYA_CITIES    // Export for use in other parts of the app
 };

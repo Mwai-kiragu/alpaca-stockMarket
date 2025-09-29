@@ -28,6 +28,7 @@ const updatesRoutes = require('./routes/updates');
 const searchRoutes = require('./routes/search');
 const notificationRoutes = require('./routes/notifications');
 const supportRoutes = require('./routes/support');
+const adminRoutes = require('./routes/admin');
 const smsTestRoutes = require('./routes/smsTest');
 
 const app = express();
@@ -98,6 +99,7 @@ app.use('/api/v1/updates', updatesRoutes);
 app.use('/api/v1/search', searchRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/support', supportRoutes);
+app.use('/api/v1/admin', adminRoutes);
 
 // Development/Testing routes
 if (process.env.NODE_ENV !== 'production') {
