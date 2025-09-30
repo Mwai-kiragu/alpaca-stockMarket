@@ -276,6 +276,51 @@ const paginationValidation = [
   handleValidationErrors
 ];
 
+const withdrawalValidation = [
+  body('amount')
+    .isFloat({ min: 1 })
+    .withMessage('Amount must be at least 1'),
+  body('currency')
+    .isIn(['KES', 'USD'])
+    .withMessage('Currency must be KES or USD'),
+  body('method')
+    .isIn(['mpesa', 'bank_transfer', 'paypal'])
+    .withMessage('Method must be mpesa, bank_transfer, or paypal'),
+  body('accountDetails')
+    .notEmpty()
+    .withMessage('Account details are required')
+    .custom((value, { req }) => {
+      const method = req.body.method;
+
+      if (method === 'mpesa') {
+        if (!value.phoneNumber) {
+          throw new Error('Phone number is required for M-Pesa withdrawals');
+        }
+        if (!/^(\+?254|0)[17]\d{8}$/.test(value.phoneNumber)) {
+          throw new Error('Invalid Kenyan phone number format');
+        }
+      } else if (method === 'bank_transfer') {
+        if (!value.accountNumber || !value.bankName || !value.accountName) {
+          throw new Error('Account number, bank name, and account name are required for bank transfers');
+        }
+        if (req.body.currency === 'USD' && !value.swiftCode) {
+          throw new Error('SWIFT code is required for USD bank transfers');
+        }
+      } else if (method === 'paypal') {
+        if (!value.email) {
+          throw new Error('PayPal email is required');
+        }
+        const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+        if (!emailRegex.test(value.email)) {
+          throw new Error('Invalid PayPal email format');
+        }
+      }
+
+      return true;
+    }),
+  handleValidationErrors
+];
+
 module.exports = {
   registerValidation,
   loginValidation,
@@ -285,6 +330,7 @@ module.exports = {
   supportTicketValidation,
   personalDetailsValidation,
   paginationValidation,
+  withdrawalValidation,
   handleValidationErrors,
   KENYA_COUNTIES, // Export for use in other parts of the app
   KENYA_CITIES    // Export for use in other parts of the app

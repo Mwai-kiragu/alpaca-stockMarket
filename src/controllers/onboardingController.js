@@ -5,10 +5,10 @@ const path = require('path');
 const fs = require('fs').promises;
 const logger = require('../utils/logger');
 
-// Configure multer for file uploads
+// Configure multer for individual file uploads
 const storage = multer.diskStorage({
   destination: async (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../../uploads/onboarding');
+    const uploadDir = path.join(__dirname, '../../uploads/kyc');
     try {
       await fs.mkdir(uploadDir, { recursive: true });
       cb(null, uploadDir);
@@ -19,7 +19,7 @@ const storage = multer.diskStorage({
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
     const extension = path.extname(file.originalname);
-    cb(null, `${file.fieldname}-${uniqueSuffix}${extension}`);
+    cb(null, `${req.user.id}-${file.fieldname}-${uniqueSuffix}${extension}`);
   }
 });
 
@@ -36,133 +36,137 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-    files: 2
+    fileSize: 5 * 1024 * 1024 // 5MB limit
   }
 });
 
-const profileImageUpload = multer({
-  storage,
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png'];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only JPEG and PNG files are allowed.'), false);
-    }
-  },
-  limits: {
-    fileSize: 2 * 1024 * 1024 // 2MB limit
-  }
-});
+// Standardized API Response Helper (matching Rivenapp pattern)
+const ApiResponse = {
+  SuccessWithData: (data, message = "Success", statusCode = 200) => ({
+    success: true,
+    message,
+    data,
+    statusCode
+  }),
+  SuccessNoData: (message = "Success", statusCode = 200) => ({
+    success: true,
+    message,
+    statusCode
+  }),
+  Error: (message, statusCode = 400, errors = null) => ({
+    success: false,
+    message,
+    statusCode,
+    errors
+  })
+};
 
 const onboardingController = {
-  // Get user profile and onboarding status
-  getProfile: async (req, res) => {
+  // Get current user with personal details (matching Rivenapp pattern)
+  getCurrentUserPersonalDetails: async (req, res) => {
     try {
       const user = await User.findByPk(req.user.id, {
         attributes: { exclude: ['password', 'pin_hash', 'login_attempts', 'lock_until'] }
       });
 
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
-      // Calculate onboarding progress
-      const progress = {
-        personalDetails: user.date_of_birth && user.gender && user.address ? 'complete' : 'incomplete',
-        employerDetails: user.kyc_data?.employment ? 'complete' : 'incomplete',
-        kyc: user.kyc_data?.kyc ? 'complete' : 'incomplete',
-        trustedContact: user.kyc_data?.trustedContact ? 'complete' : 'incomplete',
-        imageUpload: user.kyc_data?.profileImage ? 'complete' : 'incomplete',
-        agreement: user.terms_accepted && user.privacy_accepted ? 'complete' : 'incomplete'
+      const personalDetails = {
+        id: user.id,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        email: user.email,
+        phone: user.phone,
+        dateOfBirth: user.date_of_birth,
+        gender: user.gender,
+        address: user.address ? JSON.parse(user.address) : null,
+        city: user.city,
+        county: user.county,
+        postalCode: user.postal_code,
+        citizenship: user.citizenship,
+        occupation: user.occupation,
+        kycStatus: user.kyc_status,
+        registrationStep: user.registration_step,
+        registrationStatus: user.registration_status,
+        termsAccepted: user.terms_accepted,
+        privacyAccepted: user.privacy_accepted,
+        kycData: user.kyc_data || {}
       };
 
-      res.status(200).json({
-        id: user.id,
-        fullName: `${user.first_name} ${user.last_name}`,
-        email: user.email,
-        kycStatus: user.kyc_status,
-        tradingEnabled: user.kyc_status === 'approved',
-        onboardingComplete: user.registration_status === 'completed',
-        alpacaAccountId: user.alpaca_account_id,
-        onboardingProgress: progress
-      });
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(personalDetails, "Current user fetched with personal details")
+      );
 
     } catch (error) {
-      console.error('Error fetching profile:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to fetch profile',
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-      });
+      logger.error('Error fetching current user personal details:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while fetching the current user', 500)
+      );
     }
   },
 
-  // Step 1: Personal Details
-  personalDetails: async (req, res) => {
+  // Submit personal details (matching Rivenapp pattern)
+  submitPersonalDetails: async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid data provided.',
-          errors: errors.array().map(err => err.msg)
-        });
+        return res.status(400).json(
+          ApiResponse.Error('Validation failed', 400, errors.array())
+        );
       }
 
-      const { dateOfBirth, gender, address } = req.body;
+      const {
+        firstName,
+        lastName,
+        dateOfBirth,
+        gender,
+        address,
+        city,
+        county,
+        postalCode,
+        citizenship
+      } = req.body;
 
       const user = await User.findByPk(req.user.id);
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
-      // Update user with personal details
       await user.update({
+        first_name: firstName,
+        last_name: lastName,
         date_of_birth: new Date(dateOfBirth),
         gender: gender.toLowerCase(),
         address: JSON.stringify(address),
-        city: address.city,
-        postal_code: address.zipCode,
+        city,
+        county,
+        postal_code: postalCode,
+        citizenship,
         registration_step: 'personal_info'
       });
 
-      res.status(200).json({
-        success: true,
-        message: 'Personal details saved successfully.',
-        data: {
-          stepCompleted: 1,
-          nextStep: 2
-        }
-      });
+      return res.status(200).json(
+        ApiResponse.SuccessNoData('Personal details submitted successfully')
+      );
 
     } catch (error) {
-      console.error('Error saving personal details:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to save personal details',
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-      });
+      logger.error('Error submitting personal details:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while submitting personal details', 500)
+      );
     }
   },
 
-  // Step 2: Employment Details
-  employmentDetails: async (req, res) => {
+  // Submit employment information (matching Rivenapp pattern)
+  submitEmploymentInfo: async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid employment data.',
-          errors: errors.array().map(err => err.msg)
-        });
+        return res.status(400).json(
+          ApiResponse.Error('Validation failed', 400, errors.array())
+        );
       }
 
       const {
@@ -172,231 +176,25 @@ const onboardingController = {
         monthlyIncome,
         workAddress,
         yearsAtCurrentJob,
-        // Self-employment specific fields
-        businessName,
-        businessType,
-        businessDescription,
-        businessAddress,
-        yearsInBusiness,
         industryType
       } = req.body;
 
       const user = await User.findByPk(req.user.id);
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
-      // Validate required fields based on employment status
-      const validationErrors = [];
-
-      if (!employmentStatus) {
-        validationErrors.push('Employment status is required');
-      }
-
-      // Valid employment statuses
-      const validStatuses = [
-        'Employed', 'Self-Employed', 'Student', 'Unemployed', 'Retired',
-        'Freelancer', 'Contract Worker', 'Part-Time', 'Homemaker',
-        'Disabled', 'Other'
-      ];
-
-      if (!validStatuses.includes(employmentStatus)) {
-        validationErrors.push(`Employment status must be one of: ${validStatuses.join(', ')}`);
-      }
-
-      // Income validation - required for most statuses except unemployed and some others
-      const incomeNotRequired = ['Unemployed', 'Student', 'Homemaker', 'Disabled'];
-      if (!incomeNotRequired.includes(employmentStatus)) {
-        if (!monthlyIncome || monthlyIncome <= 0) {
-          validationErrors.push('Monthly income is required for your employment status');
-        }
-      }
-
-      // Profession/job title - always required except for unemployed
-      if (employmentStatus !== 'Unemployed') {
-        if (!jobTitle) {
-          validationErrors.push('Profession/job title is required');
-        }
-      }
-
-      // Employment status specific validations
-      if (employmentStatus === 'Employed' || employmentStatus === 'Part-Time') {
-        if (!employerName) {
-          validationErrors.push('Employer name is required');
-        }
-        if (!yearsAtCurrentJob && yearsAtCurrentJob !== 0) {
-          validationErrors.push('Years at current job is required');
-        }
-      }
-
-      else if (employmentStatus === 'Self-Employed' || employmentStatus === 'Freelancer') {
-        if (!businessName && !jobTitle) {
-          validationErrors.push('Business name or professional title is required');
-        }
-        if (!businessType && !industryType) {
-          validationErrors.push('Business type or industry is required');
-        }
-        if (!yearsInBusiness && yearsInBusiness !== 0) {
-          validationErrors.push('Years in business/freelancing is required');
-        }
-      }
-
-      else if (employmentStatus === 'Student') {
-        // Students need educational info instead of employment
-        if (!req.body.institution) {
-          validationErrors.push('Educational institution is required for students');
-        }
-        if (!req.body.studyField) {
-          validationErrors.push('Field of study is required for students');
-        }
-      }
-
-      else if (employmentStatus === 'Retired') {
-        // Retired individuals might have pension income
-        if (!req.body.retirementYear) {
-          validationErrors.push('Retirement year is required');
-        }
-      }
-
-      if (validationErrors.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Validation failed',
-          errors: validationErrors
-        });
-      }
-
-      // Prepare employment data based on employment status
-      let employmentData = {
+      const employmentData = {
         status: employmentStatus,
+        employerName,
+        jobTitle,
+        monthlyIncome,
+        workAddress,
+        yearsAtCurrentJob,
+        industryType,
         updatedAt: new Date()
       };
 
-      // Common fields for all statuses
-      if (jobTitle) employmentData.jobTitle = jobTitle;
-      if (monthlyIncome) employmentData.monthlyIncome = monthlyIncome;
-
-      // Employment-specific data
-      switch (employmentStatus) {
-        case 'Employed':
-        case 'Part-Time':
-          employmentData = {
-            ...employmentData,
-            employerName,
-            jobTitle,
-            monthlyIncome,
-            workAddress,
-            yearsAtCurrentJob,
-            employmentType: 'traditional'
-          };
-          break;
-
-        case 'Self-Employed':
-        case 'Freelancer':
-          employmentData = {
-            ...employmentData,
-            businessName: businessName || jobTitle,
-            businessType: businessType || industryType,
-            businessDescription,
-            businessAddress: businessAddress || workAddress,
-            profession: jobTitle,
-            monthlyIncome,
-            yearsInBusiness,
-            industryType: industryType || businessType,
-            employmentType: 'business'
-          };
-          break;
-
-        case 'Contract Worker':
-          employmentData = {
-            ...employmentData,
-            employerName: employerName || 'Various Clients',
-            jobTitle,
-            monthlyIncome,
-            workAddress: workAddress || businessAddress,
-            yearsAtCurrentJob: yearsAtCurrentJob || yearsInBusiness,
-            contractType: req.body.contractType || 'Independent',
-            employmentType: 'contract'
-          };
-          break;
-
-        case 'Student':
-          employmentData = {
-            ...employmentData,
-            institution: req.body.institution,
-            studyField: req.body.studyField,
-            yearOfStudy: req.body.yearOfStudy,
-            graduationYear: req.body.graduationYear,
-            partTimeWork: req.body.partTimeWork || false,
-            monthlyIncome: monthlyIncome || 0, // Students might have allowances/part-time income
-            employmentType: 'education'
-          };
-          break;
-
-        case 'Retired':
-          employmentData = {
-            ...employmentData,
-            retirementYear: req.body.retirementYear,
-            previousOccupation: req.body.previousOccupation || jobTitle,
-            pensionIncome: monthlyIncome,
-            pensionProvider: req.body.pensionProvider,
-            employmentType: 'retired'
-          };
-          break;
-
-        case 'Unemployed':
-          employmentData = {
-            ...employmentData,
-            unemploymentDuration: req.body.unemploymentDuration,
-            previousOccupation: req.body.previousOccupation,
-            seekingEmployment: req.body.seekingEmployment !== false, // Default true
-            lastEmployer: req.body.lastEmployer,
-            monthlyIncome: req.body.monthlyIncome || 0, // Might have benefits
-            employmentType: 'unemployed'
-          };
-          break;
-
-        case 'Homemaker':
-          employmentData = {
-            ...employmentData,
-            dependentOn: req.body.dependentOn, // Spouse, family, etc.
-            previousOccupation: req.body.previousOccupation,
-            yearsAsHomemaker: req.body.yearsAsHomemaker,
-            monthlyIncome: req.body.monthlyIncome || 0, // Might have allowances
-            employmentType: 'homemaker'
-          };
-          break;
-
-        case 'Disabled':
-          employmentData = {
-            ...employmentData,
-            disabilityBenefits: req.body.disabilityBenefits,
-            ableToWork: req.body.ableToWork || false,
-            previousOccupation: req.body.previousOccupation,
-            monthlyIncome: req.body.monthlyIncome || 0, // Disability benefits
-            employmentType: 'disabled'
-          };
-          break;
-
-        case 'Other':
-          employmentData = {
-            ...employmentData,
-            description: req.body.description || 'Other employment status',
-            jobTitle: jobTitle || 'Not specified',
-            monthlyIncome: monthlyIncome || 0,
-            additionalInfo: req.body.additionalInfo,
-            employmentType: 'other'
-          };
-          break;
-
-        default:
-          employmentData.employmentType = 'unknown';
-      }
-
-      // Update kyc_data with employment information
       const currentKycData = user.kyc_data || {};
       const updatedKycData = {
         ...currentKycData,
@@ -405,57 +203,30 @@ const onboardingController = {
 
       await user.update({
         occupation: jobTitle,
-        kyc_data: updatedKycData
+        kyc_data: updatedKycData,
+        registration_step: 'employment_info'
       });
 
-      // Customize success message based on employment status
-      const statusMessages = {
-        'Employed': 'Employment details saved successfully.',
-        'Self-Employed': 'Business details saved successfully.',
-        'Student': 'Educational information saved successfully.',
-        'Unemployed': 'Employment status information saved successfully.',
-        'Retired': 'Retirement information saved successfully.',
-        'Freelancer': 'Freelancer details saved successfully.',
-        'Contract Worker': 'Contract work details saved successfully.',
-        'Part-Time': 'Part-time employment details saved successfully.',
-        'Homemaker': 'Homemaker information saved successfully.',
-        'Disabled': 'Disability status information saved successfully.',
-        'Other': 'Employment information saved successfully.'
-      };
-
-      const successMessage = statusMessages[employmentStatus] || 'Employment information saved successfully.';
-
-      res.status(200).json({
-        success: true,
-        message: successMessage,
-        data: {
-          stepCompleted: 2,
-          nextStep: 3,
-          employmentStatus,
-          employmentType: employmentData.employmentType
-        }
-      });
+      return res.status(200).json(
+        ApiResponse.SuccessNoData('Employment information submitted successfully')
+      );
 
     } catch (error) {
-      console.error('Error saving employment details:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to save employment details',
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-      });
+      logger.error('Error submitting employment information:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while submitting employment information', 500)
+      );
     }
   },
 
-  // Step 3: KYC Information
-  kycInformation: async (req, res) => {
+  // Submit KYC information (matching Rivenapp pattern)
+  submitKycInfo: async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid KYC data.',
-          errors: errors.array().map(err => err.msg)
-        });
+        return res.status(400).json(
+          ApiResponse.Error('Validation failed', 400, errors.array())
+        );
       }
 
       const {
@@ -466,312 +237,306 @@ const onboardingController = {
         placeOfBirth,
         purposeOfAccount,
         sourceOfFunds,
-        expectedTransactionVolume
+        expectedTransactionVolume,
+        investmentExperience,
+        riskTolerance,
+        publiclyTradedCompany,
+        politicallyExposedPerson
       } = req.body;
 
       const user = await User.findByPk(req.user.id);
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
-      // Update kyc_data with KYC information
-      const currentKycData = user.kyc_data || {};
       const kycData = {
-        ...currentKycData,
-        kyc: {
-          idType,
-          idNumber,
-          idExpiryDate,
-          nationality,
-          placeOfBirth,
-          purposeOfAccount,
-          sourceOfFunds,
-          expectedTransactionVolume,
-          updatedAt: new Date()
-        }
+        idType,
+        idNumber,
+        idExpiryDate,
+        nationality,
+        placeOfBirth,
+        purposeOfAccount,
+        sourceOfFunds,
+        expectedTransactionVolume,
+        investmentExperience,
+        riskTolerance,
+        publiclyTradedCompany: publiclyTradedCompany || false,
+        politicallyExposedPerson: politicallyExposedPerson || false,
+        updatedAt: new Date()
       };
 
-      await user.update({
-        kyc_data: kycData,
-        kyc_status: 'pending',
-        citizenship: nationality.substring(0, 3).toUpperCase()
-      });
-
-      res.status(200).json({
-        success: true,
-        message: 'KYC information saved successfully.',
-        data: {
-          stepCompleted: 3,
-          nextStep: 4,
-          verificationRequired: true
-        }
-      });
-
-    } catch (error) {
-      console.error('Error saving KYC information:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to save KYC information',
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-      });
-    }
-  },
-
-  // Step 4: Trusted Contact
-  trustedContact: async (req, res) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid trusted contact information.',
-          errors: errors.array().map(err => err.msg)
-        });
-      }
-
-      const { fullName, relationship, email, phoneNumber, address } = req.body;
-
-      const user = await User.findByPk(req.user.id);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-
-      // Update kyc_data with trusted contact information
       const currentKycData = user.kyc_data || {};
       const updatedKycData = {
         ...currentKycData,
-        trustedContact: {
-          fullName,
-          relationship,
-          email,
-          phoneNumber,
-          address,
-          updatedAt: new Date()
-        }
-      };
-
-      await user.update({
-        kyc_data: updatedKycData
-      });
-
-      res.status(200).json({
-        success: true,
-        message: 'Trusted contact added successfully.',
-        data: {
-          stepCompleted: 4,
-          nextStep: 5
-        }
-      });
-
-    } catch (error) {
-      console.error('Error saving trusted contact:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to save trusted contact',
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-      });
-    }
-  },
-
-  // Step 5: Document Upload
-  documentUploadMiddleware: upload.fields([
-    { name: 'identityDocument', maxCount: 1 },
-    { name: 'addressDocument', maxCount: 1 }
-  ]),
-
-  documentUpload: async (req, res) => {
-    try {
-      const { documentType } = req.body;
-      const files = req.files;
-
-      const user = await User.findByPk(req.user.id);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-
-      if (!files || Object.keys(files).length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'File upload failed.',
-          errors: ['No files uploaded']
-        });
-      }
-
-      const uploadedFiles = [];
-
-      // Handle identity document
-      if (files.identityDocument && files.identityDocument[0]) {
-        const file = files.identityDocument[0];
-        uploadedFiles.push({
-          type: 'identity',
-          fileName: file.originalname,
-          status: 'uploaded',
-          verificationStatus: 'pending'
-        });
-      }
-
-      // Handle address document
-      if (files.addressDocument && files.addressDocument[0]) {
-        const file = files.addressDocument[0];
-        uploadedFiles.push({
-          type: 'address',
-          fileName: file.originalname,
-          status: 'uploaded',
-          verificationStatus: 'pending'
-        });
-      }
-
-      // Update kyc_data with document information
-      const currentKycData = user.kyc_data || {};
-      const updatedKycData = {
-        ...currentKycData,
-        documents: {
-          uploadedFiles,
-          uploadedAt: new Date()
-        }
+        kyc: kycData
       };
 
       await user.update({
         kyc_data: updatedKycData,
-        registration_status: 'documents_uploaded'
+        kyc_status: 'pending',
+        registration_step: 'kyc_info'
       });
 
-      res.status(200).json({
-        success: true,
-        message: 'Documents uploaded successfully.',
-        data: {
-          stepCompleted: 5,
-          nextStep: 6,
-          uploadedFiles
-        }
-      });
+      return res.status(200).json(
+        ApiResponse.SuccessNoData('Alpaca specific kyc info submitted successfully')
+      );
 
     } catch (error) {
-      console.error('Error uploading documents:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Document upload failed',
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-      });
+      logger.error('Error submitting kyc info:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while submitting kyc info', 500)
+      );
     }
   },
 
-  // Step 6: Profile Image Upload
-  profileImageUploadMiddleware: profileImageUpload.single('profileImage'),
-
-  profileImageUpload: async (req, res) => {
+  // Submit trusted contact (matching Rivenapp pattern)
+  submitTrustedContact: async (req, res) => {
     try {
-      const file = req.file;
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json(
+          ApiResponse.Error('Validation failed', 400, errors.array())
+        );
+      }
+
+      const {
+        fullName,
+        relationship,
+        email,
+        phoneNumber,
+        address
+      } = req.body;
 
       const user = await User.findByPk(req.user.id);
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
-      if (!file) {
-        return res.status(400).json({
-          success: false,
-          message: 'Image upload failed.',
-          errors: ['No image uploaded']
-        });
-      }
+      const trustedContactData = {
+        fullName,
+        relationship,
+        email,
+        phoneNumber,
+        address,
+        updatedAt: new Date()
+      };
 
-      // Update kyc_data with profile image information
       const currentKycData = user.kyc_data || {};
       const updatedKycData = {
         ...currentKycData,
-        profileImage: {
+        trustedContact: trustedContactData
+      };
+
+      await user.update({
+        kyc_data: updatedKycData,
+        registration_step: 'trusted_contact'
+      });
+
+      return res.status(200).json(
+        ApiResponse.SuccessNoData('Trusted contact info submitted successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error submitting trusted contact information:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while submitting trusted contact information', 500)
+      );
+    }
+  },
+
+  // Upload ID front (matching Rivenapp pattern)
+  uploadIdFrontMiddleware: upload.single('DocumentFile'),
+  uploadIdFront: async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json(ApiResponse.Error('No file uploaded', 400));
+      }
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const documentId = `${user.id}_id_front_${Date.now()}`;
+
+      const currentKycData = user.kyc_data || {};
+      const updatedDocuments = {
+        ...currentKycData.documents,
+        idFront: {
+          documentId,
           fileName: file.filename,
           originalName: file.originalname,
           path: file.path,
-          uploadedAt: new Date()
+          uploadedAt: new Date(),
+          status: 'uploaded',
+          verificationStatus: 'pending'
         }
+      };
+
+      const updatedKycData = {
+        ...currentKycData,
+        documents: updatedDocuments
       };
 
       await user.update({
         kyc_data: updatedKycData
       });
 
-      const imageUrl = `${req.protocol}://${req.get('host')}/uploads/onboarding/${file.filename}`;
-
-      res.status(200).json({
-        success: true,
-        message: 'Profile image uploaded successfully.',
-        data: {
-          stepCompleted: 6,
-          nextStep: 7,
-          imageUrl
-        }
-      });
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(documentId, 'Document uploaded successfully')
+      );
 
     } catch (error) {
-      console.error('Error uploading profile image:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Profile image upload failed',
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-      });
+      logger.error('Error uploading ID front document:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while uploading document', 500)
+      );
     }
   },
 
-  // Step 7: Terms and Agreements
-  agreements: async (req, res) => {
+  // Upload ID back (matching Rivenapp pattern)
+  uploadIdBackMiddleware: upload.single('DocumentFile'),
+  uploadIdBack: async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json(ApiResponse.Error('No file uploaded', 400));
+      }
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const documentId = `${user.id}_id_back_${Date.now()}`;
+
+      const currentKycData = user.kyc_data || {};
+      const updatedDocuments = {
+        ...currentKycData.documents,
+        idBack: {
+          documentId,
+          fileName: file.filename,
+          originalName: file.originalname,
+          path: file.path,
+          uploadedAt: new Date(),
+          status: 'uploaded',
+          verificationStatus: 'pending'
+        }
+      };
+
+      const updatedKycData = {
+        ...currentKycData,
+        documents: updatedDocuments
+      };
+
+      await user.update({
+        kyc_data: updatedKycData
+      });
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(documentId, 'Document uploaded successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error uploading ID back document:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while uploading document', 500)
+      );
+    }
+  },
+
+  // Upload proof of address (matching Rivenapp pattern)
+  uploadProofOfAddressMiddleware: upload.single('DocumentFile'),
+  uploadProofOfAddress: async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) {
+        return res.status(400).json(ApiResponse.Error('No file uploaded', 400));
+      }
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const documentId = `${user.id}_proof_of_address_${Date.now()}`;
+
+      const currentKycData = user.kyc_data || {};
+      const updatedDocuments = {
+        ...currentKycData.documents,
+        proofOfAddress: {
+          documentId,
+          fileName: file.filename,
+          originalName: file.originalname,
+          path: file.path,
+          uploadedAt: new Date(),
+          status: 'uploaded',
+          verificationStatus: 'pending'
+        }
+      };
+
+      const updatedKycData = {
+        ...currentKycData,
+        documents: updatedDocuments
+      };
+
+      await user.update({
+        kyc_data: updatedKycData,
+        registration_step: 'documents_uploaded'
+      });
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(documentId, 'Document uploaded successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error uploading proof of address document:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while uploading document', 500)
+      );
+    }
+  },
+
+  // Accept agreements (matching Rivenapp pattern)
+  acceptAgreements: async (req, res) => {
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({
-          success: false,
-          message: 'Required agreements not accepted.',
-          errors: errors.array().map(err => err.msg)
-        });
+        return res.status(400).json(
+          ApiResponse.Error('Validation failed', 400, errors.array())
+        );
       }
 
       const {
         termsAndConditions,
         privacyPolicy,
         dataProcessingConsent,
-        marketingConsent,
-        agreementVersion,
-        ipAddress,
-        userAgent,
-        timestamp
+        marketingConsent
       } = req.body;
 
       const user = await User.findByPk(req.user.id);
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
-      // Update user agreements
-      const currentKycData = user.kyc_data || {};
+      const ipAddress = req.connection?.remoteAddress || req.ip || '';
+      const userAgent = req.get('User-Agent') || '';
+
       const agreementData = {
+        termsAndConditions,
+        privacyPolicy,
+        dataProcessingConsent,
+        marketingConsent,
+        ipAddress,
+        userAgent,
+        acceptedAt: new Date()
+      };
+
+      const currentKycData = user.kyc_data || {};
+      const updatedKycData = {
         ...currentKycData,
-        agreements: {
-          termsAndConditions,
-          privacyPolicy,
-          dataProcessingConsent,
-          marketingConsent,
-          agreementVersion,
-          ipAddress,
-          userAgent,
-          timestamp,
-          acceptedAt: new Date()
-        }
+        agreements: agreementData
       };
 
       await user.update({
@@ -779,47 +544,302 @@ const onboardingController = {
         privacy_accepted: privacyPolicy,
         terms_accepted_at: new Date(),
         privacy_accepted_at: new Date(),
-        kyc_data: agreementData
+        kyc_data: updatedKycData,
+        registration_step: 'agreements_accepted'
       });
 
-      res.status(200).json({
-        success: true,
-        message: 'Agreements accepted successfully.',
-        data: {
-          stepCompleted: 7,
-          nextStep: 8
-        }
-      });
+      return res.status(200).json(
+        ApiResponse.SuccessNoData('Agreements accepted successfully')
+      );
 
     } catch (error) {
-      console.error('Error saving agreements:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to save agreements',
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-      });
+      logger.error('Error accepting agreements:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while accepting agreements', 500)
+      );
     }
   },
 
-  // Step 8: Complete Onboarding
+
+  // Get application status (matching Rivenapp pattern)
+  getApplicationStatus: async (req, res) => {
+    try {
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const status = {
+        registrationStatus: user.registration_status,
+        registrationStep: user.registration_step,
+        kycStatus: user.kyc_status,
+        accountStatus: user.account_status,
+        alpacaAccountId: user.alpaca_account_id,
+        isOnboardingComplete: user.registration_status === 'completed',
+        canTrade: user.kyc_status === 'approved' && user.account_status === 'active'
+      };
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(status, 'Application status retrieved successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error getting application status:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while getting application status', 500)
+      );
+    }
+  },
+
+  // Get detailed application status (matching Rivenapp pattern)
+  getDetailedApplicationStatus: async (req, res) => {
+    try {
+      const startTime = Date.now();
+      logger.info(`Started getting detailed application status at ${new Date()}`);
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const kycData = user.kyc_data || {};
+
+      const detailedStatus = {
+        user: {
+          id: user.id,
+          email: user.email,
+          fullName: `${user.first_name} ${user.last_name}`,
+          registrationStatus: user.registration_status,
+          registrationStep: user.registration_step,
+          kycStatus: user.kyc_status,
+          accountStatus: user.account_status
+        },
+        onboardingCompletion: {
+          personalDetails: {
+            completed: !!(user.date_of_birth && user.gender && user.address),
+            data: {
+              dateOfBirth: user.date_of_birth,
+              gender: user.gender,
+              address: user.address,
+              city: user.city,
+              county: user.county
+            }
+          },
+          employment: {
+            completed: !!kycData.employment,
+            data: kycData.employment || null
+          },
+          kyc: {
+            completed: !!kycData.kyc,
+            data: kycData.kyc || null
+          },
+          trustedContact: {
+            completed: !!kycData.trustedContact,
+            data: kycData.trustedContact || null
+          },
+          documents: {
+            completed: !!(kycData.documents?.idFront && kycData.documents?.idBack && kycData.documents?.proofOfAddress),
+            data: kycData.documents || null
+          },
+          agreements: {
+            completed: !!(user.terms_accepted && user.privacy_accepted),
+            data: kycData.agreements || null
+          }
+        },
+        alpacaAccount: {
+          accountId: user.alpaca_account_id,
+          status: user.account_status,
+          tradingEnabled: user.kyc_status === 'approved' && user.account_status === 'active'
+        }
+      };
+
+      const endTime = Date.now();
+      const timeTaken = endTime - startTime;
+      logger.info(`Finished getting detailed application status at ${new Date()}. Time taken: ${timeTaken} ms`);
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(detailedStatus, 'Detailed application status retrieved successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error getting detailed application status:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while getting detailed application status', 500)
+      );
+    }
+  },
+
+  // Get onboarding progress (matching Rivenapp pattern)
+  getOnboardingProgress: async (req, res) => {
+    try {
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const kycData = user.kyc_data || {};
+
+      const steps = {
+        personalDetails: !!(user.date_of_birth && user.gender && user.address),
+        employment: !!kycData.employment,
+        kyc: !!kycData.kyc,
+        trustedContact: !!kycData.trustedContact,
+        documents: !!(kycData.documents?.idFront && kycData.documents?.idBack && kycData.documents?.proofOfAddress),
+        agreements: !!(user.terms_accepted && user.privacy_accepted),
+        applicationSubmitted: user.registration_status === 'completed'
+      };
+
+      const completedSteps = Object.values(steps).filter(Boolean).length;
+      const totalSteps = Object.keys(steps).length;
+      const progressPercentage = Math.round((completedSteps / totalSteps) * 100);
+
+      const progress = {
+        currentStep: user.registration_step,
+        completedSteps,
+        totalSteps,
+        progressPercentage,
+        isComplete: user.registration_status === 'completed',
+        steps
+      };
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(progress, 'Onboarding progress retrieved successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error getting onboarding progress:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while getting onboarding progress', 500)
+      );
+    }
+  },
+
+  // Get detailed onboarding progress (matching Rivenapp pattern)
+  getDetailedOnboardingProgress: async (req, res) => {
+    try {
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const kycData = user.kyc_data || {};
+
+      const detailedProgress = {
+        user: {
+          id: user.id,
+          email: user.email,
+          fullName: `${user.first_name} ${user.last_name}`,
+          currentStep: user.registration_step,
+          status: user.registration_status
+        },
+        steps: [
+          {
+            stepNumber: 1,
+            stepName: 'Personal Details',
+            endpoint: '/api/v1/onboarding/personal-details',
+            completed: !!(user.date_of_birth && user.gender && user.address),
+            data: {
+              firstName: user.first_name,
+              lastName: user.last_name,
+              dateOfBirth: user.date_of_birth,
+              gender: user.gender,
+              address: user.address,
+              city: user.city,
+              county: user.county
+            }
+          },
+          {
+            stepNumber: 2,
+            stepName: 'Employment Information',
+            endpoint: '/api/v1/onboarding/employment-info',
+            completed: !!kycData.employment,
+            data: kycData.employment || null
+          },
+          {
+            stepNumber: 3,
+            stepName: 'KYC Information',
+            endpoint: '/api/v1/onboarding/kyc-info',
+            completed: !!kycData.kyc,
+            data: kycData.kyc || null
+          },
+          {
+            stepNumber: 4,
+            stepName: 'Trusted Contact',
+            endpoint: '/api/v1/onboarding/trusted-contact',
+            completed: !!kycData.trustedContact,
+            data: kycData.trustedContact || null
+          },
+          {
+            stepNumber: 5,
+            stepName: 'Document Upload',
+            endpoint: '/api/v1/onboarding/upload-documents',
+            completed: !!(kycData.documents?.idFront && kycData.documents?.idBack && kycData.documents?.proofOfAddress),
+            data: {
+              idFront: kycData.documents?.idFront || null,
+              idBack: kycData.documents?.idBack || null,
+              proofOfAddress: kycData.documents?.proofOfAddress || null
+            }
+          },
+          {
+            stepNumber: 6,
+            stepName: 'Terms & Agreements',
+            endpoint: '/api/v1/onboarding/agreements',
+            completed: !!(user.terms_accepted && user.privacy_accepted),
+            data: kycData.agreements || null
+          },
+          {
+            stepNumber: 7,
+            stepName: 'Submit Application',
+            endpoint: '/api/v1/onboarding/submit-application',
+            completed: user.registration_status === 'completed',
+            data: {
+              submittedAt: user.registration_status === 'completed' ? user.updatedAt : null
+            }
+          }
+        ],
+        summary: {
+          completedSteps: kycData ? Object.values({
+            personalDetails: !!(user.date_of_birth && user.gender && user.address),
+            employment: !!kycData.employment,
+            kyc: !!kycData.kyc,
+            trustedContact: !!kycData.trustedContact,
+            documents: !!(kycData.documents?.idFront && kycData.documents?.idBack && kycData.documents?.proofOfAddress),
+            agreements: !!(user.terms_accepted && user.privacy_accepted),
+            applicationSubmitted: user.registration_status === 'completed'
+          }).filter(Boolean).length : 0,
+          totalSteps: 7,
+          isComplete: user.registration_status === 'completed',
+          kycStatus: user.kyc_status,
+          accountStatus: user.account_status
+        }
+      };
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(detailedProgress, 'Onboarding progress retrieved successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error getting detailed onboarding progress:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while getting detailed onboarding progress', 500)
+      );
+    }
+  },
+
+  // Complete Onboarding (original pattern with Alpaca account creation)
   completeOnboarding: async (req, res) => {
     try {
       const { confirmCompletion } = req.body;
 
       if (!confirmCompletion) {
-        return res.status(400).json({
-          success: false,
-          message: 'Cannot complete onboarding.',
-          errors: ['Completion confirmation required']
-        });
+        return res.status(400).json(
+          ApiResponse.Error('Cannot complete onboarding', 400, ['Completion confirmation required'])
+        );
       }
 
       const user = await User.findByPk(req.user.id);
       if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
       // Check if all previous steps are completed
@@ -857,11 +877,9 @@ const onboardingController = {
       }
 
       if (missingSteps.length > 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Cannot complete onboarding.',
-          errors: missingSteps
-        });
+        return res.status(400).json(
+          ApiResponse.Error('Cannot complete onboarding', 400, missingSteps)
+        );
       }
 
       // Prepare user data for Alpaca account creation
@@ -949,7 +967,7 @@ const onboardingController = {
           }
         };
 
-        console.log('Creating Alpaca account with data:', JSON.stringify(alpacaAccountData, null, 2));
+        logger.info('Creating Alpaca account with data:', JSON.stringify(alpacaAccountData, null, 2));
 
         const alpacaAccount = await alpacaService.createAccount(alpacaAccountData);
 
@@ -967,10 +985,10 @@ const onboardingController = {
 
         alpacaAccountCreated = true;
 
-        console.log(`Alpaca account created successfully: ${alpacaAccount.id}`);
+        logger.info(`Alpaca account created successfully: ${alpacaAccount.id}`);
 
       } catch (error) {
-        console.error('Error creating Alpaca account:', error);
+        logger.error('Error creating Alpaca account:', error);
         alpacaError = error.message;
 
         // Don't fail onboarding if Alpaca account creation fails
@@ -1010,92 +1028,22 @@ const onboardingController = {
         const emailService = require('../services/emailService');
         await emailService.sendOnboardingCompleteEmail(user, alpacaAccountCreated);
       } catch (emailError) {
-        console.warn('Failed to send onboarding completion email:', emailError);
+        logger.warn('Failed to send onboarding completion email:', emailError);
       }
 
-      res.status(200).json({
-        success: true,
-        message: alpacaAccountCreated ?
-          'Onboarding completed successfully! Your trading account is ready.' :
-          'Onboarding completed successfully! Your trading account is being set up.',
-        data: responseData
-      });
+      const successMessage = alpacaAccountCreated ?
+        'Onboarding completed successfully! Your trading account is ready.' :
+        'Onboarding completed successfully! Your trading account is being set up.';
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(responseData, successMessage)
+      );
 
     } catch (error) {
-      console.error('Error completing onboarding:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to complete onboarding',
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-      });
-    }
-  },
-
-  // Get Onboarding Progress
-  getProgress: async (req, res) => {
-    try {
-      const user = await User.findByPk(req.user.id);
-      if (!user) {
-        return res.status(404).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-
-      // Calculate progress
-      const steps = {
-        personalDetails: user.date_of_birth && user.gender && user.address ? 'complete' : 'incomplete',
-        employerDetails: user.kyc_data?.employment ? 'complete' : 'incomplete',
-        kyc: user.kyc_data?.kyc ? 'complete' : 'incomplete',
-        trustedContact: user.kyc_data?.trustedContact ? 'complete' : 'incomplete',
-        documentUpload: user.kyc_data?.documents ? 'complete' : 'incomplete',
-        imageUpload: user.kyc_data?.profileImage ? 'complete' : 'incomplete',
-        agreement: user.terms_accepted && user.privacy_accepted ? 'complete' : 'incomplete',
-        completion: user.registration_status === 'completed' ? 'complete' : 'incomplete'
-      };
-
-      const completedSteps = Object.keys(steps).filter(step => steps[step] === 'complete');
-      const totalSteps = 8;
-      const currentStep = completedSteps.length + 1;
-
-      // Determine next step
-      const stepMapping = [
-        { stepNumber: 1, stepName: 'Personal Details', endpoint: '/api/onboarding/personal-details', key: 'personalDetails' },
-        { stepNumber: 2, stepName: 'Employment Details', endpoint: '/api/onboarding/employer-details', key: 'employerDetails' },
-        { stepNumber: 3, stepName: 'KYC Verification', endpoint: '/api/onboarding/kyc', key: 'kyc' },
-        { stepNumber: 4, stepName: 'Trusted Contact', endpoint: '/api/onboarding/trusted-contact', key: 'trustedContact' },
-        { stepNumber: 5, stepName: 'Document Upload', endpoint: '/api/onboarding/document-upload', key: 'documentUpload' },
-        { stepNumber: 6, stepName: 'Profile Image', endpoint: '/api/onboarding/profile-image', key: 'imageUpload' },
-        { stepNumber: 7, stepName: 'Terms & Agreements', endpoint: '/api/onboarding/agreements', key: 'agreement' },
-        { stepNumber: 8, stepName: 'Complete Onboarding', endpoint: '/api/onboarding/complete', key: 'completion' }
-      ];
-
-      const nextStepInfo = stepMapping.find(step => steps[step.key] === 'incomplete') || null;
-
-      res.status(200).json({
-        success: true,
-        data: {
-          currentStep: Math.min(currentStep, totalSteps),
-          totalSteps,
-          completedSteps: completedSteps.map((_, index) => index + 1),
-          nextStep: nextStepInfo ? {
-            stepNumber: nextStepInfo.stepNumber,
-            stepName: nextStepInfo.stepName,
-            endpoint: nextStepInfo.endpoint,
-            required: true
-          } : null,
-          onboardingComplete: user.registration_status === 'completed',
-          progress: steps
-        }
-      });
-
-    } catch (error) {
-      console.error('Error fetching onboarding progress:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Failed to fetch progress',
-        error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-      });
+      logger.error('Error completing onboarding:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while completing onboarding', 500)
+      );
     }
   }
 };

@@ -169,6 +169,11 @@ User.init({
     type: DataTypes.BOOLEAN,
     defaultValue: false
   },
+  auto_convert_deposits: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true,
+    comment: 'Automatically convert KES deposits to USD using real-time exchange rates'
+  },
   pin_hash: {
     type: DataTypes.STRING(255),
     allowNull: true

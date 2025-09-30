@@ -142,36 +142,32 @@ const agreementsValidation = [
     .withMessage('Valid timestamp is required')
 ];
 
-// Routes
+// Routes (matching Rivenapp pattern exactly)
 
-// Get user profile and onboarding status
-router.get('/profile', auth, onboardingController.getProfile);
+// Get current user with personal details (matching Rivenapp pattern)
+router.get('/current-user/personal-details', auth, onboardingController.getCurrentUserPersonalDetails);
 
-// Get onboarding progress
-router.get('/progress', auth, onboardingController.getProgress);
+// Submit onboarding steps (matching Rivenapp pattern)
+router.post('/personal-details', auth, personalDetailsValidation, onboardingController.submitPersonalDetails);
+router.post('/employment-info', auth, employmentDetailsValidation, onboardingController.submitEmploymentInfo);
+router.post('/kyc-info', auth, kycValidation, onboardingController.submitKycInfo);
+router.post('/trusted-contact', auth, trustedContactValidation, onboardingController.submitTrustedContact);
 
-// Step 1: Personal Details
-router.post('/personal-details', auth, personalDetailsValidation, onboardingController.personalDetails);
+// Individual document upload endpoints (matching Rivenapp pattern)
+router.post('/upload-id-front', auth, onboardingController.uploadIdFrontMiddleware, onboardingController.uploadIdFront);
+router.post('/upload-id-back', auth, onboardingController.uploadIdBackMiddleware, onboardingController.uploadIdBack);
+router.post('/upload-proof-of-address', auth, onboardingController.uploadProofOfAddressMiddleware, onboardingController.uploadProofOfAddress);
 
-// Step 2: Employment Details
-router.post('/employer-details', auth, employmentDetailsValidation, onboardingController.employmentDetails);
+// Agreements (matching Rivenapp pattern)
+router.post('/agreements', auth, agreementsValidation, onboardingController.acceptAgreements);
 
-// Step 3: KYC Information
-router.post('/kyc', auth, kycValidation, onboardingController.kycInformation);
+// Status and progress endpoints (matching Rivenapp pattern)
+router.get('/application-status', auth, onboardingController.getApplicationStatus);
+router.get('/detailed-status', auth, onboardingController.getDetailedApplicationStatus);
+router.get('/progress', auth, onboardingController.getOnboardingProgress);
+router.get('/detailed-progress', auth, onboardingController.getDetailedOnboardingProgress);
 
-// Step 4: Trusted Contact
-router.post('/trusted-contact', auth, trustedContactValidation, onboardingController.trustedContact);
-
-// Step 5: Document Upload
-router.post('/document-upload', auth, onboardingController.documentUploadMiddleware, onboardingController.documentUpload);
-
-// Step 6: Profile Image Upload
-router.post('/profile-image', auth, onboardingController.profileImageUploadMiddleware, onboardingController.profileImageUpload);
-
-// Step 7: Terms and Agreements
-router.post('/agreements', auth, agreementsValidation, onboardingController.agreements);
-
-// Step 8: Complete Onboarding
+// Complete onboarding endpoint (original pattern with Alpaca account creation)
 router.post('/complete', auth, [
   body('confirmCompletion')
     .equals('true')
