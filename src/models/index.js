@@ -6,6 +6,7 @@ const Notification = require('./Notification');
 const { SupportTicket, SupportTicketMessage } = require('./SupportTicket');
 const EmailVerificationToken = require('./EmailVerificationToken');
 const PhoneVerificationToken = require('./PhoneVerificationToken');
+const PasswordResetToken = require('./PasswordResetToken');
 const BiometricAuth = require('./BiometricAuth');
 const NotificationPreferences = require('./NotificationPreferences');
 
@@ -35,6 +36,10 @@ EmailVerificationToken.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasMany(PhoneVerificationToken, { foreignKey: 'user_id', as: 'phoneTokens' });
 PhoneVerificationToken.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
+// Password reset token associations
+User.hasMany(PasswordResetToken, { foreignKey: 'user_id', as: 'passwordResetTokens' });
+PasswordResetToken.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
 // Biometric authentication associations
 User.hasMany(BiometricAuth, { foreignKey: 'user_id', as: 'biometricAuths' });
 BiometricAuth.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
@@ -54,6 +59,7 @@ module.exports = {
   SupportTicketMessage,
   EmailVerificationToken,
   PhoneVerificationToken,
+  PasswordResetToken,
   BiometricAuth,
   NotificationPreferences
 };

@@ -7,7 +7,11 @@ const {
   getAlpacaTerms,
   acceptTermsAndPrivacy,
   getMe,
-  checkKYCStatus
+  checkKYCStatus,
+  // Rivenapp pattern endpoints
+  requestPasswordReset,
+  resetPassword,
+  getCurrentUser
 } = require('../controllers/authController');
 const { auth } = require('../middleware/auth');
 const {
@@ -37,5 +41,10 @@ router.get('/me', auth, getMe);
 
 // Check KYC status from Alpaca
 router.get('/kyc-status', auth, checkKYCStatus);
+
+// Rivenapp pattern endpoints (matching C# API structure)
+router.post('/request-password-reset', requestPasswordReset);
+router.post('/reset-password', resetPassword);
+router.get('/current-user', auth, getCurrentUser);
 
 module.exports = router;

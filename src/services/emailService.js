@@ -196,34 +196,152 @@ class EmailService {
     });
   }
 
-  async sendPasswordResetEmail(user, resetToken) {
-    const resetUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/reset-password?token=${resetToken}`;
-
+  async sendPasswordResetEmail(user, resetCode) {
     const html = `
       <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
-        <h2 style="color: #2c5aa0;">Password Reset Request</h2>
-
-        <p>Hello ${user.first_name},</p>
-
-        <p>You requested to reset your password. Click the button below to reset it:</p>
-
-        <div style="text-align: center; margin: 30px 0;">
-          <a href="${resetUrl}"
-             style="background: #dc3545; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
-            Reset Password
-          </a>
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #dc3545;">🔐 Password Reset Request</h1>
         </div>
 
-        <p style="color: #666;">This link will expire in 1 hour for security reasons.</p>
+        <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+          <h2 style="color: #333; margin-top: 0;">Hello ${user.first_name}!</h2>
+          <p style="color: #666; line-height: 1.6;">
+            You requested to reset your password for your Trading Platform account.
+            Please use the verification code below to reset your password.
+          </p>
+        </div>
 
-        <p style="color: #666;">If you didn't request this, please ignore this email.</p>
+        <div style="text-align: center; margin: 30px 0; background: #ffe3e5; padding: 30px; border-radius: 10px;">
+          <p style="color: #dc3545; font-size: 18px; margin-bottom: 10px; font-weight: bold;">Your password reset code is:</p>
+          <div style="background: #dc3545; color: white; padding: 20px; border-radius: 8px; font-size: 32px; font-weight: bold; letter-spacing: 4px; font-family: 'Courier New', monospace;">
+            ${resetCode}
+          </div>
+          <p style="color: #666; font-size: 14px; margin-top: 15px;">
+            This code will expire in 1 hour for security purposes.
+          </p>
+        </div>
+
+        <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <h3 style="color: #495057; margin-top: 0;">How to use this code:</h3>
+          <ol style="color: #6c757d;">
+            <li>Open the Trading Platform app or website</li>
+            <li>Go to "Forgot Password" or "Reset Password"</li>
+            <li>Enter this verification code: <strong>${resetCode}</strong></li>
+            <li>Create your new password</li>
+          </ol>
+        </div>
+
+        <div style="background: #f8d7da; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 20px;">
+          <h4 style="color: #721c24; margin-top: 0;">⏰ Important Security Info</h4>
+          <ul style="color: #721c24; font-size: 14px; margin: 0; padding-left: 20px; line-height: 1.5;">
+            <li>This reset code expires in <strong>1 hour</strong></li>
+            <li>Can only be used <strong>once</strong></li>
+            <li>Never share this code with anyone</li>
+            <li>If you didn't request this, please ignore this email</li>
+          </ul>
+        </div>
+
+        <div style="border-top: 1px solid #dee2e6; padding-top: 20px; text-align: center; color: #6c757d; font-size: 12px;">
+          <p>If you didn't request this password reset, please ignore this email.</p>
+          <p>For security reasons, never share this verification code with anyone.</p>
+          <p>Trading Platform Security Team</p>
+        </div>
       </div>
+    `;
+
+    const text = `
+      Password Reset Request - Trading Platform
+
+      Hello ${user.first_name},
+
+      You requested to reset your password for your Trading Platform account.
+      Please use the verification code below to reset your password:
+
+      Password Reset Code: ${resetCode}
+
+      How to use this code:
+      1. Open the Trading Platform app or website
+      2. Go to "Forgot Password" or "Reset Password"
+      3. Enter this verification code: ${resetCode}
+      4. Create your new password
+
+      SECURITY INFO:
+      - Code expires in 1 hour
+      - Can only be used once
+      - Never share with anyone
+      - If you didn't request this, ignore this email
+
+      For security reasons, never share this verification code with anyone.
+
+      Trading Platform Security Team
     `;
 
     return this.sendEmail({
       to: user.email,
-      subject: 'Password Reset - Trading Platform',
-      html
+      subject: `🔐 Password Reset Code: ${resetCode}`,
+      html,
+      text
+    });
+  }
+
+  async sendPasswordResetConfirmationEmail(user) {
+    const html = `
+      <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
+        <div style="text-align: center; margin-bottom: 30px;">
+          <h1 style="color: #28a745;">✅ Password Reset Successful</h1>
+        </div>
+
+        <div style="background: #d4edda; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #28a745;">
+          <h2 style="color: #155724; margin-top: 0;">Hello ${user.first_name}!</h2>
+          <p style="color: #155724; line-height: 1.6;">
+            Your password has been successfully reset for your Trading Platform account.
+            You can now log in with your new password.
+          </p>
+        </div>
+
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/login"
+             style="background: #28a745; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
+            Log In Now
+          </a>
+        </div>
+
+        <div style="background: #f8d7da; border-left: 4px solid #dc3545; padding: 15px; margin-bottom: 20px;">
+          <h4 style="color: #721c24; margin-top: 0;">🔒 Security Notice</h4>
+          <p style="color: #721c24; font-size: 14px; margin: 0; line-height: 1.5;">
+            If you didn't reset your password, please contact our support team immediately.
+            Your account security is important to us.
+          </p>
+        </div>
+
+        <div style="border-top: 1px solid #dee2e6; padding-top: 20px; text-align: center; color: #6c757d; font-size: 12px;">
+          <p>This is an automated security notification.</p>
+          <p>Trading Platform Security Team</p>
+        </div>
+      </div>
+    `;
+
+    const text = `
+      Password Reset Successful - Trading Platform
+
+      Hello ${user.first_name},
+
+      Your password has been successfully reset for your Trading Platform account.
+      You can now log in with your new password.
+
+      Log in: ${process.env.CLIENT_URL || 'http://localhost:3000'}/login
+
+      SECURITY NOTICE:
+      If you didn't reset your password, please contact our support team immediately.
+
+      Trading Platform Security Team
+    `;
+
+    return this.sendEmail({
+      to: user.email,
+      subject: '✅ Password Reset Successful - Trading Platform',
+      html,
+      text
     });
   }
 

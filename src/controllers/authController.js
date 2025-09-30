@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { User, EmailVerificationToken, PhoneVerificationToken } = require('../models');
+const { User, EmailVerificationToken, PhoneVerificationToken, PasswordResetToken } = require('../models');
 const emailService = require('../services/emailService');
 const notificationService = require('../services/notificationService');
 const logger = require('../utils/logger');
@@ -723,6 +723,258 @@ const checkKYCStatus = async (req, res) => {
   }
 };
 
+// Standardized API Response Helper (matching Rivenapp pattern)
+const ApiResponse = {
+  SuccessWithData: (data, message = "Success", statusCode = 200) => ({
+    success: true,
+    message,
+    data,
+    statusCode
+  }),
+  SuccessNoData: (message = "Success", statusCode = 200) => ({
+    success: true,
+    message,
+    statusCode
+  }),
+  Error: (message, statusCode = 400, errors = null) => ({
+    success: false,
+    message,
+    statusCode,
+    errors
+  })
+};
+
+// Request password reset (matching Rivenapp pattern)
+const requestPasswordReset = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    logger.info(`Started requesting password reset at ${new Date()}`);
+
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json(
+        ApiResponse.Error('Email is required', 400)
+      );
+    }
+
+    // Find user by email
+    const user = await User.findOne({ where: { email } });
+
+    // Always return success message for security (don't reveal if email exists)
+    const successMessage = 'Password reset request sent successfully';
+
+    if (!user) {
+      logger.warn(`Password reset requested for non-existent email: ${email}`);
+      const duration = Date.now() - startTime;
+      logger.info(`Completed password reset request in ${duration}ms`);
+      return res.status(200).json(
+        ApiResponse.SuccessNoData(successMessage, 200)
+      );
+    }
+
+    // Generate reset token
+    const resetToken = PasswordResetToken.generateToken();
+
+    // Invalidate old tokens
+    await PasswordResetToken.update(
+      { used: true },
+      { where: { user_id: user.id, used: false } }
+    );
+
+    // Create new reset token
+    await PasswordResetToken.create({
+      user_id: user.id,
+      token: resetToken,
+      expires_at: new Date(Date.now() + 60 * 60 * 1000) // 1 hour expiration
+    });
+
+    // Send password reset email
+    try {
+      await emailService.sendPasswordResetEmail(user, resetToken);
+
+      logger.info(`Password reset email sent successfully to ${email}`);
+    } catch (emailError) {
+      logger.error(`Failed to send password reset email to ${email}:`, emailError);
+      // Continue with success response even if email fails
+    }
+
+    const duration = Date.now() - startTime;
+    logger.info(`Completed password reset request in ${duration}ms`);
+
+    return res.status(200).json(
+      ApiResponse.SuccessNoData(successMessage, 200)
+    );
+
+  } catch (error) {
+    logger.error('Password reset request error:', error);
+    return res.status(500).json(
+      ApiResponse.Error('An error occurred while requesting password reset', 500)
+    );
+  }
+};
+
+// Reset password (matching Rivenapp pattern)
+const resetPassword = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    logger.info(`Started resetting password at ${new Date()}`);
+
+    const { token, newPassword, confirmPassword } = req.body;
+
+    if (!token || !newPassword || !confirmPassword) {
+      return res.status(400).json(
+        ApiResponse.Error('Token, new password, and confirm password are required', 400)
+      );
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json(
+        ApiResponse.Error('Password and confirm password do not match', 400)
+      );
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json(
+        ApiResponse.Error('Password must be at least 6 characters long', 400)
+      );
+    }
+
+    // Find valid reset token
+    const resetToken = await PasswordResetToken.findOne({
+      where: {
+        token,
+        used: false
+      },
+      include: [{
+        model: User,
+        as: 'user'
+      }]
+    });
+
+    if (!resetToken) {
+      return res.status(400).json(
+        ApiResponse.Error('Invalid or expired reset token', 400)
+      );
+    }
+
+    if (resetToken.isExpired()) {
+      return res.status(400).json(
+        ApiResponse.Error('Reset token has expired', 400)
+      );
+    }
+
+    const user = resetToken.user;
+
+    // Update password
+    await user.update({
+      password: newPassword, // Will be hashed by the beforeUpdate hook
+      login_attempts: 0, // Reset login attempts
+      lock_until: null // Remove account lock
+    });
+
+    // Mark token as used
+    await resetToken.update({ used: true });
+
+    logger.info(`Password reset successfully for user: ${user.email}`);
+
+    // Send password reset confirmation email
+    try {
+      await emailService.sendPasswordResetConfirmationEmail(user);
+    } catch (emailError) {
+      logger.error(`Failed to send password reset confirmation email to ${user.email}:`, emailError);
+    }
+
+    const duration = Date.now() - startTime;
+    logger.info(`Completed password reset in ${duration}ms`);
+
+    return res.status(200).json(
+      ApiResponse.SuccessNoData('Password reset successfully', 200)
+    );
+
+  } catch (error) {
+    logger.error('Password reset error:', error);
+    return res.status(500).json(
+      ApiResponse.Error('An error occurred while resetting password', 500)
+    );
+  }
+};
+
+// Get current user (matching Rivenapp pattern)
+const getCurrentUser = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    logger.info(`Started getting current user at ${new Date()}`);
+
+    const user = await User.findByPk(req.user.id, {
+      attributes: { exclude: ['password', 'pin_hash', 'login_attempts', 'lock_until'] }
+    });
+
+    if (!user) {
+      return res.status(404).json(
+        ApiResponse.Error('User not found', 404)
+      );
+    }
+
+    const userData = {
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      fullName: `${user.first_name} ${user.last_name}`,
+      email: user.email,
+      phone: user.phone,
+      dateOfBirth: user.date_of_birth,
+      gender: user.gender,
+      address: user.address,
+      city: user.city,
+      county: user.county,
+      postalCode: user.postal_code,
+      citizenship: user.citizenship,
+      occupation: user.occupation,
+      registrationStep: user.registration_step,
+      registrationStatus: user.registration_status,
+      kycStatus: user.kyc_status,
+      accountStatus: user.account_status,
+      alpacaAccountId: user.alpaca_account_id,
+      role: user.role,
+      status: user.status,
+      isEmailVerified: user.is_email_verified,
+      isPhoneVerified: user.is_phone_verified,
+      biometricEnabled: user.biometric_enabled,
+      twoFactorEnabled: user.two_factor_enabled,
+      autoConvertDeposits: user.auto_convert_deposits,
+      securityPreferences: user.security_preferences,
+      termsAccepted: user.terms_accepted,
+      privacyAccepted: user.privacy_accepted,
+      termsAcceptedAt: user.terms_accepted_at,
+      privacyAcceptedAt: user.privacy_accepted_at,
+      quizAnswers: user.quiz_answers,
+      quizCompletedAt: user.quiz_completed_at,
+      kycData: user.kyc_data,
+      lastLogin: user.last_login,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+      // Computed fields
+      onboardingComplete: user.registration_status === 'completed',
+      tradingEnabled: user.kyc_status === 'approved' && user.account_status === 'active',
+      requiresVerification: !user.is_email_verified || !user.is_phone_verified
+    };
+
+    const duration = Date.now() - startTime;
+    logger.info(`Completed getting current user in ${duration}ms`);
+
+    return res.status(200).json(
+      ApiResponse.SuccessWithData(userData, 'Current user fetched successfully', 200)
+    );
+
+  } catch (error) {
+    logger.error('Get current user error:', error);
+    return res.status(500).json(
+      ApiResponse.Error('An error occurred while fetching the current user', 500)
+    );
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -731,5 +983,9 @@ module.exports = {
   getAlpacaTerms,
   acceptTermsAndPrivacy,
   getMe,
-  checkKYCStatus
+  checkKYCStatus,
+  // Rivenapp pattern endpoints
+  requestPasswordReset,
+  resetPassword,
+  getCurrentUser
 };
