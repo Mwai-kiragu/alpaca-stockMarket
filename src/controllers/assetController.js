@@ -3,15 +3,42 @@ const logger = require('../utils/logger');
 
 const getAssets = async (req, res) => {
   try {
-    const { status = 'active', assetClass = 'us_equity', exchange } = req.query;
+    const {
+      status = 'active',
+      assetClass = 'us_equity',
+      exchange,
+      page = 1,
+      limit = 20,
+      search
+    } = req.query;
 
-    const assets = await alpacaService.getAssets(status, assetClass, exchange);
+    let assets = await alpacaService.getAssets(status, assetClass, exchange);
 
-    const formattedAssets = assets.map(asset => ({
+    // Apply search filter if provided
+    if (search && search.trim()) {
+      const searchLower = search.toLowerCase();
+      assets = assets.filter(asset =>
+        asset.symbol.toLowerCase().includes(searchLower) ||
+        asset.name.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit), 100); // Max 100 items per page
+    const totalItems = assets.length;
+    const totalPages = Math.ceil(totalItems / limitNum);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+
+    // Get paginated assets
+    const paginatedAssets = assets.slice(startIndex, endIndex);
+
+    const formattedAssets = paginatedAssets.map(asset => ({
       symbol: asset.symbol,
       name: asset.name,
       exchange: asset.exchange,
-      assetClass: asset.class,
+      assetClass: asset.class || asset.asset_class,
       status: asset.status,
       tradable: asset.tradable,
       marginable: asset.marginable,
@@ -23,11 +50,19 @@ const getAssets = async (req, res) => {
     res.json({
       success: true,
       assets: formattedAssets,
-      count: formattedAssets.length,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalItems,
+        itemsPerPage: limitNum,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1
+      },
       filters: {
         status,
         assetClass,
-        exchange: exchange || 'all'
+        exchange: exchange || 'all',
+        search: search || null
       }
     });
   } catch (error) {

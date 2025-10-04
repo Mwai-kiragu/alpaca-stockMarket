@@ -1,10 +1,11 @@
 const alpacaService = require('../services/alpacaService');
 const logger = require('../utils/logger');
+const { mapConditionCodes } = require('../utils/conditionCodes');
 
 const getQuote = async (req, res) => {
-  try {
-    const { symbol } = req.params;
+  const { symbol } = req.params;
 
+  try {
     if (!symbol) {
       return res.status(400).json({
         success: false,
@@ -24,7 +25,7 @@ const getQuote = async (req, res) => {
         bidSize: quote.bs,
         timestamp: quote.t,
         timeframe: quote.timeframe || 'realtime',
-        conditions: quote.c || []
+        conditions: mapConditionCodes(quote.c || [])
       }
     });
   } catch (error) {
@@ -45,8 +46,9 @@ const getQuote = async (req, res) => {
 };
 
 const getLatestTrade = async (req, res) => {
+  const { symbol } = req.params;
+
   try {
-    const { symbol } = req.params;
 
     const trade = await alpacaService.getLatestTrade(symbol.toUpperCase());
 
@@ -57,7 +59,7 @@ const getLatestTrade = async (req, res) => {
         price: trade.p,
         size: trade.s,
         timestamp: trade.t,
-        conditions: trade.c || [],
+        conditions: mapConditionCodes(trade.c || []),
         exchange: trade.x || ''
       }
     });
@@ -79,8 +81,9 @@ const getLatestTrade = async (req, res) => {
 };
 
 const getBars = async (req, res) => {
+  const { symbol } = req.params;
+
   try {
-    const { symbol } = req.params;
     const { timeframe = '1Day', start, end, limit = 100 } = req.query;
 
     // Validate timeframe
@@ -167,7 +170,7 @@ const getMultipleQuotes = async (req, res) => {
             bidPrice: quote.bp,
             bidSize: quote.bs,
             timestamp: quote.t,
-            conditions: quote.c || []
+            conditions: mapConditionCodes(quote.c || [])
           };
         } catch (error) {
           errors[symbol.toUpperCase()] = error.message;
@@ -200,7 +203,7 @@ const getMarketStatus = async (req, res) => {
         isOpen: marketStatus.is_open,
         nextOpen: marketStatus.next_open,
         nextClose: marketStatus.next_close,
-        timestamp: marketStatus.timestamp || new Date().toISOString()
+        timestamp: marketStatus.timestamp
       }
     });
   } catch (error) {
@@ -214,10 +217,15 @@ const getMarketStatus = async (req, res) => {
 
 const getNews = async (req, res) => {
   try {
-    const { symbols, limit = 10, start, end } = req.query;
+    // Support both 'symbol' and 'symbols' parameters
+    const { symbol, symbols, limit = 10, start, end } = req.query;
 
     let symbolsArray;
-    if (symbols) {
+    if (symbol) {
+      // Single symbol provided
+      symbolsArray = [symbol.toUpperCase().trim()];
+    } else if (symbols) {
+      // Multiple symbols provided (comma-separated)
       symbolsArray = symbols.split(',').map(s => s.toUpperCase().trim()).slice(0, 10); // Limit to 10 symbols
     }
 
@@ -290,8 +298,9 @@ const getMarketCalendar = async (req, res) => {
 };
 
 const getStockFundamentals = async (req, res) => {
+  const { symbol } = req.params;
+
   try {
-    const { symbol } = req.params;
 
     // Get basic asset information
     const asset = await alpacaService.getAsset(symbol.toUpperCase());

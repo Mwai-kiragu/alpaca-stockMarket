@@ -308,11 +308,87 @@ const getAccountDocuments = async (req, res) => {
   }
 };
 
+const updateAccount = async (req, res) => {
+  try {
+    const { fullName, phoneNumber, address, dateOfBirth } = req.body;
+    const userId = req.user.id;
+
+    const user = await User.findByPk(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Update user fields
+    if (fullName) user.full_name = fullName;
+    if (phoneNumber) user.phone_number = phoneNumber;
+    if (address) user.address = address;
+    if (dateOfBirth) user.date_of_birth = dateOfBirth;
+
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Account updated successfully',
+      user: {
+        id: user.id,
+        fullName: user.full_name,
+        email: user.email,
+        phoneNumber: user.phone_number,
+        address: user.address,
+        dateOfBirth: user.date_of_birth
+      }
+    });
+  } catch (error) {
+    logger.error('Update account error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update account'
+    });
+  }
+};
+
+const deleteAccount = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const user = await User.findByPk(userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Soft delete the user
+    user.is_active = false;
+    user.deleted_at = new Date();
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Account deleted successfully. You can recover it within 30 days.'
+    });
+  } catch (error) {
+    logger.error('Delete account error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete account'
+    });
+  }
+};
+
 module.exports = {
   getAccountInfo,
   getAccountActivity,
   getAccountConfigurations,
   updateAccountConfigurations,
   getTradeHistory,
-  getAccountDocuments
+  getAccountDocuments,
+  updateAccount,
+  deleteAccount
 };

@@ -6,21 +6,28 @@ const logger = require('../utils/logger');
 
 const getWalletWithAnalytics = async (req, res) => {
   try {
-    const wallet = await Wallet.findOne({
-      where: { user_id: req.user.id },
-      include: [{
-        model: Transaction,
-        order: [['created_at', 'DESC']],
-        limit: 50
-      }]
+    let wallet = await Wallet.findOne({
+      where: { user_id: req.user.id }
     });
 
     if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: 'Wallet not found'
+      // Create a new wallet for the user
+      wallet = await Wallet.create({
+        user_id: req.user.id,
+        kes_balance: 0,
+        usd_balance: 0,
+        frozen_kes: 0,
+        frozen_usd: 0
       });
+      logger.info(`Created new wallet for user ${req.user.id} in analytics`);
     }
+
+    // Get transactions separately to avoid association issues
+    const transactions = await Transaction.findAll({
+      where: { wallet_id: wallet.id },
+      order: [['created_at', 'DESC']],
+      limit: 50
+    });
 
     const [kesUsdRate, usdKesRate] = await Promise.all([
       exchangeService.getExchangeRate('KES', 'USD'),
@@ -32,7 +39,7 @@ const getWalletWithAnalytics = async (req, res) => {
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
-    const transactions = wallet.Transactions || [];
+    // Use the transactions we fetched separately
     const recentTransactions = transactions.filter(tx =>
       new Date(tx.created_at) >= thirtyDaysAgo
     );
@@ -150,7 +157,8 @@ const getWalletWithAnalytics = async (req, res) => {
     logger.error('Get wallet analytics error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch wallet analytics'
+      message: 'Failed to fetch wallet analytics',
+      error: error.message // Add error message for debugging
     });
   }
 };

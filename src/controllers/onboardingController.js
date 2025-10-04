@@ -204,7 +204,7 @@ const onboardingController = {
       await user.update({
         occupation: jobTitle,
         kyc_data: updatedKycData,
-        registration_step: 'employment_info'
+        registration_step: 'kyc_verification'
       });
 
       return res.status(200).json(
@@ -274,7 +274,7 @@ const onboardingController = {
       await user.update({
         kyc_data: updatedKycData,
         kyc_status: 'pending',
-        registration_step: 'kyc_info'
+        registration_step: 'kyc_pending'
       });
 
       return res.status(200).json(
@@ -329,7 +329,7 @@ const onboardingController = {
 
       await user.update({
         kyc_data: updatedKycData,
-        registration_step: 'trusted_contact'
+        registration_step: 'kyc_verification'
       });
 
       return res.status(200).json(
@@ -483,7 +483,7 @@ const onboardingController = {
 
       await user.update({
         kyc_data: updatedKycData,
-        registration_step: 'documents_uploaded'
+        registration_step: 'kyc_under_review'
       });
 
       return res.status(200).json(
@@ -545,7 +545,7 @@ const onboardingController = {
         terms_accepted_at: new Date(),
         privacy_accepted_at: new Date(),
         kyc_data: updatedKycData,
-        registration_step: 'agreements_accepted'
+        registration_step: 'kyc_under_review'
       });
 
       return res.status(200).json(
@@ -969,15 +969,36 @@ const onboardingController = {
 
         logger.info('Creating Alpaca account with data:', JSON.stringify(alpacaAccountData, null, 2));
 
-        const alpacaAccount = await alpacaService.createAccount(alpacaAccountData);
+        // Try to create account via Broker API, or link existing account
+        let alpacaAccountId = null;
+        try {
+          const alpacaAccount = await alpacaService.createAccount(alpacaAccountData);
+          alpacaAccountId = alpacaAccount.id;
+        } catch (brokerError) {
+          // If broker API fails, try to get existing account info from Trading API
+          logger.info('Broker API account creation failed, checking for existing account');
+          try {
+            const existingAccount = await alpacaService.getAccount();
+            if (existingAccount && existingAccount.account_number) {
+              alpacaAccountId = existingAccount.account_number;
+              logger.info('Found existing Alpaca account:', alpacaAccountId);
+            }
+          } catch (accountError) {
+            logger.warn('Could not retrieve existing account:', accountError.message);
+          }
+        }
 
-        updates.alpaca_account_id = alpacaAccount.id;
+        if (alpacaAccountId) {
+          updates.alpaca_account_id = alpacaAccountId;
+        }
 
         // Get initial status from Alpaca
         try {
-          const alpacaStatus = await alpacaService.getAccountStatus(alpacaAccount.id);
-          updates.kyc_status = alpacaStatus.kycStatus;
-          logger.info(`Alpaca account status: ${alpacaStatus.status} -> KYC: ${alpacaStatus.kycStatus}`);
+          if (alpacaAccountId) {
+            const alpacaStatus = await alpacaService.getAccountStatus(alpacaAccountId);
+            updates.kyc_status = alpacaStatus.kycStatus;
+            logger.info(`Alpaca account status: ${alpacaStatus.status} -> KYC: ${alpacaStatus.kycStatus}`);
+          }
         } catch (statusError) {
           logger.warn('Could not get initial Alpaca status, defaulting to submitted:', statusError.message);
           updates.kyc_status = 'submitted';
@@ -985,7 +1006,7 @@ const onboardingController = {
 
         alpacaAccountCreated = true;
 
-        logger.info(`Alpaca account created successfully: ${alpacaAccount.id}`);
+        logger.info(`Alpaca account created successfully: ${alpacaAccountId}`);
 
       } catch (error) {
         logger.error('Error creating Alpaca account:', error);

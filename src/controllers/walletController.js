@@ -6,15 +6,21 @@ const logger = require('../utils/logger');
 
 const getWallet = async (req, res) => {
   try {
-    const wallet = await Wallet.findOne({
+    let wallet = await Wallet.findOne({
       where: { user_id: req.user.id }
     });
 
     if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: 'Wallet not found'
+      // Create a new wallet for the user
+      wallet = await Wallet.create({
+        user_id: req.user.id,
+        kes_balance: 0,
+        usd_balance: 0,
+        frozen_kes: 0,
+        frozen_usd: 0
       });
+
+      logger.info(`Created new wallet for user ${req.user.id}`);
     }
 
     const exchangeRate = await exchangeService.getExchangeRate('KES', 'USD');
@@ -45,13 +51,18 @@ const getWallet = async (req, res) => {
 const getTransactions = async (req, res) => {
   try {
     const { page = 1, limit = 20, type, status } = req.query;
-    const wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
+    let wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
 
     if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: 'Wallet not found'
+      // Create a new wallet for the user
+      wallet = await Wallet.create({
+        user_id: req.user.id,
+        kes_balance: 0,
+        usd_balance: 0,
+        frozen_kes: 0,
+        frozen_usd: 0
       });
+      logger.info(`Created new wallet for user ${req.user.id} when fetching transactions`);
     }
 
     const whereClause = { wallet_id: wallet.id };
@@ -96,29 +107,35 @@ const initiateDeposit = async (req, res) => {
       });
     }
 
-    const wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
+    let wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
     if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: 'Wallet not found'
+      // Create a new wallet for the user
+      wallet = await Wallet.create({
+        user_id: req.user.id,
+        kes_balance: 0,
+        usd_balance: 0,
+        frozen_kes: 0,
+        frozen_usd: 0
       });
+      logger.info(`Created new wallet for user ${req.user.id} during deposit`);
     }
 
     const reference = `DEP_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    const transaction = {
+    // Create transaction record
+    const transaction = await Transaction.create({
+      wallet_id: wallet.id,
       type: 'deposit',
       amount,
       currency: 'KES',
       reference,
       description: `MPesa deposit of KES ${amount}`,
+      status: 'pending',
       metadata: {
         phone,
         method: 'mpesa'
       }
-    };
-
-    await wallet.addTransaction(transaction);
+    });
 
     const stkResponse = await mpesaService.initiateSTKPush(
       amount,
@@ -128,10 +145,14 @@ const initiateDeposit = async (req, res) => {
     );
 
     if (stkResponse.success) {
-      const updatedTransaction = wallet.transactions.find(tx => tx.reference === reference);
-      updatedTransaction.metadata.checkoutRequestId = stkResponse.checkoutRequestId;
-      updatedTransaction.metadata.merchantRequestId = stkResponse.merchantRequestId;
-      await wallet.save();
+      // Update transaction with checkout IDs
+      await transaction.update({
+        metadata: {
+          ...transaction.metadata,
+          checkoutRequestId: stkResponse.checkoutRequestId,
+          merchantRequestId: stkResponse.merchantRequestId
+        }
+      });
 
       logger.info(`Deposit initiated for user ${req.user.id}:`, {
         amount,
@@ -148,9 +169,10 @@ const initiateDeposit = async (req, res) => {
         customerMessage: stkResponse.customerMessage
       });
     } else {
-      const updatedTransaction = wallet.transactions.find(tx => tx.reference === reference);
-      updatedTransaction.status = 'failed';
-      await wallet.save();
+      // Update transaction status to failed
+      await transaction.update({
+        status: 'failed'
+      });
 
       res.status(400).json({
         success: false,

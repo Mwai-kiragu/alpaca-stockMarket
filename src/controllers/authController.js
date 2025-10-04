@@ -975,6 +975,156 @@ const getCurrentUser = async (req, res) => {
   }
 };
 
+// Delete account (soft delete)
+const deleteAccount = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    logger.info(`Started account deletion at ${new Date()}`);
+
+    const { password, reason } = req.body;
+    const userId = req.user.id;
+
+    if (!password) {
+      return res.status(400).json(
+        ApiResponse.Error('Password is required for account deletion', 400)
+      );
+    }
+
+    // Find user and verify password
+    const user = await User.findByPk(userId);
+
+    if (!user) {
+      return res.status(404).json(
+        ApiResponse.Error('User not found', 404)
+      );
+    }
+
+    // Verify password
+    const isPasswordValid = await user.comparePassword(password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json(
+        ApiResponse.Error('Invalid password', 401)
+      );
+    }
+
+    // Soft delete the account
+    await user.update({
+      is_active: false,
+      deleted_at: new Date(),
+      account_status: 'closed',
+      status: 'closed'
+    });
+
+    // Log the deletion reason if provided
+    if (reason) {
+      logger.info(`Account deletion reason for user ${userId}: ${reason}`);
+    }
+
+    const deletionDate = new Date();
+    const recoveryDeadline = new Date();
+    recoveryDeadline.setDate(recoveryDeadline.getDate() + 30); // 30 days recovery period
+
+    const duration = Date.now() - startTime;
+    logger.info(`Completed account deletion in ${duration}ms`);
+
+    return res.status(200).json(
+      ApiResponse.SuccessWithData(
+        {
+          deletion_date: deletionDate,
+          recovery_deadline: recoveryDeadline
+        },
+        'Account marked for deletion. You have 30 days to recover your account.',
+        200
+      )
+    );
+
+  } catch (error) {
+    logger.error('Account deletion error:', error);
+    return res.status(500).json(
+      ApiResponse.Error('An error occurred while deleting the account', 500)
+    );
+  }
+};
+
+// Recover deleted account
+const recoverAccount = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    logger.info(`Started account recovery at ${new Date()}`);
+
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json(
+        ApiResponse.Error('Email and password are required', 400)
+      );
+    }
+
+    // Find deleted user
+    const user = await User.findOne({
+      where: {
+        email,
+        is_active: false,
+        deleted_at: {
+          [sequelize.Sequelize.Op.ne]: null,
+          [sequelize.Sequelize.Op.gte]: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Within 30 days
+        }
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json(
+        ApiResponse.Error('No recoverable account found for this email', 404)
+      );
+    }
+
+    // Verify password
+    const isPasswordValid = await user.comparePassword(password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json(
+        ApiResponse.Error('Invalid password', 401)
+      );
+    }
+
+    // Recover the account
+    await user.update({
+      is_active: true,
+      deleted_at: null,
+      account_status: 'active',
+      status: 'active'
+    });
+
+    const token = generateToken(user.id);
+
+    const duration = Date.now() - startTime;
+    logger.info(`Completed account recovery in ${duration}ms`);
+
+    return res.status(200).json(
+      ApiResponse.SuccessWithData(
+        {
+          token,
+          user: {
+            id: user.id,
+            email: user.email,
+            firstName: user.first_name,
+            lastName: user.last_name
+          }
+        },
+        'Account recovered successfully',
+        200
+      )
+    );
+
+  } catch (error) {
+    logger.error('Account recovery error:', error);
+    return res.status(500).json(
+      ApiResponse.Error('An error occurred while recovering the account', 500)
+    );
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -987,5 +1137,8 @@ module.exports = {
   // Rivenapp pattern endpoints
   requestPasswordReset,
   resetPassword,
-  getCurrentUser
+  getCurrentUser,
+  // Account management
+  deleteAccount,
+  recoverAccount
 };

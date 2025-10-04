@@ -217,8 +217,20 @@ User.init({
     type: DataTypes.ENUM('started', 'email_verified', 'phone_verified', 'quiz_completed', 'documents_uploaded', 'completed'),
     allowNull: false,
     defaultValue: 'started'
+  },
+  is_active: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: true
+  },
+  deleted_at: {
+    type: DataTypes.DATE,
+    allowNull: true
+  },
+  is_onboarding_complete: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   }
-  
+
 }, {
   sequelize,
   modelName: 'User',

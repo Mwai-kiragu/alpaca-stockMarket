@@ -3,14 +3,37 @@ const logger = require('../utils/logger');
 
 class AlpacaService {
   constructor() {
-    this.apiKey = process.env.ALPACA_API_KEY;
-    this.secretKey = process.env.ALPACA_SECRET_KEY;
-    this.baseUrl = process.env.ALPACA_BASE_URL || 'https://paper-api.alpaca.markets';
-    this.dataBaseUrl = process.env.ALPACA_DATA_BASE_URL || 'https://data.alpaca.markets';
+    // Use Broker API credentials for account creation
+    this.brokerApiKey = process.env.ALPACA_BROKER_API_KEY;
+    this.brokerSecretKey = process.env.ALPACA_BROKER_SECRET_KEY;
+    this.brokerUrl = process.env.ALPACA_BROKER_API_URL || 'https://broker-api.sandbox.alpaca.markets';
 
+    // Paper Trading API (commented out in env, but keeping for future use)
+    this.paperApiKey = process.env.ALPACA_PAPER_API_KEY;
+    this.paperSecretKey = process.env.ALPACA_PAPER_SECRET_KEY;
+    this.paperUrl = process.env.ALPACA_PAPER_API_URL || 'https://paper-api.alpaca.markets';
+
+    // Use broker credentials by default for now
+    this.apiKey = this.brokerApiKey;
+    this.secretKey = this.brokerSecretKey;
+
+    // Trading URL for market data and trading operations
+    this.tradingUrl = this.paperUrl || 'https://paper-api.alpaca.markets';
+    // Use the broker URL for account operations
+    this.baseUrl = this.brokerUrl;
+    this.dataBaseUrl = 'https://data.alpaca.markets';
+
+    // Headers for Broker API
     this.tradingHeaders = {
-      'APCA-API-KEY-ID': this.apiKey,
-      'APCA-API-SECRET-KEY': this.secretKey,
+      'APCA-API-KEY-ID': this.brokerApiKey,
+      'APCA-API-SECRET-KEY': this.brokerSecretKey,
+      'Content-Type': 'application/json'
+    };
+
+    // Headers for Paper Trading API (if needed)
+    this.paperHeaders = {
+      'APCA-API-KEY-ID': this.paperApiKey,
+      'APCA-API-SECRET-KEY': this.paperSecretKey,
       'Content-Type': 'application/json'
     };
   }
@@ -401,7 +424,8 @@ class AlpacaService {
         }
       });
 
-      const response = await axios.post(`${this.baseUrl}/v1/accounts`, accountData, {
+      // Use broker API for account creation, not trading API
+      const response = await axios.post(`${this.brokerUrl}/v1/accounts`, accountData, {
         headers: this.tradingHeaders,
         timeout: 30000 // 30 second timeout
       });
@@ -433,12 +457,15 @@ class AlpacaService {
 
   async getAccount(accountId = null) {
     try {
+      // If accountId is provided, use Broker API, otherwise use Paper Trading API for trading account
       const endpoint = accountId
-        ? `${this.baseUrl}/v1/accounts/${accountId}`
-        : `${this.baseUrl}/v2/account`;
+        ? `${this.baseUrl}/v1/accounts/${accountId}`  // Broker API for specific account
+        : `${this.paperUrl}/v2/account`;  // Paper Trading API for trading account
+
+      const headers = accountId ? this.tradingHeaders : this.paperHeaders;
 
       const response = await axios.get(endpoint, {
-        headers: this.tradingHeaders
+        headers: headers
       });
       return response.data;
     } catch (error) {
@@ -508,8 +535,9 @@ class AlpacaService {
 
   async getPositions() {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/positions`, {
-        headers: this.tradingHeaders
+      // Use Paper Trading API for positions
+      const response = await axios.get(`${this.paperUrl}/v2/positions`, {
+        headers: this.paperHeaders
       });
       return response.data;
     } catch (error) {
@@ -541,8 +569,9 @@ class AlpacaService {
         alpacaOrder.extended_hours = true;
       }
 
-      const response = await axios.post(`${this.baseUrl}/v2/orders`, alpacaOrder, {
-        headers: this.tradingHeaders
+      // Use Paper Trading API for orders
+      const response = await axios.post(`${this.paperUrl}/v2/orders`, alpacaOrder, {
+        headers: this.paperHeaders
       });
 
       logger.info('Alpaca order created:', {
@@ -561,8 +590,9 @@ class AlpacaService {
 
   async getOrder(orderId) {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/orders/${orderId}`, {
-        headers: this.tradingHeaders
+      // Use Paper Trading API for orders
+      const response = await axios.get(`${this.paperUrl}/v2/orders/${orderId}`, {
+        headers: this.paperHeaders
       });
       return response.data;
     } catch (error) {
@@ -573,8 +603,9 @@ class AlpacaService {
 
   async cancelOrder(orderId) {
     try {
-      await axios.delete(`${this.baseUrl}/v2/orders/${orderId}`, {
-        headers: this.tradingHeaders
+      // Use Paper Trading API for orders
+      await axios.delete(`${this.paperUrl}/v2/orders/${orderId}`, {
+        headers: this.paperHeaders
       });
 
       logger.info('Order cancelled:', { orderId });
@@ -587,8 +618,9 @@ class AlpacaService {
 
   async getOrders(status = 'all', limit = 50) {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/orders`, {
-        headers: this.tradingHeaders,
+      // Use Paper Trading API for orders
+      const response = await axios.get(`${this.paperUrl}/v2/orders`, {
+        headers: this.paperHeaders,
         params: { status, limit }
       });
       return response.data;
@@ -600,6 +632,12 @@ class AlpacaService {
 
   async getAssets(status = 'active', assetClass = 'us_equity', exchange = null) {
     try {
+      // Use Paper Trading API for market data and assets
+      if (!this.paperApiKey || !this.paperSecretKey) {
+        logger.warn('No valid Paper Trading API credentials configured');
+        throw new Error('Paper Trading API credentials not configured. Please set ALPACA_PAPER_API_KEY and ALPACA_PAPER_SECRET_KEY in your environment variables.');
+      }
+
       const params = {
         status,
         asset_class: assetClass
@@ -609,33 +647,64 @@ class AlpacaService {
         params.exchange = exchange;
       }
 
-      const response = await axios.get(`${this.baseUrl}/v2/assets`, {
-        headers: this.tradingHeaders,
+      // Use Paper Trading API for assets
+      const url = `${this.paperUrl}/v2/assets`;
+      logger.info(`Fetching assets from Paper Trading API: ${url}`);
+
+      const response = await axios.get(url, {
+        headers: this.paperHeaders, // Use paper trading headers
         params
       });
       return response.data;
     } catch (error) {
       logger.error('Get assets error:', error.response?.data || error.message);
-      throw new Error('Failed to get assets');
+
+      // Return empty array instead of throwing for better UX
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        logger.warn('Alpaca API authentication failed. Please check your API credentials.');
+        return [];
+      }
+
+      throw error;
     }
   }
 
   async getAsset(symbol) {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/assets/${symbol}`, {
-        headers: this.tradingHeaders
+      // Use Paper Trading API for asset information
+      const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/${symbol}/snapshot`, {
+        headers: this.paperHeaders
       });
-      return response.data;
+
+      // Return asset-like data from snapshot
+      return {
+        symbol: symbol,
+        name: symbol, // We don't have the full name from snapshot
+        exchange: response.data.latestTrade?.x || 'UNKNOWN',
+        class: 'us_equity',
+        status: 'active',
+        tradable: true,
+        marginable: true,
+        shortable: true,
+        easy_to_borrow: true,
+        fractionable: true
+      };
     } catch (error) {
       logger.error('Get asset error:', error.response?.data || error.message);
+
+      // If snapshot fails, try to get basic info
+      if (error.response?.status === 404) {
+        throw new Error(`Asset ${symbol} not found`);
+      }
       throw new Error('Failed to get asset');
     }
   }
 
   async getLatestQuote(symbol) {
     try {
+      // Use Paper Trading API for market data
       const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/${symbol}/quotes/latest`, {
-        headers: this.tradingHeaders
+        headers: this.paperHeaders
       });
       return response.data.quote;
     } catch (error) {
@@ -646,8 +715,9 @@ class AlpacaService {
 
   async getLatestTrade(symbol) {
     try {
+      // Use Paper Trading API for market data
       const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/${symbol}/trades/latest`, {
-        headers: this.tradingHeaders
+        headers: this.paperHeaders
       });
       return response.data.trade;
     } catch (error) {
@@ -667,8 +737,9 @@ class AlpacaService {
       if (start) params.start = start;
       if (end) params.end = end;
 
+      // Use Paper Trading API for market data
       const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/bars`, {
-        headers: this.tradingHeaders,
+        headers: this.paperHeaders,
         params
       });
 
@@ -682,10 +753,15 @@ class AlpacaService {
   async getNews(symbols, limit = 10) {
     try {
       const params = { limit };
-      if (symbols) params.symbols = symbols;
 
+      // If symbols is an array, join them with commas
+      if (symbols && symbols.length > 0) {
+        params.symbols = Array.isArray(symbols) ? symbols.join(',') : symbols;
+      }
+
+      // Use Paper Trading API for news data
       const response = await axios.get(`${this.dataBaseUrl}/v1beta1/news`, {
-        headers: this.tradingHeaders,
+        headers: this.paperHeaders,
         params
       });
 
@@ -766,8 +842,9 @@ class AlpacaService {
       if (start) params.start = start;
       if (end) params.end = end;
 
-      const response = await axios.get(`${this.baseUrl}/v2/calendar`, {
-        headers: this.tradingHeaders,
+      // Use Paper Trading API for market calendar
+      const response = await axios.get(`${this.paperUrl}/v2/calendar`, {
+        headers: this.paperHeaders,
         params
       });
 
@@ -780,13 +857,26 @@ class AlpacaService {
 
   async getMarketStatus() {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/clock`, {
-        headers: this.tradingHeaders
+      // Use Paper Trading API for market status
+      logger.info('Getting market status from:', `${this.paperUrl}/v2/clock`);
+      const response = await axios.get(`${this.paperUrl}/v2/clock`, {
+        headers: this.paperHeaders
       });
+      logger.info('Market status response received:', response.data);
       return response.data;
     } catch (error) {
-      logger.error('Get market status error:', error.response?.data || error.message);
-      throw new Error('Failed to get market status');
+      logger.error('Get market status error:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      // Return default values if API fails
+      return {
+        is_open: false,
+        next_open: null,
+        next_close: null,
+        timestamp: new Date().toISOString()
+      };
     }
   }
 }

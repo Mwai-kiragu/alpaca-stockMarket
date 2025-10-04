@@ -11,7 +11,10 @@ const {
   // Rivenapp pattern endpoints
   requestPasswordReset,
   resetPassword,
-  getCurrentUser
+  getCurrentUser,
+  // Account management
+  deleteAccount,
+  recoverAccount
 } = require('../controllers/authController');
 const { auth } = require('../middleware/auth');
 const {
@@ -46,5 +49,9 @@ router.get('/kyc-status', auth, checkKYCStatus);
 router.post('/request-password-reset', requestPasswordReset);
 router.post('/reset-password', resetPassword);
 router.get('/current-user', auth, getCurrentUser);
+
+// Account management
+router.delete('/delete-account', auth, deleteAccount);
+router.post('/recover-account', recoverAccount);
 
 module.exports = router;
