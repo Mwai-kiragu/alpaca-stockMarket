@@ -694,8 +694,28 @@ const onboardingController = {
       const totalSteps = Object.keys(steps).length;
       const progressPercentage = Math.round((completedSteps / totalSteps) * 100);
 
+      // Map registration steps to step numbers
+      const stepMapping = {
+        'email_verification': 1,
+        'personal_info': 1,
+        'employment_info': 2,
+        'phone_verification': 3,
+        'address_info': 3,
+        'kyc_verification': 3,
+        'trusted_contact': 4,
+        'documents': 5,
+        'agreements': 6,
+        'kyc_pending': 7,
+        'kyc_under_review': 7,
+        'completed': 7,
+        'initial_completed': 7
+      };
+
+      const currentStepCount = stepMapping[user.registration_step] || 1;
+
       const progress = {
         currentStep: user.registration_step,
+        currentStepCount,
         completedSteps,
         totalSteps,
         progressPercentage,
