@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { User, EmailVerificationToken, PhoneVerificationToken, PasswordResetToken } = require('../models');
+const { User, EmailVerificationToken, PhoneVerificationToken, PasswordResetToken, sequelize } = require('../models');
 const emailService = require('../services/emailService');
 const notificationService = require('../services/notificationService');
 const logger = require('../utils/logger');
@@ -19,22 +19,36 @@ const register = async (req, res) => {
   try {
     const { fullName, email, password, phoneNumber } = req.body;
 
-    // Check for existing email
+    // Check for existing email and phone
     logger.info(`Registration attempt for email: ${email}`);
 
     const existingUser = await User.findOne({
-      where: { email }
+      where: {
+        [sequelize.Op.or]: [
+          { email },
+          { phone: phoneNumber }
+        ]
+      }
     });
 
     if (existingUser) {
-      logger.warn(`Registration failed - email already exists: ${email}`);
-      return res.status(400).json({
-        success: false,
-        message: `Email already exists: ${email}`
-      });
+      if (existingUser.email === email) {
+        logger.warn(`Registration failed - email already exists: ${email}`);
+        return res.status(400).json({
+          success: false,
+          message: `Email already exists: ${email}`
+        });
+      }
+      if (existingUser.phone === phoneNumber) {
+        logger.warn(`Registration failed - phone already exists: ${phoneNumber}`);
+        return res.status(400).json({
+          success: false,
+          message: `Phone number already exists: ${phoneNumber}`
+        });
+      }
     }
 
-    logger.info(`Email is unique, proceeding with registration: ${email}`);
+    logger.info(`Email and phone are unique, proceeding with registration: ${email}`);
 
     // Split full name into first and last name
     const nameParts = fullName.trim().split(' ');
