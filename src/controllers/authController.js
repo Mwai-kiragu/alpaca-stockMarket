@@ -62,7 +62,7 @@ const register = async (req, res) => {
       email,
       phone: phoneNumber,
       password,
-      registration_step: 'email_verification',
+      registration_step: 'personal_info',
       kyc_status: 'not_started',
       registration_status: 'started'
     });
@@ -376,7 +376,8 @@ const verifyCode = async (req, res) => {
     if (verificationCode && verificationCode.trim().length > 0) {
       await user.update({
         is_email_verified: true,
-        is_phone_verified: true // Also mark phone as verified for simplicity
+        is_phone_verified: true, // Also mark phone as verified for simplicity
+        registration_step: 'personal_info' // Move to first onboarding step
       });
 
       return res.status(200).json({

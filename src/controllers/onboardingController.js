@@ -696,9 +696,11 @@ const onboardingController = {
         employment: !!kycData.employment,
         kyc: !!kycData.kyc,
         trustedContact: !!kycData.trustedContact,
-        documents: !!(kycData.documents?.idFront && kycData.documents?.idBack && kycData.documents?.proofOfAddress),
+        idFront: !!kycData.documents?.idFront,
+        idBack: !!kycData.documents?.idBack,
+        proofOfAddress: !!kycData.documents?.proofOfAddress,
         agreements: !!(user.terms_accepted && user.privacy_accepted),
-        applicationSubmitted: user.registration_status === 'completed'
+        completion: user.registration_status === 'completed'
       };
 
       const completedSteps = Object.values(steps).filter(Boolean).length;
@@ -729,9 +731,9 @@ const onboardingController = {
         currentStepCount = 1; // Default to step 1 (personal details)
       }
 
-      // If email verification step, move to personal details
+      // If email verification step, move to personal details (step 1)
       if (currentStepCount === 0) {
-        currentStepCount = 1;
+        currentStepCount = 1;  // Show Personal Details as first step after email verification
       }
 
       const progress = {
