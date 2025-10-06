@@ -275,7 +275,7 @@ const onboardingController = {
       await user.update({
         kyc_data: updatedKycData,
         kyc_status: 'pending',
-        registration_step: 'documents'  // Step 4: ID FRONT (first document)
+        registration_step: 'trusted_contact'  // Step 4: Trusted Contacts
       });
 
       return res.status(200).json(
@@ -330,7 +330,7 @@ const onboardingController = {
 
       await user.update({
         kyc_data: updatedKycData,
-        registration_step: 'agreements'  // Step 7: Accept Terms and Conditions
+        registration_step: 'documents'  // Step 5: ID FRONT (first document)
       });
 
       return res.status(200).json(
@@ -705,20 +705,21 @@ const onboardingController = {
       const totalSteps = Object.keys(steps).length;
       const progressPercentage = Math.round((completedSteps / totalSteps) * 100);
 
-      // Map registration steps to step numbers (8-step flow as requested)
+      // Map registration steps to step numbers (9-step flow as requested)
       const stepMapping = {
         'email_verification': 0, // Email verification is pre-onboarding (handled at login)
         'personal_info': 1,      // Step 1: Personal Details
         'employment_info': 2,    // Step 2: Employment
         'kyc_verification': 3,   // Step 3: KYC
-        'documents': 4,          // Step 4: ID FRONT
-        'documents_id_back': 5,  // Step 5: ID BACK
-        'documents_proof': 6,    // Step 6: PROOF OF ADDRESS
-        'agreements': 7,         // Step 7: Accept Terms and Conditions
-        'kyc_pending': 8,        // Step 8: Completion
-        'kyc_under_review': 8,   // Step 8: Under Review
-        'completed': 8,          // Step 8: Completed
-        'initial_completed': 8   // Step 8: Initial Completed
+        'trusted_contact': 4,    // Step 4: Trusted Contacts
+        'documents': 5,          // Step 5: ID FRONT
+        'documents_id_back': 6,  // Step 6: ID BACK
+        'documents_proof': 7,    // Step 7: PROF OF ADDRESS
+        'agreements': 8,         // Step 8: Accept Terms and Conditions
+        'kyc_pending': 9,        // Step 9: Completion
+        'kyc_under_review': 9,   // Step 9: Under Review
+        'completed': 9,          // Step 9: Completed
+        'initial_completed': 9   // Step 9: Initial Completed
       };
 
       let currentStepCount = stepMapping[user.registration_step];
@@ -805,34 +806,41 @@ const onboardingController = {
           },
           {
             stepNumber: 4,
+            stepName: 'Trusted Contacts',
+            endpoint: '/api/v1/onboarding/trusted-contact',
+            completed: !!kycData.trustedContact,
+            data: kycData.trustedContact || null
+          },
+          {
+            stepNumber: 5,
             stepName: 'ID FRONT',
             endpoint: '/api/v1/onboarding/upload-id-front',
             completed: !!kycData.documents?.idFront,
             data: kycData.documents?.idFront || null
           },
           {
-            stepNumber: 5,
+            stepNumber: 6,
             stepName: 'ID BACK',
             endpoint: '/api/v1/onboarding/upload-id-back',
             completed: !!kycData.documents?.idBack,
             data: kycData.documents?.idBack || null
           },
           {
-            stepNumber: 6,
-            stepName: 'PROOF OF ADDRESS',
+            stepNumber: 7,
+            stepName: 'PROF OF ADDRESS',
             endpoint: '/api/v1/onboarding/upload-proof-of-address',
             completed: !!kycData.documents?.proofOfAddress,
             data: kycData.documents?.proofOfAddress || null
           },
           {
-            stepNumber: 7,
+            stepNumber: 8,
             stepName: 'Accept Terms and Conditions',
             endpoint: '/api/v1/onboarding/agreements',
             completed: !!(user.terms_accepted && user.privacy_accepted),
             data: kycData.agreements || null
           },
           {
-            stepNumber: 8,
+            stepNumber: 9,
             stepName: 'Completion',
             endpoint: '/api/v1/onboarding/complete',
             completed: user.registration_status === 'completed',
@@ -846,13 +854,14 @@ const onboardingController = {
             personalDetails: !!(user.date_of_birth && user.gender && user.address),
             employment: !!kycData.employment,
             kyc: !!kycData.kyc,
+            trustedContact: !!kycData.trustedContact,
             idFront: !!kycData.documents?.idFront,
             idBack: !!kycData.documents?.idBack,
             proofOfAddress: !!kycData.documents?.proofOfAddress,
             agreements: !!(user.terms_accepted && user.privacy_accepted),
             completion: user.registration_status === 'completed'
           }).filter(Boolean).length : 0,
-          totalSteps: 8,
+          totalSteps: 9,
           isComplete: user.registration_status === 'completed',
           kycStatus: user.kyc_status,
           accountStatus: user.account_status
