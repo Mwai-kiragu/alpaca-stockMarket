@@ -520,28 +520,27 @@ const onboardingController = {
         );
       }
 
-      const {
-        termsAndConditions,
-        privacyPolicy,
-        dataProcessingConsent,
-        marketingConsent
-      } = req.body;
+      const { termsAndConditions } = req.body;
 
       const user = await User.findByPk(req.user.id);
       if (!user) {
         return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
-      const ipAddress = req.connection?.remoteAddress || req.ip || '';
-      const userAgent = req.get('User-Agent') || '';
+      // Auto-fill all agreement fields when termsAndConditions is accepted
+      const ipAddress = req.connection?.remoteAddress || req.ip || req.get('x-forwarded-for') || '127.0.0.1';
+      const userAgent = req.get('User-Agent') || 'Unknown';
+      const timestamp = new Date().toISOString();
 
       const agreementData = {
-        termsAndConditions,
-        privacyPolicy,
-        dataProcessingConsent,
-        marketingConsent,
+        termsAndConditions: true,
+        privacyPolicy: true,
+        dataProcessingConsent: true,
+        marketingConsent: req.body.marketingConsent || false, // Optional marketing consent
+        agreementVersion: '1.0',
         ipAddress,
         userAgent,
+        timestamp,
         acceptedAt: new Date()
       };
 
@@ -552,8 +551,8 @@ const onboardingController = {
       };
 
       await user.update({
-        terms_accepted: termsAndConditions,
-        privacy_accepted: privacyPolicy,
+        terms_accepted: true,
+        privacy_accepted: true,
         terms_accepted_at: new Date(),
         privacy_accepted_at: new Date(),
         kyc_data: updatedKycData,

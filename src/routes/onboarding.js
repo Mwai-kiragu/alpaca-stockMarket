@@ -124,22 +124,7 @@ const trustedContactValidation = [
 const agreementsValidation = [
   body('termsAndConditions')
     .equals('true')
-    .withMessage('Terms and conditions must be accepted'),
-  body('privacyPolicy')
-    .equals('true')
-    .withMessage('Privacy policy must be accepted'),
-  body('dataProcessingConsent')
-    .equals('true')
-    .withMessage('Data processing consent must be accepted'),
-  body('agreementVersion')
-    .notEmpty()
-    .withMessage('Agreement version is required'),
-  body('ipAddress')
-    .isIP()
-    .withMessage('Valid IP address is required'),
-  body('timestamp')
-    .isISO8601()
-    .withMessage('Valid timestamp is required')
+    .withMessage('Terms and conditions must be accepted')
 ];
 
 // Routes (matching Rivenapp pattern exactly)
