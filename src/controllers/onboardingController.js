@@ -346,10 +346,10 @@ const onboardingController = {
   },
 
   // Upload ID front (matching Rivenapp pattern)
-  uploadIdFrontMiddleware: upload.single('DocumentFile'),
+  uploadIdFrontMiddleware: upload.any(),
   uploadIdFront: async (req, res) => {
     try {
-      const file = req.file;
+      const file = req.files && req.files.length > 0 ? req.files[0] : null;
       if (!file) {
         return res.status(400).json(ApiResponse.Error('No file uploaded', 400));
       }
@@ -397,10 +397,10 @@ const onboardingController = {
   },
 
   // Upload ID back (matching Rivenapp pattern)
-  uploadIdBackMiddleware: upload.single('DocumentFile'),
+  uploadIdBackMiddleware: upload.any(),
   uploadIdBack: async (req, res) => {
     try {
-      const file = req.file;
+      const file = req.files && req.files.length > 0 ? req.files[0] : null;
       if (!file) {
         return res.status(400).json(ApiResponse.Error('No file uploaded', 400));
       }
