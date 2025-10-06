@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { Op } = require('sequelize');
 const { User, EmailVerificationToken, PhoneVerificationToken, PasswordResetToken, sequelize } = require('../models');
 const emailService = require('../services/emailService');
 const notificationService = require('../services/notificationService');
@@ -24,7 +25,7 @@ const register = async (req, res) => {
 
     const existingUser = await User.findOne({
       where: {
-        [sequelize.Op.or]: [
+        [Op.or]: [
           { email },
           { phone: phoneNumber }
         ]

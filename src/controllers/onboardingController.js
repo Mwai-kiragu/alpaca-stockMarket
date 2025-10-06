@@ -447,14 +447,18 @@ const onboardingController = {
     }
   },
 
-  // Upload proof of address (matching Rivenapp pattern)
-  uploadProofOfAddressMiddleware: upload.single('DocumentFile'),
+  // Upload proof of address - flexible field name middleware
+  uploadProofOfAddressMiddleware: upload.any(),
   uploadProofOfAddress: async (req, res) => {
     try {
-      const file = req.file;
-      if (!file) {
+      // With .any(), files are in req.files array
+      const files = req.files;
+      if (!files || files.length === 0) {
         return res.status(400).json(ApiResponse.Error('No file uploaded', 400));
       }
+
+      // Take the first file (should only be one for single file upload)
+      const file = files[0];
 
       const user = await User.findByPk(req.user.id);
       if (!user) {
