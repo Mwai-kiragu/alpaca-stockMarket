@@ -330,7 +330,7 @@ const onboardingController = {
 
       await user.update({
         kyc_data: updatedKycData,
-        registration_step: 'documents'  // Step 5: ID FRONT (first document)
+        registration_step: 'documents_id_front'  // Step 5: ID FRONT (first document)
       });
 
       return res.status(200).json(
@@ -380,8 +380,12 @@ const onboardingController = {
         documents: updatedDocuments
       };
 
+      // After uploading ID Front, move to ID Back step
+      const nextStep = 'documents_id_back';
+
       await user.update({
-        kyc_data: updatedKycData
+        kyc_data: updatedKycData,
+        registration_step: nextStep
       });
 
       return res.status(200).json(
@@ -431,8 +435,12 @@ const onboardingController = {
         documents: updatedDocuments
       };
 
+      // After uploading ID Back, move to Proof of Address step
+      const nextStep = 'documents_proof_address';
+
       await user.update({
-        kyc_data: updatedKycData
+        kyc_data: updatedKycData,
+        registration_step: nextStep
       });
 
       return res.status(200).json(
@@ -486,12 +494,8 @@ const onboardingController = {
         documents: updatedDocuments
       };
 
-      // Check if all documents are uploaded to determine next step
-      const allDocumentsUploaded = updatedDocuments.idFront &&
-                                 updatedDocuments.idBack &&
-                                 updatedDocuments.proofOfAddress;
-
-      const nextStep = allDocumentsUploaded ? 'agreements' : 'documents';
+      // After uploading Proof of Address, move to agreements step
+      const nextStep = 'agreements';
 
       await user.update({
         kyc_data: updatedKycData,
@@ -708,19 +712,20 @@ const onboardingController = {
 
       // Map registration steps to step numbers (9-step flow as requested)
       const stepMapping = {
-        'email_verification': 0, // Email verification is pre-onboarding (handled at login)
-        'personal_info': 1,      // Step 1: Personal Details
-        'employment_info': 2,    // Step 2: Employment
-        'kyc_verification': 3,   // Step 3: KYC
-        'trusted_contact': 4,    // Step 4: Trusted Contacts
-        'documents': 5,          // Step 5: ID FRONT
-        'documents_id_back': 6,  // Step 6: ID BACK
-        'documents_proof': 7,    // Step 7: PROF OF ADDRESS
-        'agreements': 8,         // Step 8: Accept Terms and Conditions
-        'kyc_pending': 9,        // Step 9: Completion
-        'kyc_under_review': 9,   // Step 9: Under Review
-        'completed': 9,          // Step 9: Completed
-        'initial_completed': 9   // Step 9: Initial Completed
+        'email_verification': 0,      // Email verification is pre-onboarding (handled at login)
+        'personal_info': 1,           // Step 1: Personal Details
+        'employment_info': 2,         // Step 2: Employment
+        'kyc_verification': 3,        // Step 3: KYC
+        'trusted_contact': 4,         // Step 4: Trusted Contacts
+        'documents': 5,               // Step 5: ID FRONT (legacy)
+        'documents_id_front': 5,      // Step 5: ID FRONT
+        'documents_id_back': 6,       // Step 6: ID BACK
+        'documents_proof_address': 7, // Step 7: PROOF OF ADDRESS
+        'agreements': 8,              // Step 8: Accept Terms and Conditions
+        'kyc_pending': 9,             // Step 9: Completion
+        'kyc_under_review': 9,        // Step 9: Under Review
+        'completed': 9,               // Step 9: Completed
+        'initial_completed': 9        // Step 9: Initial Completed
       };
 
       let currentStepCount = stepMapping[user.registration_step];
