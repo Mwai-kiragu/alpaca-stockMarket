@@ -121,7 +121,7 @@ User.init({
     allowNull: true
   },
   registration_step: {
-    type: DataTypes.ENUM('email_verification', 'personal_info', 'phone_verification', 'address_info', 'kyc_verification', 'kyc_pending', 'kyc_under_review', 'completed', 'initial_completed'),
+    type: DataTypes.ENUM('email_verification', 'personal_info', 'employment_info', 'phone_verification', 'address_info', 'kyc_verification', 'trusted_contact', 'documents', 'agreements', 'kyc_pending', 'kyc_under_review', 'completed', 'initial_completed'),
     defaultValue: 'email_verification'
   },
   kyc_status: {

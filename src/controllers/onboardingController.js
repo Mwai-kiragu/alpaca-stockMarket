@@ -144,7 +144,8 @@ const onboardingController = {
         county,
         postal_code: postalCode,
         citizenship,
-        registration_step: 'personal_info'
+        registration_step: 'employment_info',  // Move to next step after personal details
+        registration_status: 'email_verified'  // Update status to reflect progress
       });
 
       return res.status(200).json(
