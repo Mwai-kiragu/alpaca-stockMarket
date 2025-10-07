@@ -266,6 +266,12 @@ const getTradableAssets = async (req, res) => {
 
 const getPopularAssets = async (req, res) => {
   try {
+    const {
+      page = 1,
+      limit = 20,
+      search
+    } = req.query;
+
     const popularSymbols = [
       'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX',
       'BABA', 'V', 'JPM', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC',
@@ -308,15 +314,45 @@ const getPopularAssets = async (req, res) => {
       })
     );
 
-    const popularAssets = Object.values(assets)
-      .sort((a, b) => b.volume - a.volume)
-      .slice(0, 20);
+    let popularAssets = Object.values(assets)
+      .sort((a, b) => b.volume - a.volume);
+
+    // Apply search filter if provided
+    if (search && search.trim()) {
+      const searchLower = search.toLowerCase();
+      popularAssets = popularAssets.filter(asset =>
+        asset.symbol.toLowerCase().includes(searchLower) ||
+        asset.name.toLowerCase().includes(searchLower)
+      );
+    }
+
+    // Calculate pagination
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit), 100); // Max 100 items per page
+    const totalItems = popularAssets.length;
+    const totalPages = Math.ceil(totalItems / limitNum);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+
+    // Get paginated assets
+    const paginatedAssets = popularAssets.slice(startIndex, endIndex);
 
     res.json({
       success: true,
-      assets: popularAssets,
-      count: popularAssets.length,
-      category: 'popular'
+      assets: paginatedAssets,
+      pagination: {
+        currentPage: pageNum,
+        totalPages,
+        totalItems,
+        itemsPerPage: limitNum,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1
+      },
+      filters: {
+        search: search || null,
+        category: 'popular'
+      },
+      count: paginatedAssets.length
     });
   } catch (error) {
     logger.error('Get popular assets error:', error);
