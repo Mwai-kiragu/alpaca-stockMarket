@@ -767,7 +767,12 @@ const onboardingController = {
         totalSteps,
         progressPercentage,
         isComplete: user.registration_status === 'completed',
-        steps
+        steps,
+        alpacaKyc: {
+          status: user.kyc_status,
+          approved: user.kyc_status === 'approved',
+          canTrade: user.kyc_status === 'approved' && user.account_status === 'active'
+        }
       };
 
       return res.status(200).json(

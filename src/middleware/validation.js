@@ -181,15 +181,23 @@ const orderValidation = [
   body('side')
     .isIn(['buy', 'sell'])
     .withMessage('Side must be buy or sell'),
-  body('orderType')
+  body('type')
     .isIn(['market', 'limit', 'stop', 'stop_limit'])
     .withMessage('Invalid order type'),
-  body('quantity')
+  body('qty')
     .isFloat({ min: 0.01 })
     .withMessage('Quantity must be greater than 0'),
-  body('currency')
-    .isIn(['KES', 'USD'])
-    .withMessage('Currency must be KES or USD'),
+  body('time_in_force')
+    .isIn(['day', 'gtc', 'ioc', 'fok'])
+    .withMessage('Invalid time_in_force. Must be day, gtc, ioc, or fok'),
+  body('limit_price')
+    .optional()
+    .isFloat({ min: 0.01 })
+    .withMessage('Limit price must be greater than 0'),
+  body('stop_price')
+    .optional()
+    .isFloat({ min: 0.01 })
+    .withMessage('Stop price must be greater than 0'),
   handleValidationErrors
 ];
 
