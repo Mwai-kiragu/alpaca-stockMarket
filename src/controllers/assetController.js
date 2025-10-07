@@ -9,10 +9,69 @@ const getAssets = async (req, res) => {
       exchange,
       page = 1,
       limit = 20,
-      search
+      search,
+      category
     } = req.query;
 
-    let assets = await alpacaService.getAssets(status, assetClass, exchange);
+    let assets;
+    let isPopular = false;
+
+    // Check if requesting popular assets
+    if (category === 'popular') {
+      isPopular = true;
+      const popularSymbols = [
+        'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX',
+        'BABA', 'V', 'JPM', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC',
+        'DIS', 'ADBE', 'CRM', 'NFLX', 'PYPL', 'INTC', 'CMCSA', 'PFE',
+        'VZ', 'T', 'ABT', 'NKE'
+      ];
+
+      const popularAssets = {};
+
+      await Promise.allSettled(
+        popularSymbols.map(async (symbol) => {
+          try {
+            const [asset, quote, bars] = await Promise.all([
+              alpacaService.getAsset(symbol),
+              alpacaService.getLatestQuote(symbol),
+              alpacaService.getBars(symbol, '1Day', null, null, 2)
+            ]);
+
+            let changePercent = 0;
+            if (bars.length >= 2) {
+              const currentPrice = quote.ap || quote.bp;
+              const previousClose = parseFloat(bars[bars.length - 2].c);
+              changePercent = ((currentPrice - previousClose) / previousClose) * 100;
+            }
+
+            popularAssets[symbol] = {
+              symbol: asset.symbol,
+              name: asset.name,
+              exchange: asset.exchange,
+              class: asset.class,
+              asset_class: asset.class,
+              status: asset.status,
+              tradable: asset.tradable,
+              marginable: asset.marginable,
+              shortable: asset.shortable,
+              easy_to_borrow: asset.easy_to_borrow,
+              fractionable: asset.fractionable,
+              currentPrice: quote.ap || quote.bp,
+              changePercent: parseFloat(changePercent.toFixed(2)),
+              volume: bars.length > 0 ? parseInt(bars[bars.length - 1].v || 0) : 0,
+              lastUpdated: quote.t
+            };
+          } catch (error) {
+            logger.warn(`Failed to get data for popular asset ${symbol}:`, error);
+          }
+        })
+      );
+
+      assets = Object.values(popularAssets).sort((a, b) => b.volume - a.volume);
+    } else {
+      // Regular assets fetch
+      assets = await alpacaService.getAssets(status, assetClass, exchange);
+    }
 
     // Apply search filter if provided
     if (search && search.trim()) {
@@ -34,18 +93,32 @@ const getAssets = async (req, res) => {
     // Get paginated assets
     const paginatedAssets = assets.slice(startIndex, endIndex);
 
-    const formattedAssets = paginatedAssets.map(asset => ({
-      symbol: asset.symbol,
-      name: asset.name,
-      exchange: asset.exchange,
-      assetClass: asset.class || asset.asset_class,
-      status: asset.status,
-      tradable: asset.tradable,
-      marginable: asset.marginable,
-      shortable: asset.shortable,
-      easyToBorrow: asset.easy_to_borrow,
-      fractionable: asset.fractionable
-    }));
+    const formattedAssets = paginatedAssets.map(asset => {
+      const baseAsset = {
+        symbol: asset.symbol,
+        name: asset.name,
+        exchange: asset.exchange,
+        assetClass: asset.class || asset.asset_class,
+        status: asset.status,
+        tradable: asset.tradable,
+        marginable: asset.marginable,
+        shortable: asset.shortable,
+        easyToBorrow: asset.easy_to_borrow,
+        fractionable: asset.fractionable
+      };
+
+      // Add market data for popular assets
+      if (isPopular && asset.currentPrice) {
+        baseAsset.marketData = {
+          currentPrice: asset.currentPrice,
+          changePercent: asset.changePercent,
+          volume: asset.volume,
+          lastUpdated: asset.lastUpdated
+        };
+      }
+
+      return baseAsset;
+    });
 
     res.json({
       success: true,
@@ -62,7 +135,8 @@ const getAssets = async (req, res) => {
         status,
         assetClass,
         exchange: exchange || 'all',
-        search: search || null
+        search: search || null,
+        category: category || 'all'
       }
     });
   } catch (error) {
