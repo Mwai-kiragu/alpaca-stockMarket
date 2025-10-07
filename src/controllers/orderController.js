@@ -6,7 +6,7 @@ const logger = require('../utils/logger');
 
 const createOrder = async (req, res) => {
   try {
-    const { symbol, side, orderType, quantity, limitPrice, stopPrice, timeInForce, currency } = req.body;
+    const { symbol, side, type: orderType, qty: quantity, limit_price: limitPrice, stop_price: stopPrice, time_in_force: timeInForce, currency = 'USD' } = req.body;
 
     // Get user and wallet
     const user = await User.findByPk(req.user.id);
