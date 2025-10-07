@@ -159,4 +159,8 @@ router.post('/complete', auth, [
     .withMessage('Completion confirmation is required')
 ], onboardingController.completeOnboarding);
 
+// SANDBOX/TEST ENDPOINTS - Only available in development/test environments
+router.post('/sandbox/approve-kyc/:userId?', auth, onboardingController.sandboxApproveKyc);
+router.post('/sandbox/approve-all-kyc', auth, onboardingController.sandboxApproveAllKyc);
+
 module.exports = router;

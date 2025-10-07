@@ -1134,6 +1134,26 @@ const onboardingController = {
         // Don't fail onboarding if wallet creation fails - it can be created later
       }
 
+      // SANDBOX: Auto-approve KYC in development environments
+      if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'testing') {
+        try {
+          // Force approve KYC for instant testing
+          await user.update({
+            kyc_status: 'approved',
+            account_status: 'active'
+          });
+
+          // Update the response updates object to reflect the sandbox approval
+          updates.kyc_status = 'approved';
+          updates.account_status = 'active';
+
+          logger.info(`SANDBOX: Auto-approved KYC for user ${user.email} on onboarding completion`);
+        } catch (sandboxError) {
+          logger.warn('Error auto-approving KYC in sandbox:', sandboxError);
+          // Don't fail onboarding if KYC auto-approval fails
+        }
+      }
+
       // Send success response
       const responseData = {
         onboardingComplete: true,
@@ -1145,10 +1165,16 @@ const onboardingController = {
         }
       };
 
-      // Add Alpaca account info if created successfully
+      // Add Alpaca account info if created successfully or sandbox approved
+      const isSandboxApproved = (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'testing') && updates.kyc_status === 'approved';
+
       if (alpacaAccountCreated) {
         responseData.alpacaAccountId = updates.alpaca_account_id;
         responseData.tradingEnabled = true;
+      } else if (isSandboxApproved) {
+        responseData.tradingEnabled = true;
+        responseData.note = 'Sandbox mode: KYC auto-approved for testing. Trading enabled immediately.';
+        responseData.sandboxMode = true;
       } else {
         responseData.tradingEnabled = false;
         responseData.note = 'Trading account setup in progress. You will be notified when ready.';
@@ -1165,9 +1191,15 @@ const onboardingController = {
         logger.warn('Failed to send onboarding completion email:', emailError);
       }
 
-      const successMessage = alpacaAccountCreated ?
-        'Onboarding completed successfully! Your trading account is ready.' :
-        'Onboarding completed successfully! Your trading account is being set up.';
+      let successMessage = 'Onboarding completed successfully!';
+
+      if (alpacaAccountCreated) {
+        successMessage += ' Your trading account is ready.';
+      } else if (isSandboxApproved) {
+        successMessage += ' KYC auto-approved for sandbox testing. Trading enabled immediately.';
+      } else {
+        successMessage += ' Your trading account is being set up.';
+      }
 
       return res.status(200).json(
         ApiResponse.SuccessWithData(responseData, successMessage)
@@ -1177,6 +1209,120 @@ const onboardingController = {
       logger.error('Error completing onboarding:', error);
       return res.status(500).json(
         ApiResponse.Error('An error occurred while completing onboarding', 500)
+      );
+    }
+  },
+
+  // SANDBOX/TEST ONLY: Force approve KYC for testing
+  sandboxApproveKyc: async (req, res) => {
+    try {
+      // Only allow in development/test environments
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(403).json(
+          ApiResponse.Error('This endpoint is not available in production', 403)
+        );
+      }
+
+      const { userId } = req.params;
+      const targetUserId = userId || req.user.id;
+
+      const user = await User.findByPk(targetUserId);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      // Only approve users who have completed onboarding
+      if (user.registration_status !== 'completed') {
+        return res.status(400).json(
+          ApiResponse.Error('User must complete onboarding before KYC approval', 400)
+        );
+      }
+
+      // Update KYC status to approved
+      await user.update({
+        kyc_status: 'approved',
+        account_status: 'active'
+      });
+
+      logger.info(`SANDBOX: Force approved KYC for user ${user.email} (ID: ${user.id})`);
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData({
+          userId: user.id,
+          email: user.email,
+          kycStatus: 'approved',
+          accountStatus: 'active',
+          canTrade: true,
+          approvedAt: new Date().toISOString(),
+          note: 'KYC force-approved for sandbox testing'
+        }, 'KYC approval simulated successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error in sandbox KYC approval:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred during sandbox KYC approval', 500)
+      );
+    }
+  },
+
+  // SANDBOX/TEST ONLY: Bulk approve all pending KYC accounts
+  sandboxApproveAllKyc: async (req, res) => {
+    try {
+      // Only allow in development/test environments
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(403).json(
+          ApiResponse.Error('This endpoint is not available in production', 403)
+        );
+      }
+
+      // Find all completed users with pending/submitted KYC
+      const pendingUsers = await User.findAll({
+        where: {
+          registration_status: 'completed',
+          kyc_status: ['pending', 'submitted', 'under_review']
+        },
+        attributes: ['id', 'email', 'kyc_status', 'account_status']
+      });
+
+      if (pendingUsers.length === 0) {
+        return res.status(200).json(
+          ApiResponse.SuccessWithData({
+            approvedCount: 0,
+            message: 'No pending KYC accounts found'
+          }, 'No accounts to approve')
+        );
+      }
+
+      // Approve all pending accounts
+      const approvedUserIds = [];
+      for (const user of pendingUsers) {
+        await user.update({
+          kyc_status: 'approved',
+          account_status: 'active'
+        });
+        approvedUserIds.push({
+          id: user.id,
+          email: user.email,
+          previousStatus: user.kyc_status
+        });
+      }
+
+      logger.info(`SANDBOX: Bulk approved ${pendingUsers.length} KYC accounts`);
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData({
+          approvedCount: pendingUsers.length,
+          approvedUsers: approvedUserIds,
+          approvedAt: new Date().toISOString(),
+          note: 'All pending KYC accounts force-approved for sandbox testing'
+        }, 'Bulk KYC approval completed successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error in sandbox bulk KYC approval:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred during sandbox bulk KYC approval', 500)
       );
     }
   }
