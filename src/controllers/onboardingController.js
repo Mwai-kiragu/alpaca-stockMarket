@@ -134,6 +134,26 @@ const onboardingController = {
         return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
+      // Define step hierarchy for comparison
+      const stepHierarchy = {
+        'email_verification': 0,
+        'personal_info': 1,
+        'employment_info': 2,
+        'kyc_verification': 3,
+        'trusted_contact': 4,
+        'documents': 5,
+        'documents_id_front': 5,
+        'documents_id_back': 6,
+        'documents_proof_address': 7,
+        'agreements': 8,
+        'completed': 9
+      };
+
+      // Only advance to employment_info if user hasn't progressed beyond it
+      const currentStepLevel = stepHierarchy[user.registration_step] || 1;
+      const employmentStepLevel = stepHierarchy['employment_info'];
+      const nextStep = currentStepLevel <= employmentStepLevel ? 'employment_info' : user.registration_step;
+
       await user.update({
         first_name: firstName,
         last_name: lastName,
@@ -144,8 +164,8 @@ const onboardingController = {
         county,
         postal_code: postalCode,
         citizenship,
-        registration_step: 'employment_info',  // Step 2: Employment
-        registration_status: 'email_verified'  // Update status to reflect progress
+        registration_step: nextStep,  // Keep current step if already advanced
+        registration_status: currentStepLevel <= employmentStepLevel ? 'email_verified' : user.registration_status
       });
 
       return res.status(200).json(
