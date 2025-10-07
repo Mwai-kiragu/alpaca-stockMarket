@@ -77,6 +77,33 @@ const getAssets = async (req, res) => {
 
       // Filter to show only tradable assets by default for better UX
       assets = assets.filter(asset => asset.tradable === true && asset.status === 'active');
+
+      // Sort assets to prioritize major exchanges and exclude problematic asset types
+      assets = assets.sort((a, b) => {
+        // Prioritize major exchanges
+        const exchangeOrder = { 'NASDAQ': 1, 'NYSE': 2, 'ARCA': 3, 'BATS': 4, 'AMEX': 5 };
+        const aExchange = exchangeOrder[a.exchange] || 99;
+        const bExchange = exchangeOrder[b.exchange] || 99;
+
+        if (aExchange !== bExchange) {
+          return aExchange - bExchange;
+        }
+
+        // Deprioritize warrants and complex instruments that often have data issues
+        const isProblematic = (symbol) => {
+          return symbol.includes('.WS') || symbol.includes('W') && symbol.length > 4 ||
+                 symbol.includes('SPAC') || symbol.includes('PIPE') ||
+                 symbol.endsWith('W') || symbol.endsWith('.WS');
+        };
+
+        const aProblematic = isProblematic(a.symbol);
+        const bProblematic = isProblematic(b.symbol);
+
+        if (aProblematic && !bProblematic) return 1;
+        if (!aProblematic && bProblematic) return -1;
+
+        return a.symbol.localeCompare(b.symbol);
+      });
     }
 
     // Apply search filter if provided
@@ -130,11 +157,18 @@ const getAssets = async (req, res) => {
               isProfit: asset.changePercent >= 0
             };
           } else if (asset.tradable && asset.status === 'active') {
-            // Fetch market data for regular tradable assets
-            const [quote, bars] = await Promise.all([
-              alpacaService.getLatestQuote(asset.symbol),
-              alpacaService.getBars(asset.symbol, '1Day', null, null, 2)
+            // Fetch market data for regular tradable assets with timeout
+            const marketDataPromise = Promise.race([
+              Promise.all([
+                alpacaService.getLatestQuote(asset.symbol),
+                alpacaService.getBars(asset.symbol, '1Day', null, null, 2)
+              ]),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Market data timeout')), 5000)
+              )
             ]);
+
+            const [quote, bars] = await marketDataPromise;
 
             let changePercent = 0;
             let change = 0;
@@ -161,8 +195,20 @@ const getAssets = async (req, res) => {
             baseAsset.marketData = null;
           }
         } catch (marketError) {
-          logger.warn(`Failed to get market data for ${asset.symbol}:`, marketError);
-          baseAsset.marketData = null;
+          logger.warn(`Failed to get market data for ${asset.symbol}:`, marketError.message);
+          // Provide a more informative null market data structure
+          baseAsset.marketData = {
+            currentPrice: null,
+            change: null,
+            changePercent: null,
+            volume: null,
+            high: null,
+            low: null,
+            lastUpdated: null,
+            isProfit: null,
+            unavailable: true,
+            reason: 'Market data temporarily unavailable'
+          };
         }
 
         return baseAsset;
