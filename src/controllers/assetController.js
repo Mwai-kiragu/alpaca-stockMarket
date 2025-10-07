@@ -46,7 +46,8 @@ const getAssets = async (req, res) => {
 
             popularAssets[symbol] = {
               symbol: asset.symbol,
-              name: asset.name,
+              name: asset.name, // This will now contain the full company name from alpacaService.getCompanyName()
+              logo: asset.logo, // Company logo URL
               exchange: asset.exchange,
               class: asset.class,
               asset_class: asset.class,
@@ -59,6 +60,8 @@ const getAssets = async (req, res) => {
               currentPrice: quote.ap || quote.bp,
               changePercent: parseFloat(changePercent.toFixed(2)),
               volume: bars.length > 0 ? parseInt(bars[bars.length - 1].v || 0) : 0,
+              high: bars.length > 0 ? parseFloat(bars[bars.length - 1].h || 0) : 0,
+              low: bars.length > 0 ? parseFloat(bars[bars.length - 1].l || 0) : 0,
               lastUpdated: quote.t
             };
           } catch (error) {
@@ -71,6 +74,9 @@ const getAssets = async (req, res) => {
     } else {
       // Regular assets fetch
       assets = await alpacaService.getAssets(status, assetClass, exchange);
+
+      // Filter to show only tradable assets by default for better UX
+      assets = assets.filter(asset => asset.tradable === true && asset.status === 'active');
     }
 
     // Apply search filter if provided
@@ -93,36 +99,84 @@ const getAssets = async (req, res) => {
     // Get paginated assets
     const paginatedAssets = assets.slice(startIndex, endIndex);
 
-    const formattedAssets = paginatedAssets.map(asset => {
-      const baseAsset = {
-        symbol: asset.symbol,
-        name: asset.name,
-        exchange: asset.exchange,
-        assetClass: asset.class || asset.asset_class,
-        status: asset.status,
-        tradable: asset.tradable,
-        marginable: asset.marginable,
-        shortable: asset.shortable,
-        easyToBorrow: asset.easy_to_borrow,
-        fractionable: asset.fractionable
-      };
-
-      // Add market data for popular assets
-      if (isPopular && asset.currentPrice) {
-        baseAsset.marketData = {
-          currentPrice: asset.currentPrice,
-          changePercent: asset.changePercent,
-          volume: asset.volume,
-          lastUpdated: asset.lastUpdated
+    const formattedAssets = await Promise.allSettled(
+      paginatedAssets.map(async (asset) => {
+        const baseAsset = {
+          symbol: asset.symbol,
+          name: asset.name,
+          logo: asset.logo, // Company logo URL
+          exchange: asset.exchange,
+          assetClass: asset.class || asset.asset_class,
+          status: asset.status,
+          tradable: asset.tradable,
+          marginable: asset.marginable,
+          shortable: asset.shortable,
+          easyToBorrow: asset.easy_to_borrow,
+          fractionable: asset.fractionable
         };
-      }
 
-      return baseAsset;
-    });
+        // Add market data for both popular and regular assets
+        try {
+          if (isPopular && asset.currentPrice) {
+            // Popular assets already have market data
+            baseAsset.marketData = {
+              currentPrice: asset.currentPrice,
+              change: asset.currentPrice * (asset.changePercent / 100),
+              changePercent: asset.changePercent,
+              volume: asset.volume,
+              high: asset.high || 0,
+              low: asset.low || 0,
+              lastUpdated: asset.lastUpdated,
+              isProfit: asset.changePercent >= 0
+            };
+          } else if (asset.tradable && asset.status === 'active') {
+            // Fetch market data for regular tradable assets
+            const [quote, bars] = await Promise.all([
+              alpacaService.getLatestQuote(asset.symbol),
+              alpacaService.getBars(asset.symbol, '1Day', null, null, 2)
+            ]);
+
+            let changePercent = 0;
+            let change = 0;
+            const currentPrice = quote.ap || quote.bp || 0;
+
+            if (bars.length >= 2 && currentPrice > 0) {
+              const previousClose = parseFloat(bars[bars.length - 2].c);
+              change = currentPrice - previousClose;
+              changePercent = (change / previousClose) * 100;
+            }
+
+            baseAsset.marketData = {
+              currentPrice: parseFloat(currentPrice.toFixed(2)),
+              change: parseFloat(change.toFixed(2)),
+              changePercent: parseFloat(changePercent.toFixed(2)),
+              volume: bars.length > 0 ? parseInt(bars[bars.length - 1].v || 0) : 0,
+              high: bars.length > 0 ? parseFloat(bars[bars.length - 1].h || 0) : 0,
+              low: bars.length > 0 ? parseFloat(bars[bars.length - 1].l || 0) : 0,
+              lastUpdated: quote.t,
+              isProfit: changePercent >= 0
+            };
+          } else {
+            // Non-tradable assets get null market data
+            baseAsset.marketData = null;
+          }
+        } catch (marketError) {
+          logger.warn(`Failed to get market data for ${asset.symbol}:`, marketError);
+          baseAsset.marketData = null;
+        }
+
+        return baseAsset;
+      })
+    );
+
+    // Filter successful results and handle failed ones
+    const successfulAssets = formattedAssets
+      .filter(result => result.status === 'fulfilled')
+      .map(result => result.value);
 
     res.json({
       success: true,
-      assets: formattedAssets,
+      assets: successfulAssets,
       pagination: {
         currentPage: pageNum,
         totalPages,
@@ -373,7 +427,8 @@ const getPopularAssets = async (req, res) => {
 
           assets[symbol] = {
             symbol: asset.symbol,
-            name: asset.name,
+            name: asset.name, // This will now contain the full company name from alpacaService.getCompanyName()
+            logo: asset.logo, // Company logo URL
             exchange: asset.exchange,
             currentPrice: quote.ap || quote.bp,
             changePercent: parseFloat(changePercent.toFixed(2)),
