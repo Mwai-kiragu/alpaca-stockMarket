@@ -40,9 +40,23 @@ const createOrder = async (req, res) => {
 
       // Check KES balance
       if (side === 'buy' && wallet.availableKes < requiredBalance) {
+        const shortfall = requiredBalance - wallet.availableKes;
         return res.status(400).json({
           success: false,
-          message: `Insufficient KES balance. Required: ${requiredBalance}, Available: ${wallet.availableKes}`
+          message: `Insufficient KES balance to place this order`,
+          error: {
+            type: 'insufficient_funds',
+            currency: 'KES',
+            required: `KES ${requiredBalance.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            available: `KES ${wallet.availableKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            shortfall: `KES ${shortfall.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            suggestions: [
+              'Deposit more funds to your KES wallet',
+              'Reduce the order quantity',
+              'Convert USD to KES if you have USD balance',
+              'Use a limit order instead of market order for better price control'
+            ]
+          }
         });
       }
     } else {
@@ -52,9 +66,23 @@ const createOrder = async (req, res) => {
 
       // Check USD balance
       if (side === 'buy' && wallet.availableUsd < requiredBalance) {
+        const shortfall = requiredBalance - wallet.availableUsd;
         return res.status(400).json({
           success: false,
-          message: `Insufficient USD balance. Required: ${requiredBalance}, Available: ${wallet.availableUsd}`
+          message: `Insufficient USD balance to place this order`,
+          error: {
+            type: 'insufficient_funds',
+            currency: 'USD',
+            required: `$${requiredBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            available: `$${wallet.availableUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            shortfall: `$${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            suggestions: [
+              'Deposit more funds to your USD wallet',
+              'Reduce the order quantity',
+              'Convert KES to USD if you have KES balance',
+              'Use a limit order instead of market order for better price control'
+            ]
+          }
         });
       }
     }

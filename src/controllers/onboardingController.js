@@ -1106,6 +1106,34 @@ const onboardingController = {
       // Update user with final status
       await user.update(updates);
 
+      // Auto-create wallet for the user
+      try {
+        const { Wallet } = require('../models/Wallet');
+
+        // Check if wallet already exists
+        let wallet = await Wallet.findOne({
+          where: { user_id: user.id }
+        });
+
+        if (!wallet) {
+          // Create a new wallet with initial balances
+          wallet = await Wallet.create({
+            user_id: user.id,
+            kes_balance: 0,
+            usd_balance: 0,
+            frozen_kes: 0,
+            frozen_usd: 0
+          });
+
+          logger.info(`Auto-created wallet for user ${user.id} on onboarding completion`);
+        } else {
+          logger.info(`Wallet already exists for user ${user.id}`);
+        }
+      } catch (walletError) {
+        logger.error('Error auto-creating wallet:', walletError);
+        // Don't fail onboarding if wallet creation fails - it can be created later
+      }
+
       // Send success response
       const responseData = {
         onboardingComplete: true,
