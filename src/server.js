@@ -6,11 +6,11 @@ const morgan = require('morgan');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const { createServer } = require('http');
-const { Server } = require('socket.io');
 
 const { connectDB } = require('./config/database');
 const logger = require('./utils/logger');
 const errorHandler = require('./middleware/errorHandler');
+const websocketService = require('./services/websocketService');
 
 // Core onboarding and authentication routes
 const authRoutes = require('./routes/auth');
@@ -33,12 +33,6 @@ const smsTestRoutes = require('./routes/smsTest');
 
 const app = express();
 const server = createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
-    methods: ["GET", "POST"]
-  }
-});
 
 const PORT = process.env.PORT || 3000;
 
@@ -114,16 +108,25 @@ app.get('/health', (req, res) => {
   });
 });
 
-app.use(errorHandler);
-
-io.on('connection', (socket) => {
-  logger.info(`User connected: ${socket.id}`);
-
-  socket.on('disconnect', () => {
-    logger.info(`User disconnected: ${socket.id}`);
+// Root route
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Trading Platform API',
+    version: '1.0.0',
+    status: 'Running',
+    websocket: 'Available',
+    endpoints: {
+      health: '/health',
+      assets: '/api/v1/assets',
+      websocket: 'Connect to this same URL with Socket.IO client'
+    }
   });
 });
 
+app.use(errorHandler);
+
+// Initialize WebSocket service
+const io = websocketService.initialize(server);
 app.set('io', io);
 
 server.listen(PORT, () => {
