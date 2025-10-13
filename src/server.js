@@ -11,6 +11,9 @@ const { connectDB } = require('./config/database');
 const logger = require('./utils/logger');
 const errorHandler = require('./middleware/errorHandler');
 const websocketService = require('./services/websocketService');
+const redisService = require('./config/redis');
+const realtimeNotificationService = require('./services/realtimeNotificationService');
+const batchNotificationProcessor = require('./services/batchNotificationProcessor');
 
 // Core onboarding and authentication routes
 const authRoutes = require('./routes/auth');
@@ -40,7 +43,17 @@ app.set('trust proxy', 1);
 
 const PORT = process.env.PORT || 3000;
 
+// Initialize database
 connectDB();
+
+// Initialize Redis
+try {
+  redisService.initialize();
+  logger.info('Redis initialized successfully');
+} catch (error) {
+  logger.error('Failed to initialize Redis:', error);
+  logger.warn('Continuing without Redis - some features may be limited');
+}
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -133,8 +146,23 @@ app.use(errorHandler);
 const io = websocketService.initialize(server);
 app.set('io', io);
 
+// Initialize real-time notification services
+try {
+  realtimeNotificationService.initialize(websocketService);
+  batchNotificationProcessor.start();
+  logger.info('Real-time notification services initialized');
+} catch (error) {
+  logger.error('Failed to initialize notification services:', error);
+}
+
 server.listen(PORT, () => {
   logger.info(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+  logger.info('Services status:');
+  logger.info('- Database: Connected');
+  logger.info(`- Redis: ${redisService.isConnected ? 'Connected' : 'Disconnected'}`);
+  logger.info('- WebSocket: Active');
+  logger.info('- Notification System: Active');
+  logger.info('- Batch Processor: Running');
 });
 
 module.exports = app;

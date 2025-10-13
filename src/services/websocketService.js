@@ -1,5 +1,7 @@
 const { Server } = require('socket.io');
+const { createAdapter } = require('@socket.io/redis-adapter');
 const alpacaService = require('./alpacaService');
+const redisService = require('../config/redis');
 const logger = require('../utils/logger');
 
 class WebSocketService {
@@ -14,6 +16,7 @@ class WebSocketService {
       'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX',
       'V', 'JPM', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC', 'DIS'
     ];
+    this.redisAdapter = null;
   }
 
   initialize(httpServer) {
@@ -28,6 +31,9 @@ class WebSocketService {
         transports: ['websocket', 'polling']
       });
 
+      // Set up Redis adapter for load balancer compatibility
+      this.setupRedisAdapter();
+
       this.setupEventHandlers();
       this.startPriceUpdates();
 
@@ -36,6 +42,27 @@ class WebSocketService {
     } catch (error) {
       logger.error('Failed to initialize WebSocket service:', error);
       throw error;
+    }
+  }
+
+  setupRedisAdapter() {
+    try {
+      // Initialize Redis if not already initialized
+      if (!redisService.isConnected) {
+        redisService.initialize();
+      }
+
+      const pubClient = redisService.getPublisher();
+      const subClient = redisService.getSubscriber();
+
+      // Create and set Redis adapter
+      this.redisAdapter = createAdapter(pubClient, subClient);
+      this.io.adapter(this.redisAdapter);
+
+      logger.info('Socket.IO Redis adapter configured for load balancer support');
+    } catch (error) {
+      logger.warn('Failed to setup Redis adapter, continuing without load balancer support:', error);
+      // Continue without Redis adapter - will work but only on single instance
     }
   }
 
@@ -48,7 +75,13 @@ class WebSocketService {
         socket: socket,
         subscribedSymbols: new Set(),
         connectedAt: new Date(),
-        lastActivity: new Date()
+        lastActivity: new Date(),
+        userId: null
+      });
+
+      // Handle user authentication
+      socket.on('authenticate', (data) => {
+        this.handleAuthentication(socket, data);
       });
 
       // Handle symbol subscription
@@ -91,6 +124,36 @@ class WebSocketService {
       // Send initial popular assets data
       this.sendInitialData(socket);
     });
+  }
+
+  handleAuthentication(socket, data) {
+    try {
+      const { userId } = data;
+
+      if (!userId) {
+        socket.emit('authentication_error', { message: 'User ID required' });
+        return;
+      }
+
+      // Update client info
+      const client = this.connectedClients.get(socket.id);
+      if (client) {
+        client.userId = userId;
+        // Join user to their personal room for targeted notifications
+        this.joinUserRoom(socket, userId);
+      }
+
+      socket.emit('authenticated', {
+        userId,
+        timestamp: Date.now()
+      });
+
+      logger.info(`Socket ${socket.id} authenticated for user ${userId}`);
+      this.updateClientActivity(socket.id);
+    } catch (error) {
+      logger.error('Error handling authentication:', error);
+      socket.emit('authentication_error', { message: 'Authentication failed' });
+    }
   }
 
   handleSubscription(socket, data) {
@@ -418,6 +481,74 @@ class WebSocketService {
         });
       }
     });
+  }
+
+  /**
+   * Broadcast notification to specific user across all server instances
+   * @param {number} userId - User ID
+   * @param {string} event - Event name
+   * @param {object} data - Event data
+   */
+  broadcastToUser(userId, event, data) {
+    try {
+      const room = `user:${userId}`;
+      this.io.to(room).emit(event, {
+        ...data,
+        timestamp: Date.now()
+      });
+
+      logger.debug(`Broadcasted ${event} to user ${userId}`);
+    } catch (error) {
+      logger.error(`Error broadcasting to user ${userId}:`, error);
+    }
+  }
+
+  /**
+   * Broadcast notification to all connected clients across all server instances
+   * @param {string} event - Event name
+   * @param {object} data - Event data
+   */
+  broadcastToAll(event, data) {
+    try {
+      this.io.emit(event, {
+        ...data,
+        timestamp: Date.now()
+      });
+
+      logger.debug(`Broadcasted ${event} to all clients`);
+    } catch (error) {
+      logger.error('Error broadcasting to all clients:', error);
+    }
+  }
+
+  /**
+   * Join user to their personal room for targeted notifications
+   * @param {object} socket - Socket instance
+   * @param {number} userId - User ID
+   */
+  joinUserRoom(socket, userId) {
+    try {
+      const room = `user:${userId}`;
+      socket.join(room);
+      logger.debug(`Socket ${socket.id} joined room ${room}`);
+    } catch (error) {
+      logger.error(`Error joining user room for ${userId}:`, error);
+    }
+  }
+
+  /**
+   * Leave user room
+   * @param {object} socket - Socket instance
+   * @param {number} userId - User ID
+   */
+  leaveUserRoom(socket, userId) {
+    try {
+      const room = `user:${userId}`;
+      socket.leave(room);
+      logger.debug(`Socket ${socket.id} left room ${room}`);
+    } catch (error) {
+      logger.error(`Error leaving user room for ${userId}:`, error);
+    }
   }
 
   // Get connection statistics

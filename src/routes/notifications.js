@@ -11,7 +11,15 @@ const {
   markAllAsRead,
   getUnreadCount,
   sendTestNotification,
-  triggerRegistrationNotification
+  triggerRegistrationNotification,
+  // New endpoints
+  getSystemStats,
+  subscribeToTopic,
+  sendRealtimeNotification,
+  broadcastNotification,
+  getAlertHistory,
+  cleanupUserAlerts,
+  healthCheck
 } = require('../controllers/notificationController');
 
 const { auth } = require('../middleware/auth');
@@ -146,5 +154,80 @@ router.post('/trigger/:type', auth, [
     .isIn(['welcome', 'email_verification', 'phone_verification', 'kyc_approved', 'account_activated', 'biometric_setup'])
     .withMessage('type must be a valid registration notification type')
 ], handleValidationErrors, triggerRegistrationNotification);
+
+// ======================
+// NEW: ENHANCED NOTIFICATION SYSTEM
+// ======================
+
+// Health check (public)
+router.get('/health', healthCheck);
+
+// System statistics (admin/monitoring)
+router.get('/stats', auth, getSystemStats);
+
+// Firebase topic subscription
+router.post('/topics/subscribe', auth, [
+  body('deviceToken')
+    .notEmpty()
+    .withMessage('Device token is required'),
+  body('topic')
+    .notEmpty()
+    .withMessage('Topic is required')
+    .matches(/^[a-zA-Z0-9-_.~%]+$/)
+    .withMessage('Topic must contain only alphanumeric characters, hyphens, underscores, periods, tildes, and percent signs')
+], handleValidationErrors, subscribeToTopic);
+
+// Send real-time notification (admin only - requires admin middleware)
+router.post('/send', auth, [
+  body('userId')
+    .notEmpty()
+    .withMessage('User ID is required')
+    .isInt()
+    .withMessage('User ID must be an integer'),
+  body('event')
+    .notEmpty()
+    .withMessage('Event is required')
+    .isString()
+    .withMessage('Event must be a string'),
+  body('payload')
+    .notEmpty()
+    .withMessage('Payload is required')
+    .isObject()
+    .withMessage('Payload must be an object'),
+  body('options')
+    .optional()
+    .isObject()
+    .withMessage('Options must be an object')
+], handleValidationErrors, sendRealtimeNotification);
+
+// Broadcast notification to all users (admin only)
+router.post('/broadcast', auth, [
+  body('event')
+    .notEmpty()
+    .withMessage('Event is required')
+    .isString()
+    .withMessage('Event must be a string'),
+  body('payload')
+    .notEmpty()
+    .withMessage('Payload is required')
+    .isObject()
+    .withMessage('Payload must be an object')
+], handleValidationErrors, broadcastNotification);
+
+// Get user's alert history
+router.get('/alerts/history', auth, [
+  query('minutes')
+    .optional()
+    .isInt({ min: 1, max: 10080 })
+    .withMessage('Minutes must be between 1 and 10080 (7 days)')
+], handleValidationErrors, getAlertHistory);
+
+// Cleanup old alerts
+router.delete('/alerts/cleanup', auth, [
+  query('olderThanMinutes')
+    .optional()
+    .isInt({ min: 60 })
+    .withMessage('olderThanMinutes must be at least 60')
+], handleValidationErrors, cleanupUserAlerts);
 
 module.exports = router;

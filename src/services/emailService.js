@@ -20,15 +20,19 @@ class EmailService {
       socketTimeout: 10000,
     });
 
-    // Verify connection configuration
-    if (process.env.MAIL_USERNAME && process.env.MAIL_PASSWORD) {
+    // Verify connection configuration (only in production)
+    if (process.env.NODE_ENV === 'production' && process.env.MAIL_USERNAME && process.env.MAIL_PASSWORD) {
       this.transporter.verify((error, success) => {
         if (error) {
-          logger.error('Email service connection failed:', error);
+          logger.warn('Email service connection failed. Emails will not be sent:', error.message);
         } else {
           logger.info('Email service is ready to send messages');
         }
       });
+    } else if (process.env.MAIL_USERNAME && process.env.MAIL_PASSWORD) {
+      logger.info('Email service initialized (verification skipped in development)');
+    } else {
+      logger.warn('Email service not configured. Set MAIL_USERNAME and MAIL_PASSWORD to enable emails.');
     }
   }
 

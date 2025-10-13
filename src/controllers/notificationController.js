@@ -1,4 +1,8 @@
 const notificationService = require('../services/notificationService');
+const realtimeNotificationService = require('../services/realtimeNotificationService');
+const batchNotificationProcessor = require('../services/batchNotificationProcessor');
+const pushNotificationService = require('../services/pushNotificationService');
+const notificationDeduplicationService = require('../services/notificationDeduplicationService');
 const { User, NotificationPreferences, Notification } = require('../models');
 const logger = require('../utils/logger');
 
@@ -332,6 +336,248 @@ const triggerRegistrationNotification = async (req, res) => {
   }
 };
 
+// Get notification system statistics (admin/monitoring)
+const getSystemStats = async (req, res) => {
+  try {
+    const [
+      realtimeStats,
+      batchStats,
+      dedupeStats
+    ] = await Promise.all([
+      realtimeNotificationService.getStats(),
+      Promise.resolve(batchNotificationProcessor.getStats()),
+      notificationDeduplicationService.getStats()
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        realtime: realtimeStats,
+        batch: batchStats,
+        deduplication: dedupeStats,
+        firebase: {
+          initialized: pushNotificationService.isInitialized
+        },
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    logger.error('Get system stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Subscribe device to topic (for group notifications)
+const subscribeToTopic = async (req, res) => {
+  try {
+    const { deviceToken, topic } = req.body;
+
+    if (!deviceToken || !topic) {
+      return res.status(400).json({
+        success: false,
+        message: 'Device token and topic are required'
+      });
+    }
+
+    const result = await pushNotificationService.subscribeToTopic(deviceToken, topic);
+
+    res.status(200).json({
+      success: result.success,
+      message: result.success ? 'Subscribed to topic successfully' : result.error
+    });
+
+  } catch (error) {
+    logger.error('Subscribe to topic error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Send notification to specific user (new real-time system)
+const sendRealtimeNotification = async (req, res) => {
+  try {
+    const { userId, event, payload, options } = req.body;
+
+    if (!userId || !event || !payload) {
+      return res.status(400).json({
+        success: false,
+        message: 'userId, event, and payload are required'
+      });
+    }
+
+    const result = await realtimeNotificationService.sendToUser(
+      userId,
+      event,
+      payload,
+      options || {}
+    );
+
+    res.status(200).json({
+      success: result.success,
+      data: result
+    });
+
+  } catch (error) {
+    logger.error('Send realtime notification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Broadcast notification to all users
+const broadcastNotification = async (req, res) => {
+  try {
+    const { event, payload } = req.body;
+
+    if (!event || !payload) {
+      return res.status(400).json({
+        success: false,
+        message: 'event and payload are required'
+      });
+    }
+
+    await realtimeNotificationService.broadcastToAll(event, payload);
+
+    res.status(200).json({
+      success: true,
+      message: 'Broadcast sent successfully'
+    });
+
+  } catch (error) {
+    logger.error('Broadcast notification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Get user's recent alert history
+const getAlertHistory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { minutes = 60 } = req.query;
+
+    const alerts = await notificationDeduplicationService.getUserRecentAlerts(
+      userId,
+      parseInt(minutes)
+    );
+
+    res.status(200).json({
+      success: true,
+      data: {
+        alerts,
+        timeWindow: `${minutes} minutes`,
+        count: alerts.length
+      }
+    });
+
+  } catch (error) {
+    logger.error('Get alert history error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Clean up old user alerts
+const cleanupUserAlerts = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { olderThanMinutes = 1440 } = req.query; // Default 24 hours
+
+    const removed = await notificationDeduplicationService.cleanupUserAlerts(
+      userId,
+      parseInt(olderThanMinutes)
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Alert cleanup completed',
+      data: { removed }
+    });
+
+  } catch (error) {
+    logger.error('Cleanup alerts error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+};
+
+// Health check endpoint for notification system
+const healthCheck = async (req, res) => {
+  try {
+    const redisService = require('../config/redis');
+    const websocketService = require('../services/websocketService');
+
+    const health = {
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      services: {
+        redis: {
+          connected: redisService.isConnected,
+          status: redisService.isConnected ? 'up' : 'down'
+        },
+        websocket: {
+          connected: websocketService.io ? true : false,
+          activeConnections: websocketService.connectedClients?.size || 0,
+          status: websocketService.io ? 'up' : 'down'
+        },
+        firebase: {
+          initialized: pushNotificationService.isInitialized,
+          status: pushNotificationService.isInitialized ? 'up' : 'down'
+        },
+        realtimeNotification: {
+          initialized: realtimeNotificationService.isInitialized,
+          status: realtimeNotificationService.isInitialized ? 'up' : 'down'
+        },
+        batchProcessor: {
+          running: batchNotificationProcessor.isProcessing,
+          queueSize: batchNotificationProcessor.getStats().queues.total,
+          status: batchNotificationProcessor.isProcessing ? 'up' : 'down'
+        }
+      }
+    };
+
+    // Check if any critical service is down
+    const criticalServices = ['redis', 'websocket', 'realtimeNotification'];
+    const anyCriticalDown = criticalServices.some(
+      service => health.services[service].status === 'down'
+    );
+
+    if (anyCriticalDown) {
+      health.status = 'degraded';
+      res.status(503);
+    } else {
+      res.status(200);
+    }
+
+    res.json({
+      success: true,
+      data: health
+    });
+
+  } catch (error) {
+    logger.error('Health check error:', error);
+    res.status(500).json({
+      success: false,
+      status: 'unhealthy',
+      message: error.message
+    });
+  }
+};
+
 module.exports = {
   addDeviceToken,
   removeDeviceToken,
@@ -342,5 +588,13 @@ module.exports = {
   markAllAsRead,
   getUnreadCount,
   sendTestNotification,
-  triggerRegistrationNotification
+  triggerRegistrationNotification,
+  // New endpoints for enhanced notification system
+  getSystemStats,
+  subscribeToTopic,
+  sendRealtimeNotification,
+  broadcastNotification,
+  getAlertHistory,
+  cleanupUserAlerts,
+  healthCheck
 };

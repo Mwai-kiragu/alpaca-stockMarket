@@ -91,3 +91,13 @@ data/
 
 # Redis
 dump.rdb
+
+.env.testsms
+API_ENDPOINTS_NOTIFICATIONS.md
+FIREBASE_SETUP.md
+NOTIFICATION_SYSTEM.md
+POSTGRESQL_SETUP.md
+INSTALLATION.md
+DATABASE_UPDATE.md
+.env.example
+.claude
