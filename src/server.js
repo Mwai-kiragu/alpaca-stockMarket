@@ -35,9 +35,8 @@ const app = express();
 const server = createServer(app);
 
 // Trust proxy to properly handle X-Forwarded-* headers
-// This is required when behind a reverse proxy (nginx, Heroku, AWS, etc.)
-// For production, consider setting to specific IP or subnet for better security
-app.set('trust proxy', true);
+// Trust only the first hop (immediate proxy) for better security
+app.set('trust proxy', 1);
 
 const PORT = process.env.PORT || 3000;
 
