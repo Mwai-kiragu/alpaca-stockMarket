@@ -34,6 +34,11 @@ const smsTestRoutes = require('./routes/smsTest');
 const app = express();
 const server = createServer(app);
 
+// Trust proxy to properly handle X-Forwarded-* headers
+// This is required when behind a reverse proxy (nginx, Heroku, AWS, etc.)
+// For production, consider setting to specific IP or subnet for better security
+app.set('trust proxy', true);
+
 const PORT = process.env.PORT || 3000;
 
 connectDB();
