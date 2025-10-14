@@ -2,9 +2,55 @@ const axios = require('axios');
 const logger = require('../utils/logger');
 
 /**
- * Proxy endpoint to fetch company logos from Alpaca
- * This is needed because Alpaca's logo endpoint requires authentication
- * which browsers can't send with <img> tags
+ * Symbol to domain mapping for major stocks
+ * Used to fetch logos from Clearbit since Alpaca logos require paid subscription
+ */
+const symbolToDomain = {
+  'AAPL': 'apple.com',
+  'GOOGL': 'google.com',
+  'GOOG': 'google.com',
+  'MSFT': 'microsoft.com',
+  'AMZN': 'amazon.com',
+  'TSLA': 'tesla.com',
+  'META': 'meta.com',
+  'NVDA': 'nvidia.com',
+  'NFLX': 'netflix.com',
+  'V': 'visa.com',
+  'JPM': 'jpmorgan.com',
+  'WMT': 'walmart.com',
+  'DIS': 'disney.com',
+  'PYPL': 'paypal.com',
+  'INTC': 'intel.com',
+  'CMCSA': 'comcast.com',
+  'PFE': 'pfizer.com',
+  'KO': 'coca-cola.com',
+  'NKE': 'nike.com',
+  'ORCL': 'oracle.com',
+  'ADBE': 'adobe.com',
+  'CRM': 'salesforce.com',
+  'T': 'att.com',
+  'VZ': 'verizon.com',
+  'IBM': 'ibm.com',
+  'BA': 'boeing.com',
+  'GE': 'ge.com',
+  'AMD': 'amd.com',
+  'UBER': 'uber.com',
+  'SHOP': 'shopify.com',
+  'SPOT': 'spotify.com',
+  'SNAP': 'snap.com',
+  'TWTR': 'twitter.com',
+  'SQ': 'squareup.com',
+  'ROKU': 'roku.com',
+  'ZM': 'zoom.us',
+  'DDOG': 'datadoghq.com',
+  'SNOW': 'snowflake.com',
+  'CRWD': 'crowdstrike.com'
+};
+
+/**
+ * Proxy endpoint to fetch company logos
+ * Uses Clearbit as primary source (free, no auth required)
+ * Falls back to generic placeholder if logo not found
  */
 const getCompanyLogo = async (req, res) => {
   try {
@@ -19,18 +65,33 @@ const getCompanyLogo = async (req, res) => {
 
     const symbolUpper = symbol.toUpperCase();
 
-    // Fetch logo from Alpaca with authentication
-    const response = await axios.get(
-      `https://data.alpaca.markets/v1beta1/logos/${symbolUpper}`,
-      {
-        headers: {
-          'APCA-API-KEY-ID': process.env.ALPACA_PAPER_API_KEY,
-          'APCA-API-SECRET-KEY': process.env.ALPACA_PAPER_SECRET_KEY
-        },
-        responseType: 'arraybuffer', // Get image as binary
-        timeout: 5000 // 5 second timeout
-      }
-    );
+    // Get domain for the symbol
+    const domain = symbolToDomain[symbolUpper];
+
+    if (!domain) {
+      // Return 404 if we don't have a domain mapping
+      logger.warn(`No domain mapping for symbol: ${symbolUpper}`);
+      return res.status(404).json({
+        success: false,
+        message: 'Logo not available for this symbol'
+      });
+    }
+
+    // Fetch logo from Clearbit (free service, no auth required)
+    const clearbitUrl = `https://logo.clearbit.com/${domain}`;
+
+    const response = await axios.get(clearbitUrl, {
+      responseType: 'arraybuffer',
+      timeout: 5000,
+      validateStatus: (status) => status < 500 // Don't throw on 404
+    });
+
+    if (response.status === 404) {
+      return res.status(404).json({
+        success: false,
+        message: 'Logo not found'
+      });
+    }
 
     // Get content type from response
     const contentType = response.headers['content-type'] || 'image/png';
@@ -46,29 +107,15 @@ const getCompanyLogo = async (req, res) => {
     res.send(response.data);
 
   } catch (error) {
-    // Log detailed error information for debugging
     logger.error('Get company logo error:', {
       message: error.message,
       status: error.response?.status,
-      statusText: error.response?.statusText,
-      data: error.response?.data,
-      symbol: req.params.symbol,
-      apiKey: process.env.ALPACA_PAPER_API_KEY ? 'SET' : 'NOT SET',
-      secretKey: process.env.ALPACA_PAPER_SECRET_KEY ? 'SET' : 'NOT SET'
+      symbol: req.params.symbol
     });
 
-    // If logo not found or any error, return 404
-    if (error.response?.status === 404 || error.response?.status === 401) {
-      logger.warn(`Logo not found for symbol: ${req.params.symbol}`);
-      return res.status(404).json({
-        success: false,
-        message: 'Logo not found'
-      });
-    }
-
-    res.status(500).json({
+    res.status(404).json({
       success: false,
-      message: 'Failed to fetch company logo'
+      message: 'Logo not found'
     });
   }
 };
