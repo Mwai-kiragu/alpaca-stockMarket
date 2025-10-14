@@ -46,6 +46,17 @@ const getCompanyLogo = async (req, res) => {
     res.send(response.data);
 
   } catch (error) {
+    // Log detailed error information for debugging
+    logger.error('Get company logo error:', {
+      message: error.message,
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+      symbol: req.params.symbol,
+      apiKey: process.env.ALPACA_PAPER_API_KEY ? 'SET' : 'NOT SET',
+      secretKey: process.env.ALPACA_PAPER_SECRET_KEY ? 'SET' : 'NOT SET'
+    });
+
     // If logo not found or any error, return 404
     if (error.response?.status === 404 || error.response?.status === 401) {
       logger.warn(`Logo not found for symbol: ${req.params.symbol}`);
@@ -55,7 +66,6 @@ const getCompanyLogo = async (req, res) => {
       });
     }
 
-    logger.error('Get company logo error:', error.message);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch company logo'
