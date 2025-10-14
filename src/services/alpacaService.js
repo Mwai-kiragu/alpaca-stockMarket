@@ -1084,6 +1084,48 @@ class AlpacaService {
     }
   }
 
+  /**
+   * Get most active stocks from Alpaca screener
+   * @param {number} limit - Number of stocks to return (default 30)
+   * @returns {Promise<Array>} Array of most active stock symbols
+   */
+  async getMostActiveStocks(limit = 30) {
+    try {
+      const response = await axios.get(`${this.dataBaseUrl}/v1beta1/screener/stocks/most-actives`, {
+        headers: this.paperHeaders,
+        params: {
+          by: 'volume',
+          top: Math.min(limit, 50) // Alpaca limits to 50
+        }
+      });
+
+      // Extract just the symbols
+      const symbols = response.data.most_actives.map(stock => stock.symbol);
+      logger.info(`Retrieved ${symbols.length} most active stocks from Alpaca screener`);
+      return symbols;
+    } catch (error) {
+      logger.error('Get most active stocks error:', error.response?.data || error.message);
+
+      // Fallback: Get regular tradable assets and return top symbols
+      logger.warn('Screener API failed, falling back to regular assets endpoint');
+      try {
+        const assets = await this.getAssets('active', 'us_equity');
+
+        // Filter to major exchanges and sort by symbol (basic fallback)
+        const majorExchangeAssets = assets
+          .filter(asset => ['NASDAQ', 'NYSE'].includes(asset.exchange) && asset.tradable)
+          .slice(0, Math.min(limit, 30))
+          .map(asset => asset.symbol);
+
+        logger.info(`Fallback: Retrieved ${majorExchangeAssets.length} assets from regular endpoint`);
+        return majorExchangeAssets;
+      } catch (fallbackError) {
+        logger.error('Fallback assets fetch also failed:', fallbackError.message);
+        return []; // Return empty array if everything fails
+      }
+    }
+  }
+
   // ============================================================
   // WATCHLIST MANAGEMENT - Alpaca API Integration
   // ============================================================

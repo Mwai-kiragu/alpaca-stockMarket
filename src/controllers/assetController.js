@@ -19,12 +19,9 @@ const getAssets = async (req, res) => {
     // Check if requesting popular assets
     if (category === 'popular') {
       isPopular = true;
-      const popularSymbols = [
-        'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX',
-        'BABA', 'V', 'JPM', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC',
-        'DIS', 'ADBE', 'CRM', 'NFLX', 'PYPL', 'INTC', 'CMCSA', 'PFE',
-        'VZ', 'T', 'ABT', 'NKE'
-      ];
+
+      // Fetch most active stocks dynamically from Alpaca
+      const popularSymbols = await alpacaService.getMostActiveStocks(30);
 
       const popularAssets = {};
 
@@ -446,12 +443,8 @@ const getPopularAssets = async (req, res) => {
       search
     } = req.query;
 
-    const popularSymbols = [
-      'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX',
-      'BABA', 'V', 'JPM', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC',
-      'DIS', 'ADBE', 'CRM', 'NFLX', 'PYPL', 'INTC', 'CMCSA', 'PFE',
-      'VZ', 'T', 'ABT', 'NKE'
-    ];
+    // Fetch most active stocks dynamically from Alpaca
+    const popularSymbols = await alpacaService.getMostActiveStocks(30);
 
     const assets = {};
 
