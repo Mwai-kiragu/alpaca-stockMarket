@@ -673,28 +673,50 @@ class AlpacaService {
   deriveDomainFromCompanyName(companyName) {
     if (!companyName) return null;
 
-    // Convert to lowercase and remove common suffixes
-    let domain = companyName.toLowerCase()
-      .replace(/\s+(inc\.?|incorporated|corp\.?|corporation|company|co\.?|ltd\.?|limited|llc|plc|n\.?v\.?|holding(s)?|group|the)\s*$/gi, '')
-      .replace(/\s+(class\s+[a-z]|ordinary shares?|common stock)/gi, '')
+    // Convert to lowercase first
+    let domain = companyName.toLowerCase();
+
+    // Remove all share/stock type indicators and class designations
+    domain = domain
+      .replace(/\s+(class\s+[a-z]+|ordinary\s+shares?|common\s+stock|preferred\s+stock|depositary\s+shares?|american\s+depositary\s+shares?|units?|rights?|warrants?)\s*$/gi, '')
+      .replace(/\s+(class\s+[a-z]+|ordinary\s+shares?|common\s+stock|preferred\s+stock|depositary\s+shares?|american\s+depositary\s+shares?|units?|rights?|warrants?)/gi, ' ')
       .trim();
 
-    // Remove special characters and spaces
+    // Remove common corporate suffixes at the end
     domain = domain
-      .replace(/[^\w\s-]/g, '')
-      .replace(/\s+/g, '')
-      .replace(/-+/g, '');
+      .replace(/\s+(inc\.?|incorporated|corp\.?|corporation|company|co\.?|ltd\.?|limited|llc|plc|n\.?v\.?|l\.?p\.?|holding(s)?|group|the)\s*$/gi, '')
+      .trim();
 
-    // Handle some common patterns
-    if (domain.includes('&')) {
-      domain = domain.split('&')[0].trim();
+    // Remove "ETF" and fund-related terms
+    domain = domain
+      .replace(/\s+(etf|trust|fund|shares?)\s*$/gi, '')
+      .replace(/\b(etf|trust)\b/gi, '')
+      .trim();
+
+    // Remove special characters but keep spaces temporarily
+    domain = domain.replace(/[^\w\s-]/g, '');
+
+    // Handle ampersands - take first company name
+    if (domain.includes('&') || domain.includes('and')) {
+      domain = domain.split(/\s+(?:and|&)\s+/)[0].trim();
     }
 
-    // If domain is too short or looks invalid, return null
-    if (domain.length < 2 || /^\d+$/.test(domain)) {
+    // Remove numbers (like "II", "2X", etc.)
+    domain = domain.replace(/\b(i{1,3}|iv|v|vi{0,3}|ix|x|2x|3x)\b/gi, '').trim();
+
+    // Remove leading/trailing articles
+    domain = domain.replace(/^(the|a|an)\s+/gi, '').trim();
+
+    // Now remove all spaces
+    domain = domain.replace(/\s+/g, '');
+
+    // If domain is too short, too long, looks invalid, or is mostly numbers, return null
+    if (domain.length < 3 || domain.length > 50 || /^\d+$/.test(domain) || /\d{3,}/.test(domain)) {
       return null;
     }
 
+    // For well-known acronyms/short names, try to use them directly
+    // (Clearbit might have these)
     return `${domain}.com`;
   }
 
