@@ -21,8 +21,36 @@ const createOrder = async (req, res) => {
 
     // Get current stock price for order value calculation
     const quote = await alpacaService.getLatestQuote(symbol);
-    const estimatedPrice = limitPrice || quote.ap || quote.bp; // Ask/Bid price fallback
-    const orderValue = quantity * estimatedPrice;
+
+    // Validate and parse prices
+    let estimatedPrice = 0;
+    if (limitPrice) {
+      estimatedPrice = parseFloat(limitPrice);
+    } else if (quote.ap) {
+      estimatedPrice = parseFloat(quote.ap);
+    } else if (quote.bp) {
+      estimatedPrice = parseFloat(quote.bp);
+    }
+
+    // Validate estimated price
+    if (!estimatedPrice || isNaN(estimatedPrice) || estimatedPrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unable to determine stock price. Please try again or use a limit order.',
+        error: 'Price unavailable'
+      });
+    }
+
+    const parsedQuantity = parseFloat(quantity);
+    if (!parsedQuantity || isNaN(parsedQuantity) || parsedQuantity <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid quantity',
+        error: 'Quantity must be a positive number'
+      });
+    }
+
+    const orderValue = parsedQuantity * estimatedPrice;
 
     let finalOrderValue = orderValue;
     let exchangeRate = 1;
@@ -93,9 +121,9 @@ const createOrder = async (req, res) => {
       symbol: symbol.toUpperCase(),
       side,
       order_type: orderType,
-      quantity,
-      limit_price: limitPrice,
-      stop_price: stopPrice,
+      quantity: parsedQuantity,
+      limit_price: limitPrice ? parseFloat(limitPrice) : null,
+      stop_price: stopPrice ? parseFloat(stopPrice) : null,
       time_in_force: timeInForce || 'day',
       order_value: orderValue,
       currency,
@@ -119,13 +147,13 @@ const createOrder = async (req, res) => {
         symbol: symbol.toUpperCase(),
         side,
         orderType,
-        quantity,
+        quantity: parsedQuantity,
         timeInForce: timeInForce || 'day',
         clientOrderId: order.metadata.client_order_id
       };
 
-      if (limitPrice) alpacaOrderData.limitPrice = limitPrice;
-      if (stopPrice) alpacaOrderData.stopPrice = stopPrice;
+      if (limitPrice) alpacaOrderData.limitPrice = parseFloat(limitPrice);
+      if (stopPrice) alpacaOrderData.stopPrice = parseFloat(stopPrice);
 
       // Place order with Alpaca
       const alpacaOrder = await alpacaService.createOrder(alpacaOrderData);

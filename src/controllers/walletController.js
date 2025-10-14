@@ -25,17 +25,23 @@ const getWallet = async (req, res) => {
 
     const exchangeRate = await exchangeService.getExchangeRate('KES', 'USD');
 
+    // Parse all balance values as floats to ensure proper arithmetic
+    const kesBalance = parseFloat(wallet.kes_balance) || 0;
+    const usdBalance = parseFloat(wallet.usd_balance) || 0;
+    const frozenKes = parseFloat(wallet.frozen_kes) || 0;
+    const frozenUsd = parseFloat(wallet.frozen_usd) || 0;
+
     res.json({
       success: true,
       wallet: {
-        kesBalance: wallet.kes_balance,
-        usdBalance: wallet.usd_balance,
-        availableKes: wallet.availableKes,
-        availableUsd: wallet.availableUsd,
-        frozenKes: wallet.frozen_kes,
-        frozenUsd: wallet.frozen_usd,
-        totalValueKes: wallet.kes_balance + (wallet.usd_balance / exchangeRate),
-        totalValueUsd: wallet.usd_balance + (wallet.kes_balance * exchangeRate),
+        kesBalance: kesBalance.toFixed(2),
+        usdBalance: usdBalance.toFixed(2),
+        availableKes: (kesBalance - frozenKes).toFixed(2),
+        availableUsd: (usdBalance - frozenUsd).toFixed(2),
+        frozenKes: frozenKes.toFixed(2),
+        frozenUsd: frozenUsd.toFixed(2),
+        totalValueKes: (kesBalance + (usdBalance / exchangeRate)).toFixed(2),
+        totalValueUsd: (usdBalance + (kesBalance * exchangeRate)).toFixed(2),
         exchangeRate
       }
     });
@@ -122,6 +128,148 @@ const initiateDeposit = async (req, res) => {
 
     const reference = `DEP_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+    // SANDBOX MODE: Check if we're in development and skip MPesa
+    const isSandboxMode = process.env.NODE_ENV === 'development' || !process.env.MPESA_CONSUMER_KEY || process.env.MPESA_STK_CALLBACK_URL?.includes('your-domain.com');
+
+    if (isSandboxMode) {
+      // Sandbox: Instantly add money to wallet
+      logger.info(`SANDBOX MODE: Simulating deposit for user ${req.user.id}`);
+
+      // Create transaction record
+      const transaction = await Transaction.create({
+        wallet_id: wallet.id,
+        type: 'deposit',
+        amount,
+        currency: 'KES',
+        reference,
+        description: `Sandbox deposit of KES ${amount}`,
+        status: 'completed',
+        metadata: {
+          phone,
+          method: 'sandbox',
+          mpesaReceiptNumber: `SANDBOX${Date.now()}`,
+          transactionDate: new Date().toISOString()
+        }
+      });
+
+      // Add money to wallet
+      wallet.kes_balance = parseFloat(wallet.kes_balance) + amount;
+      await wallet.save();
+
+      logger.info(`Sandbox deposit completed for user ${req.user.id}: KES ${amount}`);
+
+      // Check if user has auto-conversion enabled
+      const user = await User.findByPk(req.user.id);
+
+      let autoConvertedUSD = 0;
+      let conversionDetails = null;
+
+      // Auto-convert to USD if user preference is enabled
+      if (user && user.auto_convert_deposits) {
+        try {
+          const conversionAmount = amount;
+          const conversion = await exchangeService.convertCurrency(conversionAmount, 'KES', 'USD');
+          const forexFees = exchangeService.calculateForexFees(conversion.convertedAmount);
+          const finalUSDAmount = conversion.convertedAmount - forexFees;
+
+          // Update balances: remove KES, add USD
+          wallet.kes_balance = parseFloat(wallet.kes_balance) - conversionAmount;
+          wallet.usd_balance = parseFloat(wallet.usd_balance) + finalUSDAmount;
+          await wallet.save();
+
+          autoConvertedUSD = finalUSDAmount;
+
+          // Record conversion transaction
+          await Transaction.create({
+            wallet_id: wallet.id,
+            type: 'forex_conversion',
+            amount: -conversionAmount,
+            currency: 'KES',
+            reference: `AUTOCONV_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            exchange_rate: conversion.rate,
+            fees: { forex: forexFees },
+            description: `Auto-convert ${conversionAmount} KES to USD on sandbox deposit`,
+            status: 'completed',
+            metadata: {
+              originalAmount: conversionAmount,
+              convertedAmount: conversion.convertedAmount,
+              forexFees,
+              finalAmount: finalUSDAmount,
+              rate: conversion.rate,
+              autoConversion: true,
+              relatedDeposit: reference
+            }
+          });
+
+          await Transaction.create({
+            wallet_id: wallet.id,
+            type: 'forex_conversion',
+            amount: finalUSDAmount,
+            currency: 'USD',
+            reference: `AUTOCRED_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            exchange_rate: conversion.rate,
+            fees: { forex: forexFees },
+            description: `Receive ${finalUSDAmount} USD from auto-conversion`,
+            status: 'completed',
+            metadata: {
+              originalAmount: conversionAmount,
+              convertedAmount: conversion.convertedAmount,
+              forexFees,
+              finalAmount: finalUSDAmount,
+              rate: conversion.rate,
+              autoConversion: true,
+              relatedDeposit: reference
+            }
+          });
+
+          conversionDetails = {
+            kesAmount: conversionAmount,
+            usdAmount: finalUSDAmount,
+            rate: conversion.rate,
+            fees: forexFees
+          };
+
+          logger.info(`Auto-conversion completed for sandbox deposit ${reference}:`, {
+            kesAmount: conversionAmount,
+            usdReceived: finalUSDAmount,
+            rate: conversion.rate,
+            fees: forexFees
+          });
+
+        } catch (conversionError) {
+          logger.error(`Auto-conversion failed for sandbox deposit ${reference}:`, conversionError);
+          // Keep KES balance as is if conversion fails
+        }
+      }
+
+      const responseData = {
+        success: true,
+        message: autoConvertedUSD > 0
+          ? '💰 Sandbox deposit completed and auto-converted to USD!'
+          : '💰 Sandbox deposit completed instantly!',
+        reference,
+        transaction: {
+          amount,
+          currency: 'KES',
+          status: 'completed',
+          reference,
+          mpesaReceiptNumber: transaction.metadata.mpesaReceiptNumber,
+          newKESBalance: wallet.kes_balance,
+          newUSDBalance: wallet.usd_balance
+        },
+        note: 'This is a sandbox/test deposit. In production, this would use real MPesa.'
+      };
+
+      if (autoConvertedUSD > 0) {
+        responseData.autoConverted = true;
+        responseData.conversionDetails = conversionDetails;
+        responseData.message = `${responseData.message} Converted KES ${conversionDetails.kesAmount} to USD ${conversionDetails.usdAmount} at rate ${conversionDetails.rate}`;
+      }
+
+      return res.json(responseData);
+    }
+
+    // PRODUCTION MODE: Use real MPesa
     // Create transaction record
     const transaction = await Transaction.create({
       wallet_id: wallet.id,
@@ -570,10 +718,66 @@ const initiateWithdrawal = async (req, res) => {
 
     const reference = `WTH_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // Freeze the withdrawal amount
+    // SANDBOX MODE: Check if we're in development
+    const isSandboxMode = process.env.NODE_ENV === 'development';
+
+    if (isSandboxMode) {
+      // Sandbox: Instantly process withdrawal
+      logger.info(`SANDBOX MODE: Simulating withdrawal for user ${req.user.id}`);
+
+      // Deduct from wallet
+      if (currency === 'KES') {
+        wallet.kes_balance = parseFloat(wallet.kes_balance) - amount;
+      } else {
+        wallet.usd_balance = parseFloat(wallet.usd_balance) - amount;
+      }
+      await wallet.save();
+
+      // Create completed transaction
+      const transaction = await Transaction.create({
+        wallet_id: wallet.id,
+        type: 'withdrawal',
+        amount: -amount,
+        currency,
+        reference,
+        status: 'completed',
+        fees: { withdrawal: withdrawalFees },
+        description: `Sandbox ${method} withdrawal of ${currency} ${amount}`,
+        metadata: {
+          method,
+          accountDetails,
+          netAmount,
+          withdrawalFees,
+          processingStatus: 'completed',
+          processedAt: new Date().toISOString(),
+          sandbox: true
+        }
+      });
+
+      logger.info(`Sandbox withdrawal completed for user ${req.user.id}: ${currency} ${amount}`);
+
+      return res.json({
+        success: true,
+        message: '💸 Sandbox withdrawal completed instantly!',
+        withdrawal: {
+          reference,
+          amount,
+          currency,
+          method,
+          withdrawalFees,
+          netAmount,
+          status: 'completed',
+          newBalance: currency === 'KES' ? wallet.kes_balance : wallet.usd_balance
+        },
+        note: 'This is a sandbox/test withdrawal. In production, this would take 1-5 business days.'
+      });
+    }
+
+    // PRODUCTION MODE: Freeze funds and await approval
     await wallet.freezeFunds(amount, currency);
 
-    const transaction = {
+    const transaction = await Transaction.create({
+      wallet_id: wallet.id,
       type: 'withdrawal',
       amount: -amount,
       currency,
@@ -588,9 +792,7 @@ const initiateWithdrawal = async (req, res) => {
         withdrawalFees,
         processingStatus: 'pending_approval'
       }
-    };
-
-    await wallet.addTransaction(transaction);
+    });
 
     logger.info(`Withdrawal initiated for user ${req.user.id}:`, {
       amount,

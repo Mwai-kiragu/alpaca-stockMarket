@@ -203,9 +203,10 @@ const orderValidation = [
 
 const depositValidation = [
   body('amount')
-    .isFloat({ min: 1 })
-    .withMessage('Amount must be at least 1'),
+    .isFloat({ min: 10 })
+    .withMessage('Minimum deposit amount is KES 10'),
   body('currency')
+    .optional()
     .isIn(['KES'])
     .withMessage('Only KES deposits supported'),
   body('phone')
