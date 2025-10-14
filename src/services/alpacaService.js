@@ -669,14 +669,14 @@ class AlpacaService {
     }
   }
 
-  // Get company logo from Alpaca's logo endpoint
+  // Get company logo from Alpaca's logo endpoint via our proxy
   getCompanyLogo(symbol, companyName = null) {
     if (!symbol) return null;
 
-    // Use Alpaca's official logo endpoint
-    // This endpoint returns the company logo directly from Alpaca's database
-    // It has excellent coverage for all US stocks
-    return `https://data.alpaca.markets/v1beta1/logos/${symbol.toUpperCase()}`;
+    // Return our proxy endpoint URL instead of direct Alpaca URL
+    // The proxy handles authentication and serves the logo publicly
+    // This allows frontend to use <img> tags directly without auth issues
+    return `/api/v1/assets/logo/${symbol.toUpperCase()}`;
   }
 
   // Stock symbol to company name mapping
