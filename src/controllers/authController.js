@@ -37,14 +37,14 @@ const register = async (req, res) => {
         logger.warn(`Registration failed - email already exists: ${email}`);
         return res.status(400).json({
           success: false,
-          message: `Email already exists: ${email}`
+          message: 'This email is already registered with us. If this is your account, please try logging in or use the "Forgot Password" option to reset your password.'
         });
       }
       if (existingUser.phone === phoneNumber) {
         logger.warn(`Registration failed - phone already exists: ${phoneNumber}`);
         return res.status(400).json({
           success: false,
-          message: `Phone number already exists: ${phoneNumber}`
+          message: 'This phone number is already registered with us. If this is your account, please try logging in or contact support if you need assistance.'
         });
       }
     }
@@ -127,7 +127,7 @@ const register = async (req, res) => {
     logger.error('Registration error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error during registration'
+      message: 'We encountered an issue while creating your account. Please try again in a moment. If the problem persists, contact our support team.'
     });
   }
 };
@@ -144,14 +144,16 @@ const login = async (req, res) => {
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'Invalid credentials.'
+        message: 'We couldn\'t find an account with this email and password combination. Please check your credentials and try again.'
       });
     }
 
     if (user.isLocked) {
-      return res.status(423).json({
+      const lockTimeRemaining = Math.ceil((user.lock_until - new Date()) / 1000 / 60);
+      return res.status(429).json({
         success: false,
-        message: 'Account is temporarily locked due to too many failed login attempts'
+        message: `For your security, your account has been temporarily locked. Please try again in ${lockTimeRemaining} minutes, or reset your password to regain access immediately.`,
+        lockTimeRemaining: lockTimeRemaining
       });
     }
 
@@ -159,10 +161,21 @@ const login = async (req, res) => {
 
     if (!isMatch) {
       await user.incLoginAttempts();
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials.'
-      });
+      const remainingAttempts = 5 - (user.login_attempts + 1);
+
+      if (remainingAttempts > 0) {
+        return res.status(401).json({
+          success: false,
+          message: `The password you entered is incorrect. You have ${remainingAttempts} ${remainingAttempts === 1 ? 'attempt' : 'attempts'} remaining before your account is temporarily locked.`,
+          remainingAttempts: remainingAttempts
+        });
+      } else {
+        return res.status(401).json({
+          success: false,
+          message: 'The password you entered is incorrect. Your account has been temporarily locked for 2 hours for security reasons. You can reset your password to regain access immediately.',
+          accountLocked: true
+        });
+      }
     }
 
     // Reset login attempts on successful login
@@ -199,7 +212,7 @@ const login = async (req, res) => {
     logger.error('Login error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error during login'
+      message: 'We encountered an issue while signing you in. Please try again in a moment. If the problem persists, contact our support team.'
     });
   }
 };
@@ -213,7 +226,7 @@ const requestVerification = async (req, res) => {
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: 'We couldn\'t find your account. Please make sure you\'re logged in and try again.'
       });
     }
 
@@ -221,7 +234,7 @@ const requestVerification = async (req, res) => {
       if (user.is_email_verified) {
         return res.status(400).json({
           success: false,
-          message: 'Email is already verified'
+          message: 'Your email is already verified. You can proceed with the next step.'
         });
       }
 
@@ -276,7 +289,7 @@ const requestVerification = async (req, res) => {
       if (user.is_phone_verified) {
         return res.status(400).json({
           success: false,
-          message: 'Phone is already verified'
+          message: 'Your phone number is already verified. You can proceed with the next step.'
         });
       }
 
@@ -319,14 +332,14 @@ const requestVerification = async (req, res) => {
     } else {
       res.status(400).json({
         success: false,
-        message: 'Invalid verification type. Must be email or phone.'
+        message: 'Please specify whether you want to verify your email or phone number.'
       });
     }
   } catch (error) {
     logger.error('Request verification error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'We encountered an issue while sending your verification code. Please try again in a moment.'
     });
   }
 };
@@ -344,7 +357,7 @@ const verifyCode = async (req, res) => {
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: email ? 'User with this email not found' : 'User not found. Please provide email.'
+        message: email ? 'We couldn\'t find an account with this email address. Please check the email and try again.' : 'We need your email address to verify your account. Please provide it and try again.'
       });
     }
 
@@ -411,14 +424,14 @@ const verifyCode = async (req, res) => {
 
     res.status(400).json({
       success: false,
-      message: 'Please provide a verification code.'
+      message: 'Please enter the verification code that was sent to you.'
     });
 
   } catch (error) {
     logger.error('Verify code error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'We encountered an issue while verifying your code. Please try again in a moment.'
     });
   }
 };
@@ -566,21 +579,21 @@ const acceptTermsAndPrivacy = async (req, res) => {
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: 'We couldn\'t find your account. Please make sure you\'re logged in and try again.'
       });
     }
 
     if (typeof termsAccepted !== 'boolean' || typeof privacyAccepted !== 'boolean') {
       return res.status(400).json({
         success: false,
-        message: 'Both termsAccepted and privacyAccepted must be boolean values'
+        message: 'Please confirm your acceptance of both the terms and privacy policy.'
       });
     }
 
     if (!termsAccepted || !privacyAccepted) {
       return res.status(400).json({
         success: false,
-        message: 'Both terms and privacy policy must be accepted'
+        message: 'To continue, please accept both our Terms of Service and Privacy Policy.'
       });
     }
 
@@ -609,7 +622,7 @@ const acceptTermsAndPrivacy = async (req, res) => {
     logger.error('Accept terms and privacy error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'We encountered an issue while processing your acceptance. Please try again in a moment.'
     });
   }
 };
@@ -624,7 +637,7 @@ const getMe = async (req, res) => {
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: 'We couldn\'t find your profile. Please try logging in again.'
       });
     }
 
@@ -650,7 +663,7 @@ const getMe = async (req, res) => {
     logger.error('Get user profile error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'We encountered an issue while loading your profile. Please try again in a moment.'
     });
   }
 };
@@ -663,14 +676,14 @@ const checkKYCStatus = async (req, res) => {
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: 'We couldn\'t find your account. Please make sure you\'re logged in and try again.'
       });
     }
 
     if (!user.alpaca_account_id) {
       return res.status(400).json({
         success: false,
-        message: 'No Alpaca account found. Please complete onboarding first.',
+        message: 'Your trading account is not yet set up. Please complete the onboarding process first.',
         kycStatus: user.kyc_status
       });
     }
@@ -734,7 +747,7 @@ const checkKYCStatus = async (req, res) => {
     logger.error('Check KYC status error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error while checking KYC status'
+      message: 'We encountered an issue while checking your verification status. Please try again in a moment.'
     });
   }
 };
@@ -770,7 +783,7 @@ const requestPasswordReset = async (req, res) => {
 
     if (!email) {
       return res.status(400).json(
-        ApiResponse.Error('Email is required', 400)
+        ApiResponse.Error('Please provide your email address to reset your password.', 400)
       );
     }
 
@@ -825,7 +838,7 @@ const requestPasswordReset = async (req, res) => {
   } catch (error) {
     logger.error('Password reset request error:', error);
     return res.status(500).json(
-      ApiResponse.Error('An error occurred while requesting password reset', 500)
+      ApiResponse.Error('We encountered an issue while processing your password reset request. Please try again in a moment.', 500)
     );
   }
 };
@@ -840,19 +853,19 @@ const resetPassword = async (req, res) => {
 
     if (!token || !newPassword || !confirmPassword) {
       return res.status(400).json(
-        ApiResponse.Error('Token, new password, and confirm password are required', 400)
+        ApiResponse.Error('Please provide your reset token and both password fields to continue.', 400)
       );
     }
 
     if (newPassword !== confirmPassword) {
       return res.status(400).json(
-        ApiResponse.Error('Password and confirm password do not match', 400)
+        ApiResponse.Error('The passwords you entered don\'t match. Please make sure both password fields are identical.', 400)
       );
     }
 
     if (newPassword.length < 6) {
       return res.status(400).json(
-        ApiResponse.Error('Password must be at least 6 characters long', 400)
+        ApiResponse.Error('For your security, please choose a password that\'s at least 6 characters long.', 400)
       );
     }
 
@@ -870,13 +883,13 @@ const resetPassword = async (req, res) => {
 
     if (!resetToken) {
       return res.status(400).json(
-        ApiResponse.Error('Invalid or expired reset token', 400)
+        ApiResponse.Error('This password reset link is invalid or has already been used. Please request a new password reset.', 400)
       );
     }
 
     if (resetToken.isExpired()) {
       return res.status(400).json(
-        ApiResponse.Error('Reset token has expired', 400)
+        ApiResponse.Error('This password reset link has expired. For your security, please request a new one.', 400)
       );
     }
 
@@ -911,7 +924,7 @@ const resetPassword = async (req, res) => {
   } catch (error) {
     logger.error('Password reset error:', error);
     return res.status(500).json(
-      ApiResponse.Error('An error occurred while resetting password', 500)
+      ApiResponse.Error('We encountered an issue while resetting your password. Please try again in a moment or request a new reset link.', 500)
     );
   }
 };
@@ -928,7 +941,7 @@ const getCurrentUser = async (req, res) => {
 
     if (!user) {
       return res.status(404).json(
-        ApiResponse.Error('User not found', 404)
+        ApiResponse.Error('We couldn\'t find your account details. Please try logging in again.', 404)
       );
     }
 
@@ -986,7 +999,7 @@ const getCurrentUser = async (req, res) => {
   } catch (error) {
     logger.error('Get current user error:', error);
     return res.status(500).json(
-      ApiResponse.Error('An error occurred while fetching the current user', 500)
+      ApiResponse.Error('We encountered an issue while loading your account. Please try again in a moment.', 500)
     );
   }
 };
@@ -1002,7 +1015,7 @@ const deleteAccount = async (req, res) => {
 
     if (!password) {
       return res.status(400).json(
-        ApiResponse.Error('Password is required for account deletion', 400)
+        ApiResponse.Error('For your security, please enter your password to confirm account deletion.', 400)
       );
     }
 
@@ -1011,7 +1024,7 @@ const deleteAccount = async (req, res) => {
 
     if (!user) {
       return res.status(404).json(
-        ApiResponse.Error('User not found', 404)
+        ApiResponse.Error('We couldn\'t find your account. Please try logging in again.', 404)
       );
     }
 
@@ -1020,7 +1033,7 @@ const deleteAccount = async (req, res) => {
 
     if (!isPasswordValid) {
       return res.status(401).json(
-        ApiResponse.Error('Invalid password', 401)
+        ApiResponse.Error('The password you entered is incorrect. Please try again.', 401)
       );
     }
 
@@ -1058,7 +1071,7 @@ const deleteAccount = async (req, res) => {
   } catch (error) {
     logger.error('Account deletion error:', error);
     return res.status(500).json(
-      ApiResponse.Error('An error occurred while deleting the account', 500)
+      ApiResponse.Error('We encountered an issue while processing your account deletion. Please try again in a moment or contact support for assistance.', 500)
     );
   }
 };
@@ -1073,7 +1086,7 @@ const recoverAccount = async (req, res) => {
 
     if (!email || !password) {
       return res.status(400).json(
-        ApiResponse.Error('Email and password are required', 400)
+        ApiResponse.Error('Please provide both your email address and password to recover your account.', 400)
       );
     }
 
@@ -1091,7 +1104,7 @@ const recoverAccount = async (req, res) => {
 
     if (!user) {
       return res.status(404).json(
-        ApiResponse.Error('No recoverable account found for this email', 404)
+        ApiResponse.Error('We couldn\'t find a deleted account with this email, or the recovery period has expired. Accounts can only be recovered within 30 days of deletion.', 404)
       );
     }
 
@@ -1100,7 +1113,7 @@ const recoverAccount = async (req, res) => {
 
     if (!isPasswordValid) {
       return res.status(401).json(
-        ApiResponse.Error('Invalid password', 401)
+        ApiResponse.Error('The password you entered is incorrect. Please try again.', 401)
       );
     }
 
@@ -1136,7 +1149,7 @@ const recoverAccount = async (req, res) => {
   } catch (error) {
     logger.error('Account recovery error:', error);
     return res.status(500).json(
-      ApiResponse.Error('An error occurred while recovering the account', 500)
+      ApiResponse.Error('We encountered an issue while recovering your account. Please try again in a moment or contact support for assistance.', 500)
     );
   }
 };
