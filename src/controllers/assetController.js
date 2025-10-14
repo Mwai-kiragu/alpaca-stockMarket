@@ -253,10 +253,9 @@ const getAssets = async (req, res) => {
               baseAsset.inWatchlist = asset.inWatchlist;
             }
           } else if (asset.tradable && asset.status === 'active') {
-            // Fetch market data and asset details (for logo) for regular tradable assets with timeout
+            // Fetch market data for regular tradable assets with timeout
             const marketDataPromise = Promise.race([
               Promise.all([
-                alpacaService.getAsset(asset.symbol),
                 alpacaService.getLatestQuote(asset.symbol),
                 alpacaService.getBars(asset.symbol, '1Day', null, null, 2)
               ]),
@@ -265,12 +264,10 @@ const getAssets = async (req, res) => {
               )
             ]);
 
-            const [assetDetails, quote, bars] = await marketDataPromise;
+            const [quote, bars] = await marketDataPromise;
 
-            // Update the logo from the detailed asset fetch
-            if (assetDetails && assetDetails.logo) {
-              baseAsset.logo = assetDetails.logo;
-            }
+            // Generate logo from the company name we already have
+            baseAsset.logo = alpacaService.getCompanyLogo(asset.symbol, asset.name);
 
             let changePercent = 0;
             let change = 0;
