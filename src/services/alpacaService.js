@@ -1083,6 +1083,258 @@ class AlpacaService {
       };
     }
   }
+
+  // ============================================================
+  // WATCHLIST MANAGEMENT - Alpaca API Integration
+  // ============================================================
+
+  /**
+   * Get all watchlists for the authenticated user
+   * @returns {Promise<Array>} Array of watchlist objects
+   */
+  async getAllWatchlists() {
+    try {
+      const response = await axios.get(`${this.paperUrl}/v2/watchlists`, {
+        headers: this.paperHeaders
+      });
+
+      logger.info(`Retrieved ${response.data.length} watchlists from Alpaca`);
+      return response.data;
+    } catch (error) {
+      logger.error('Get all watchlists error:', error.response?.data || error.message);
+      throw new Error('Failed to get watchlists');
+    }
+  }
+
+  /**
+   * Create a new watchlist
+   * @param {string} name - Name of the watchlist
+   * @param {Array<string>} symbols - Array of stock symbols
+   * @returns {Promise<Object>} Created watchlist object
+   */
+  async createWatchlist(name, symbols = []) {
+    try {
+      const response = await axios.post(
+        `${this.paperUrl}/v2/watchlists`,
+        {
+          name: name,
+          symbols: symbols
+        },
+        {
+          headers: this.paperHeaders
+        }
+      );
+
+      logger.info(`Watchlist "${name}" created successfully with ${symbols.length} symbols`);
+      return response.data;
+    } catch (error) {
+      logger.error('Create watchlist error:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Failed to create watchlist');
+    }
+  }
+
+  /**
+   * Get a specific watchlist by ID
+   * @param {string} watchlistId - UUID of the watchlist
+   * @returns {Promise<Object>} Watchlist object with assets
+   */
+  async getWatchlistById(watchlistId) {
+    try {
+      logger.info(`Fetching watchlist by ID: ${watchlistId} from ${this.paperUrl}/v2/watchlists/${watchlistId}`);
+
+      const response = await axios.get(`${this.paperUrl}/v2/watchlists/${watchlistId}`, {
+        headers: this.paperHeaders
+      });
+
+      logger.info(`Watchlist ${watchlistId} response:`, JSON.stringify(response.data, null, 2));
+      logger.info(`Assets count: ${response.data.assets ? response.data.assets.length : 0}`);
+      logger.info(`Assets array:`, response.data.assets);
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get watchlist by ID error:', error.response?.data || error.message);
+      throw new Error('Failed to get watchlist');
+    }
+  }
+
+  /**
+   * Update a watchlist (name and/or symbols)
+   * @param {string} watchlistId - UUID of the watchlist
+   * @param {string} name - New name for the watchlist
+   * @param {Array<string>} symbols - New array of symbols
+   * @returns {Promise<Object>} Updated watchlist object
+   */
+  async updateWatchlist(watchlistId, name, symbols) {
+    try {
+      const response = await axios.put(
+        `${this.paperUrl}/v2/watchlists/${watchlistId}`,
+        {
+          name: name,
+          symbols: symbols
+        },
+        {
+          headers: this.paperHeaders
+        }
+      );
+
+      logger.info(`Watchlist ${watchlistId} updated successfully`);
+      return response.data;
+    } catch (error) {
+      logger.error('Update watchlist error:', error.response?.data || error.message);
+      throw new Error('Failed to update watchlist');
+    }
+  }
+
+  /**
+   * Add a symbol to a watchlist
+   * @param {string} watchlistId - UUID of the watchlist
+   * @param {string} symbol - Stock symbol to add
+   * @returns {Promise<Object>} Updated watchlist object
+   */
+  async addSymbolToWatchlist(watchlistId, symbol) {
+    try {
+      const response = await axios.post(
+        `${this.paperUrl}/v2/watchlists/${watchlistId}`,
+        {
+          symbol: symbol.toUpperCase()
+        },
+        {
+          headers: this.paperHeaders
+        }
+      );
+
+      logger.info(`Symbol ${symbol} added to watchlist ${watchlistId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Add symbol to watchlist error:', error.response?.data || error.message);
+
+      if (error.response?.status === 422) {
+        throw new Error('Symbol already exists in watchlist or is invalid');
+      }
+
+      throw new Error('Failed to add symbol to watchlist');
+    }
+  }
+
+  /**
+   * Remove a symbol from a watchlist
+   * @param {string} watchlistId - UUID of the watchlist
+   * @param {string} symbol - Stock symbol to remove
+   * @returns {Promise<Object>} Updated watchlist object
+   */
+  async removeSymbolFromWatchlist(watchlistId, symbol) {
+    try {
+      const response = await axios.delete(
+        `${this.paperUrl}/v2/watchlists/${watchlistId}/${symbol.toUpperCase()}`,
+        {
+          headers: this.paperHeaders
+        }
+      );
+
+      logger.info(`Symbol ${symbol} removed from watchlist ${watchlistId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Remove symbol from watchlist error:', error.response?.data || error.message);
+      throw new Error('Failed to remove symbol from watchlist');
+    }
+  }
+
+  /**
+   * Delete a watchlist
+   * @param {string} watchlistId - UUID of the watchlist
+   * @returns {Promise<boolean>} Success status
+   */
+  async deleteWatchlist(watchlistId) {
+    try {
+      await axios.delete(`${this.paperUrl}/v2/watchlists/${watchlistId}`, {
+        headers: this.paperHeaders
+      });
+
+      logger.info(`Watchlist ${watchlistId} deleted successfully`);
+      return true;
+    } catch (error) {
+      logger.error('Delete watchlist error:', error.response?.data || error.message);
+      throw new Error('Failed to delete watchlist');
+    }
+  }
+
+  /**
+   * Get watchlist with enriched market data for each symbol
+   * @param {string} watchlistId - UUID of the watchlist
+   * @returns {Promise<Object>} Watchlist with real-time quotes and price changes
+   */
+  async getWatchlistWithMarketData(watchlistId) {
+    try {
+      const watchlist = await this.getWatchlistById(watchlistId);
+
+      if (!watchlist.assets || watchlist.assets.length === 0) {
+        return {
+          ...watchlist,
+          enrichedAssets: []
+        };
+      }
+
+      // Fetch market data for all symbols in parallel
+      const marketDataPromises = watchlist.assets.map(async (asset) => {
+        try {
+          const quote = await this.getLatestQuote(asset.symbol);
+          const bars = await this.getBars(asset.symbol, '1Day', null, null, 2);
+
+          let changePercent = 0;
+          let change = 0;
+          if (bars.length >= 2) {
+            const currentPrice = quote.ap || quote.bp;
+            const previousClose = parseFloat(bars[bars.length - 2].c);
+            change = currentPrice - previousClose;
+            changePercent = (change / previousClose) * 100;
+          }
+
+          return {
+            symbol: asset.symbol,
+            name: this.getCompanyName(asset.symbol),
+            logo: this.getCompanyLogo(asset.symbol),
+            price: quote.ap || quote.bp,
+            askPrice: quote.ap,
+            bidPrice: quote.bp,
+            change: change,
+            changePercent: changePercent.toFixed(2),
+            timestamp: quote.t,
+            exchange: asset.exchange,
+            assetClass: asset.class
+          };
+        } catch (error) {
+          logger.warn(`Failed to get market data for ${asset.symbol}:`, error.message);
+          return {
+            symbol: asset.symbol,
+            name: this.getCompanyName(asset.symbol),
+            logo: this.getCompanyLogo(asset.symbol),
+            price: 0,
+            askPrice: 0,
+            bidPrice: 0,
+            change: 0,
+            changePercent: '0.00',
+            timestamp: new Date().toISOString(),
+            error: 'Market data unavailable'
+          };
+        }
+      });
+
+      const enrichedAssets = await Promise.all(marketDataPromises);
+
+      return {
+        id: watchlist.id,
+        name: watchlist.name,
+        account_id: watchlist.account_id,
+        created_at: watchlist.created_at,
+        updated_at: watchlist.updated_at,
+        assets: enrichedAssets,
+        count: enrichedAssets.length
+      };
+    } catch (error) {
+      logger.error('Get watchlist with market data error:', error.response?.data || error.message);
+      throw new Error('Failed to get watchlist with market data');
+    }
+  }
 }
 
 module.exports = new AlpacaService();

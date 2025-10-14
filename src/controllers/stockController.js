@@ -381,51 +381,359 @@ const calculateSMA = (prices, period) => {
   return sum / period;
 };
 
-const getWatchlist = async (req, res) => {
+// ============================================================
+// WATCHLIST MANAGEMENT - Using Alpaca Watchlist API
+// ============================================================
+
+/**
+ * Get all watchlists for the user
+ * GET /api/v1/stocks/watchlists
+ */
+const getAllWatchlists = async (req, res) => {
   try {
-    // This would typically come from user's saved watchlist
-    // For now, return popular stocks
-    const popularSymbols = ['AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX'];
+    const watchlists = await alpacaService.getAllWatchlists();
 
-    const quotes = {};
+    // Log the raw response to debug
+    logger.info('Raw watchlists from Alpaca:', JSON.stringify(watchlists, null, 2));
 
-    await Promise.allSettled(
-      popularSymbols.map(async (symbol) => {
+    // Alpaca's GET /v2/watchlists sometimes returns empty assets array
+    // We need to fetch each watchlist individually to get full details
+    const detailedWatchlists = await Promise.all(
+      watchlists.map(async (w) => {
         try {
-          const quote = await alpacaService.getLatestQuote(symbol);
-          const bars = await alpacaService.getBars(symbol, '1Day', null, null, 2);
+          // Fetch full watchlist details
+          const fullWatchlist = await alpacaService.getWatchlistById(w.id);
 
-          let changePercent = 0;
-          if (bars.length >= 2) {
-            const currentPrice = quote.ap || quote.bp;
-            const previousClose = parseFloat(bars[bars.length - 2].c);
-            changePercent = ((currentPrice - previousClose) / previousClose) * 100;
-          }
-
-          quotes[symbol] = {
-            symbol,
-            price: quote.ap || quote.bp,
-            askPrice: quote.ap,
-            bidPrice: quote.bp,
-            changePercent: changePercent.toFixed(2),
-            timestamp: quote.t
+          return {
+            id: fullWatchlist.id,
+            name: fullWatchlist.name,
+            symbolCount: fullWatchlist.assets ? fullWatchlist.assets.length : 0,
+            symbols: fullWatchlist.assets ? fullWatchlist.assets.map(a => a.symbol) : [],
+            createdAt: fullWatchlist.created_at,
+            updatedAt: fullWatchlist.updated_at
           };
         } catch (error) {
-          logger.warn(`Failed to get quote for ${symbol}:`, error);
+          logger.warn(`Failed to fetch details for watchlist ${w.id}:`, error.message);
+          // Fallback to basic info
+          return {
+            id: w.id,
+            name: w.name,
+            symbolCount: w.assets ? w.assets.length : 0,
+            symbols: w.assets ? w.assets.map(a => a.symbol || a) : [],
+            createdAt: w.created_at,
+            updatedAt: w.updated_at
+          };
         }
       })
     );
 
     res.json({
       success: true,
-      watchlist: Object.values(quotes),
-      count: Object.keys(quotes).length
+      watchlists: detailedWatchlists,
+      count: detailedWatchlists.length
+    });
+  } catch (error) {
+    logger.error('Get all watchlists error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue while loading your watchlists. Please try again in a moment.'
+    });
+  }
+};
+
+/**
+ * Create a new watchlist
+ * POST /api/v1/stocks/watchlists
+ */
+const createWatchlist = async (req, res) => {
+  try {
+    const { name, symbols } = req.body;
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a name for your watchlist.'
+      });
+    }
+
+    if (!symbols || !Array.isArray(symbols)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Symbols must be provided as an array.'
+      });
+    }
+
+    const watchlist = await alpacaService.createWatchlist(name.trim(), symbols);
+
+    res.status(201).json({
+      success: true,
+      message: `Watchlist "${name}" created successfully.`,
+      watchlist: {
+        id: watchlist.id,
+        name: watchlist.name,
+        symbols: watchlist.assets.map(a => a.symbol),
+        createdAt: watchlist.created_at,
+        updatedAt: watchlist.updated_at
+      }
+    });
+  } catch (error) {
+    logger.error('Create watchlist error:', error);
+
+    if (error.message.includes('already exists')) {
+      return res.status(400).json({
+        success: false,
+        message: 'A watchlist with this name already exists. Please choose a different name.'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue while creating your watchlist. Please try again in a moment.'
+    });
+  }
+};
+
+/**
+ * Get a specific watchlist with market data
+ * GET /api/v1/stocks/watchlist/:watchlistId
+ */
+const getWatchlist = async (req, res) => {
+  try {
+    const { watchlistId } = req.params;
+
+    if (!watchlistId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Watchlist ID is required.'
+      });
+    }
+
+    const watchlist = await alpacaService.getWatchlistWithMarketData(watchlistId);
+
+    res.json({
+      success: true,
+      watchlist: {
+        id: watchlist.id,
+        name: watchlist.name,
+        assets: watchlist.assets,
+        count: watchlist.count,
+        createdAt: watchlist.created_at,
+        updatedAt: watchlist.updated_at
+      }
     });
   } catch (error) {
     logger.error('Get watchlist error:', error);
+
+    if (error.message.includes('not found') || error.message.includes('404')) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find this watchlist. It may have been deleted.'
+      });
+    }
+
     res.status(500).json({
       success: false,
-      message: 'Failed to fetch watchlist'
+      message: 'We encountered an issue while loading your watchlist. Please try again in a moment.'
+    });
+  }
+};
+
+/**
+ * Update a watchlist (name and/or symbols)
+ * PUT /api/v1/stocks/watchlist/:watchlistId
+ */
+const updateWatchlist = async (req, res) => {
+  try {
+    const { watchlistId } = req.params;
+    const { name, symbols } = req.body;
+
+    if (!watchlistId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Watchlist ID is required.'
+      });
+    }
+
+    if (!name || name.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a name for your watchlist.'
+      });
+    }
+
+    if (!symbols || !Array.isArray(symbols)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Symbols must be provided as an array.'
+      });
+    }
+
+    const watchlist = await alpacaService.updateWatchlist(watchlistId, name.trim(), symbols);
+
+    res.json({
+      success: true,
+      message: 'Watchlist updated successfully.',
+      watchlist: {
+        id: watchlist.id,
+        name: watchlist.name,
+        symbols: watchlist.assets.map(a => a.symbol),
+        updatedAt: watchlist.updated_at
+      }
+    });
+  } catch (error) {
+    logger.error('Update watchlist error:', error);
+
+    if (error.message.includes('not found') || error.message.includes('404')) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find this watchlist. It may have been deleted.'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue while updating your watchlist. Please try again in a moment.'
+    });
+  }
+};
+
+/**
+ * Add a symbol to a watchlist
+ * POST /api/v1/stocks/watchlist/:watchlistId/symbols
+ */
+const addSymbolToWatchlist = async (req, res) => {
+  try {
+    const { watchlistId } = req.params;
+    const { symbol } = req.body;
+
+    if (!watchlistId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Watchlist ID is required.'
+      });
+    }
+
+    if (!symbol || typeof symbol !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid stock symbol.'
+      });
+    }
+
+    const watchlist = await alpacaService.addSymbolToWatchlist(watchlistId, symbol);
+
+    res.json({
+      success: true,
+      message: `${symbol.toUpperCase()} added to your watchlist successfully.`,
+      watchlist: {
+        id: watchlist.id,
+        name: watchlist.name,
+        symbols: watchlist.assets.map(a => a.symbol),
+        updatedAt: watchlist.updated_at
+      }
+    });
+  } catch (error) {
+    logger.error('Add symbol to watchlist error:', error);
+
+    if (error.message.includes('already exists')) {
+      return res.status(400).json({
+        success: false,
+        message: 'This symbol is already in your watchlist.'
+      });
+    }
+
+    if (error.message.includes('not found') || error.message.includes('404')) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find this watchlist. It may have been deleted.'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue while adding the symbol. Please try again in a moment.'
+    });
+  }
+};
+
+/**
+ * Remove a symbol from a watchlist
+ * DELETE /api/v1/stocks/watchlist/:watchlistId/symbols/:symbol
+ */
+const removeSymbolFromWatchlist = async (req, res) => {
+  try {
+    const { watchlistId, symbol } = req.params;
+
+    if (!watchlistId || !symbol) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both watchlist ID and symbol are required.'
+      });
+    }
+
+    const watchlist = await alpacaService.removeSymbolFromWatchlist(watchlistId, symbol);
+
+    res.json({
+      success: true,
+      message: `${symbol.toUpperCase()} removed from your watchlist successfully.`,
+      watchlist: {
+        id: watchlist.id,
+        name: watchlist.name,
+        symbols: watchlist.assets.map(a => a.symbol),
+        updatedAt: watchlist.updated_at
+      }
+    });
+  } catch (error) {
+    logger.error('Remove symbol from watchlist error:', error);
+
+    if (error.message.includes('not found') || error.message.includes('404')) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find this watchlist or symbol.'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue while removing the symbol. Please try again in a moment.'
+    });
+  }
+};
+
+/**
+ * Delete a watchlist
+ * DELETE /api/v1/stocks/watchlist/:watchlistId
+ */
+const deleteWatchlist = async (req, res) => {
+  try {
+    const { watchlistId } = req.params;
+
+    if (!watchlistId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Watchlist ID is required.'
+      });
+    }
+
+    await alpacaService.deleteWatchlist(watchlistId);
+
+    res.json({
+      success: true,
+      message: 'Watchlist deleted successfully.'
+    });
+  } catch (error) {
+    logger.error('Delete watchlist error:', error);
+
+    if (error.message.includes('not found') || error.message.includes('404')) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find this watchlist. It may have already been deleted.'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue while deleting your watchlist. Please try again in a moment.'
     });
   }
 };
@@ -439,5 +747,12 @@ module.exports = {
   getNews,
   getMarketCalendar,
   getStockFundamentals,
-  getWatchlist
+  // Watchlist management
+  getAllWatchlists,
+  createWatchlist,
+  getWatchlist,
+  updateWatchlist,
+  addSymbolToWatchlist,
+  removeSymbolFromWatchlist,
+  deleteWatchlist
 };
