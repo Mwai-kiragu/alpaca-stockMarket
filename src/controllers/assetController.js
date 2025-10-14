@@ -10,14 +10,108 @@ const getAssets = async (req, res) => {
       page = 1,
       limit = 20,
       search,
-      category
+      category,
+      isWatchlist
     } = req.query;
 
     let assets;
     let isPopular = false;
+    let isWatchlistOnly = false;
 
-    // Check if requesting popular assets
-    if (category === 'popular') {
+    // Check if requesting watchlist assets only
+    if (isWatchlist === 'true') {
+      isWatchlistOnly = true;
+      // Fetch user's watchlists
+      const watchlists = await alpacaService.getAllWatchlists();
+
+      if (!watchlists || watchlists.length === 0) {
+        return res.json({
+          success: true,
+          assets: [],
+          pagination: {
+            currentPage: 1,
+            totalPages: 0,
+            totalItems: 0,
+            itemsPerPage: parseInt(limit),
+            hasNextPage: false,
+            hasPrevPage: false
+          },
+          filters: {
+            status,
+            assetClass,
+            isWatchlist: true
+          }
+        });
+      }
+
+      // Fetch detailed data for each watchlist to get symbols
+      const detailedWatchlists = await Promise.all(
+        watchlists.map(w => alpacaService.getWatchlistById(w.id))
+      );
+
+      // Collect all unique symbols from all watchlists
+      const watchlistSymbols = new Set();
+      detailedWatchlists.forEach(watchlist => {
+        if (watchlist.assets && Array.isArray(watchlist.assets)) {
+          watchlist.assets.forEach(asset => {
+            if (asset.symbol) {
+              watchlistSymbols.add(asset.symbol);
+            }
+          });
+        }
+      });
+
+      // Fetch full asset details for each watchlist symbol
+      const watchlistAssets = [];
+      await Promise.allSettled(
+        Array.from(watchlistSymbols).map(async (symbol) => {
+          try {
+            const [asset, quote, bars] = await Promise.all([
+              alpacaService.getAsset(symbol),
+              alpacaService.getLatestQuote(symbol),
+              alpacaService.getBars(symbol, '1Day', null, null, 2)
+            ]);
+
+            let changePercent = 0;
+            let change = 0;
+            const currentPrice = quote.ap || quote.bp || 0;
+
+            if (bars.length >= 2 && currentPrice > 0) {
+              const previousClose = parseFloat(bars[bars.length - 2].c);
+              change = currentPrice - previousClose;
+              changePercent = (change / previousClose) * 100;
+            }
+
+            watchlistAssets.push({
+              symbol: asset.symbol,
+              name: asset.name,
+              logo: asset.logo,
+              exchange: asset.exchange,
+              class: asset.class,
+              asset_class: asset.class,
+              status: asset.status,
+              tradable: asset.tradable,
+              marginable: asset.marginable,
+              shortable: asset.shortable,
+              easy_to_borrow: asset.easy_to_borrow,
+              fractionable: asset.fractionable,
+              currentPrice: currentPrice,
+              change: change,
+              changePercent: parseFloat(changePercent.toFixed(2)),
+              volume: bars.length > 0 ? parseInt(bars[bars.length - 1].v || 0) : 0,
+              high: bars.length > 0 ? parseFloat(bars[bars.length - 1].h || 0) : 0,
+              low: bars.length > 0 ? parseFloat(bars[bars.length - 1].l || 0) : 0,
+              lastUpdated: quote.t,
+              inWatchlist: true
+            });
+          } catch (error) {
+            logger.warn(`Failed to get data for watchlist asset ${symbol}:`, error);
+          }
+        })
+      );
+
+      assets = watchlistAssets;
+    } else if (category === 'popular') {
       isPopular = true;
 
       // Fetch most active stocks dynamically from Alpaca
@@ -139,13 +233,13 @@ const getAssets = async (req, res) => {
           fractionable: asset.fractionable
         };
 
-        // Add market data for both popular and regular assets
+        // Add market data for popular, watchlist, and regular assets
         try {
-          if (isPopular && asset.currentPrice) {
-            // Popular assets already have market data
+          if ((isPopular || isWatchlistOnly) && asset.currentPrice) {
+            // Popular and watchlist assets already have market data
             baseAsset.marketData = {
               currentPrice: asset.currentPrice,
-              change: asset.currentPrice * (asset.changePercent / 100),
+              change: asset.change || asset.currentPrice * (asset.changePercent / 100),
               changePercent: asset.changePercent,
               volume: asset.volume,
               high: asset.high || 0,
@@ -153,6 +247,11 @@ const getAssets = async (req, res) => {
               lastUpdated: asset.lastUpdated,
               isProfit: asset.changePercent >= 0
             };
+
+            // Add inWatchlist field if it exists
+            if (asset.inWatchlist !== undefined) {
+              baseAsset.inWatchlist = asset.inWatchlist;
+            }
           } else if (asset.tradable && asset.status === 'active') {
             // Fetch market data for regular tradable assets with timeout
             const marketDataPromise = Promise.race([

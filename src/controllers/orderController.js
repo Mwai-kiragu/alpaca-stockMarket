@@ -237,7 +237,8 @@ const getOrders = async (req, res) => {
     const offset = (page - 1) * limit;
 
     const whereClause = { user_id: req.user.id };
-    if (status) whereClause.status = status;
+    // Only add status filter if it's not "all"
+    if (status && status.toLowerCase() !== 'all') whereClause.status = status;
     if (symbol) whereClause.symbol = symbol.toUpperCase();
     if (side) whereClause.side = side;
 
