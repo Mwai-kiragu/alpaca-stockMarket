@@ -669,8 +669,38 @@ class AlpacaService {
     }
   }
 
-  // Company logo mapping
-  getCompanyLogo(symbol) {
+  // Helper function to derive domain from company name
+  deriveDomainFromCompanyName(companyName) {
+    if (!companyName) return null;
+
+    // Convert to lowercase and remove common suffixes
+    let domain = companyName.toLowerCase()
+      .replace(/\s+(inc\.?|incorporated|corp\.?|corporation|company|co\.?|ltd\.?|limited|llc|plc|n\.?v\.?|holding(s)?|group|the)\s*$/gi, '')
+      .replace(/\s+(class\s+[a-z]|ordinary shares?|common stock)/gi, '')
+      .trim();
+
+    // Remove special characters and spaces
+    domain = domain
+      .replace(/[^\w\s-]/g, '')
+      .replace(/\s+/g, '')
+      .replace(/-+/g, '');
+
+    // Handle some common patterns
+    if (domain.includes('&')) {
+      domain = domain.split('&')[0].trim();
+    }
+
+    // If domain is too short or looks invalid, return null
+    if (domain.length < 2 || /^\d+$/.test(domain)) {
+      return null;
+    }
+
+    return `${domain}.com`;
+  }
+
+  // Company logo mapping with fallback to derived domains
+  getCompanyLogo(symbol, companyName = null) {
+    // Hardcoded logos for popular/well-known companies
     const companyLogos = {
       'AAPL': 'https://logo.clearbit.com/apple.com',
       'GOOGL': 'https://logo.clearbit.com/google.com',
@@ -767,7 +797,24 @@ class AlpacaService {
       'HOOD': 'https://logo.clearbit.com/robinhood.com'
     };
 
-    return companyLogos[symbol.toUpperCase()] || `https://via.placeholder.com/64x64/007bff/ffffff?text=${symbol}`;
+    const symbolUpper = symbol.toUpperCase();
+
+    // First, check hardcoded logos
+    if (companyLogos[symbolUpper]) {
+      return companyLogos[symbolUpper];
+    }
+
+    // Try to derive domain from company name if provided
+    if (companyName) {
+      const derivedDomain = this.deriveDomainFromCompanyName(companyName);
+      if (derivedDomain) {
+        return `https://logo.clearbit.com/${derivedDomain}`;
+      }
+    }
+
+    // Fallback: return null to indicate no logo available
+    // Frontend can handle displaying a default icon or letter avatar
+    return null;
   }
 
   // Stock symbol to company name mapping
@@ -874,29 +921,31 @@ class AlpacaService {
 
   async getAsset(symbol) {
     try {
-      // Use Paper Trading API for asset information
-      const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/${symbol}/snapshot`, {
+      // Fetch asset details from Paper Trading API to get the real company name
+      const assetResponse = await axios.get(`${this.paperUrl}/v2/assets/${symbol.toUpperCase()}`, {
         headers: this.paperHeaders
       });
 
-      // Return asset-like data from snapshot with proper company name and logo
+      const asset = assetResponse.data;
+
+      // Return asset data with proper company name and logo
       return {
-        symbol: symbol,
-        name: this.getCompanyName(symbol), // Use proper company name
-        logo: this.getCompanyLogo(symbol), // Add company logo
-        exchange: response.data.latestTrade?.x || 'UNKNOWN',
-        class: 'us_equity',
-        status: 'active',
-        tradable: true,
-        marginable: true,
-        shortable: true,
-        easy_to_borrow: true,
-        fractionable: true
+        symbol: asset.symbol,
+        name: asset.name, // Use real company name from Alpaca
+        logo: this.getCompanyLogo(asset.symbol, asset.name), // Pass company name for domain derivation
+        exchange: asset.exchange,
+        class: asset.class,
+        status: asset.status,
+        tradable: asset.tradable,
+        marginable: asset.marginable,
+        shortable: asset.shortable,
+        easy_to_borrow: asset.easy_to_borrow,
+        fractionable: asset.fractionable
       };
     } catch (error) {
       logger.error('Get asset error:', error.response?.data || error.message);
 
-      // If snapshot fails, try to get basic info
+      // If asset fetch fails, try snapshot as fallback
       if (error.response?.status === 404) {
         throw new Error(`Asset ${symbol} not found`);
       }
@@ -1322,6 +1371,9 @@ class AlpacaService {
           const quote = await this.getLatestQuote(asset.symbol);
           const bars = await this.getBars(asset.symbol, '1Day', null, null, 2);
 
+          // Use real company name from asset or fall back to hardcoded
+          const companyName = asset.name || this.getCompanyName(asset.symbol);
+
           let changePercent = 0;
           let change = 0;
           if (bars.length >= 2) {
@@ -1333,8 +1385,8 @@ class AlpacaService {
 
           return {
             symbol: asset.symbol,
-            name: this.getCompanyName(asset.symbol),
-            logo: this.getCompanyLogo(asset.symbol),
+            name: companyName,
+            logo: this.getCompanyLogo(asset.symbol, companyName),
             price: quote.ap || quote.bp,
             askPrice: quote.ap,
             bidPrice: quote.bp,
@@ -1346,10 +1398,11 @@ class AlpacaService {
           };
         } catch (error) {
           logger.warn(`Failed to get market data for ${asset.symbol}:`, error.message);
+          const companyName = asset.name || this.getCompanyName(asset.symbol);
           return {
             symbol: asset.symbol,
-            name: this.getCompanyName(asset.symbol),
-            logo: this.getCompanyLogo(asset.symbol),
+            name: companyName,
+            logo: this.getCompanyLogo(asset.symbol, companyName),
             price: 0,
             askPrice: 0,
             bidPrice: 0,
