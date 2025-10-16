@@ -33,6 +33,7 @@ const notificationRoutes = require('./routes/notifications');
 const supportRoutes = require('./routes/support');
 const adminRoutes = require('./routes/admin');
 const smsTestRoutes = require('./routes/smsTest');
+const callbackRoutes = require('./routes/callback');
 
 const app = express();
 const server = createServer(app);
@@ -90,6 +91,9 @@ app.use('/uploads', express.static('uploads'));
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/user', onboardingRoutes);
 app.use('/api/v1/onboarding', onboardingRoutes);
+
+// Payment callback endpoint (no auth required - called by external services)
+app.use('/api/v1/callback', callbackRoutes);
 
 // Trading platform endpoints
 app.use('/api/v1/biometric', biometricRoutes);
