@@ -823,7 +823,8 @@ class AlpacaService {
       });
       return response.data.quote;
     } catch (error) {
-      logger.error('Get latest quote error:', error.response?.data || error.message);
+      // Use debug level for missing quotes as some assets legitimately don't have real-time quotes
+      logger.debug('Get latest quote error:', error.response?.data || error.message);
       throw new Error('Failed to get latest quote');
     }
   }

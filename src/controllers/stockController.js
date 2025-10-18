@@ -15,10 +15,21 @@ const getQuote = async (req, res) => {
 
     const quote = await alpacaService.getLatestQuote(symbol.toUpperCase());
 
+    // Fetch asset details to get the company name for logo
+    let assetName = null;
+    try {
+      const asset = await alpacaService.getAsset(symbol.toUpperCase());
+      assetName = asset.name;
+    } catch (assetError) {
+      logger.debug(`Could not fetch asset name for ${symbol}:`, assetError.message);
+    }
+
     res.json({
       success: true,
       quote: {
         symbol: symbol.toUpperCase(),
+        name: assetName,
+        logo: alpacaService.getCompanyLogo(symbol.toUpperCase(), assetName),
         askPrice: quote.ap,
         askSize: quote.as,
         bidPrice: quote.bp,
@@ -52,10 +63,21 @@ const getLatestTrade = async (req, res) => {
 
     const trade = await alpacaService.getLatestTrade(symbol.toUpperCase());
 
+    // Fetch asset details to get the company name for logo
+    let assetName = null;
+    try {
+      const asset = await alpacaService.getAsset(symbol.toUpperCase());
+      assetName = asset.name;
+    } catch (assetError) {
+      logger.debug(`Could not fetch asset name for ${symbol}:`, assetError.message);
+    }
+
     res.json({
       success: true,
       trade: {
         symbol: symbol.toUpperCase(),
+        name: assetName,
+        logo: alpacaService.getCompanyLogo(symbol.toUpperCase(), assetName),
         price: trade.p,
         size: trade.s,
         timestamp: trade.t,
@@ -103,6 +125,15 @@ const getBars = async (req, res) => {
       Math.min(parseInt(limit), 1000) // Cap at 1000 for performance
     );
 
+    // Fetch asset details to get the company name for logo
+    let assetName = null;
+    try {
+      const asset = await alpacaService.getAsset(symbol.toUpperCase());
+      assetName = asset.name;
+    } catch (assetError) {
+      logger.debug(`Could not fetch asset name for ${symbol}:`, assetError.message);
+    }
+
     const formattedBars = bars.map(bar => ({
       timestamp: bar.t,
       open: parseFloat(bar.o),
@@ -117,6 +148,8 @@ const getBars = async (req, res) => {
     res.json({
       success: true,
       symbol: symbol.toUpperCase(),
+      name: assetName,
+      logo: alpacaService.getCompanyLogo(symbol.toUpperCase(), assetName),
       timeframe,
       bars: formattedBars,
       count: formattedBars.length

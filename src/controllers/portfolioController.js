@@ -28,6 +28,7 @@ const getPortfolio = async (req, res) => {
     // Format positions
     const formattedPositions = positions.map(position => ({
       symbol: position.symbol,
+      logo: alpacaService.getCompanyLogo(position.symbol),
       quantity: parseFloat(position.qty),
       marketValue: parseFloat(position.market_value),
       costBasis: parseFloat(position.cost_basis),
@@ -106,6 +107,7 @@ const getPositions = async (req, res) => {
 
         return {
           symbol: position.symbol,
+          logo: alpacaService.getCompanyLogo(position.symbol),
           quantity,
           side: position.side,
           averageEntryPrice: parseFloat(position.avg_entry_price),

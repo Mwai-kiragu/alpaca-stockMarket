@@ -363,6 +363,7 @@ const getAsset = async (req, res) => {
     const formattedAsset = {
       symbol: asset.symbol,
       name: asset.name,
+      logo: asset.logo,
       exchange: asset.exchange,
       assetClass: asset.class,
       status: asset.status,
@@ -454,6 +455,7 @@ const searchAssets = async (req, res) => {
     const formattedResults = limitedResults.map(asset => ({
       symbol: asset.symbol,
       name: asset.name,
+      logo: alpacaService.getCompanyLogo(asset.symbol, asset.name),
       exchange: asset.exchange,
       assetClass: asset.class,
       tradable: asset.tradable,
@@ -494,6 +496,7 @@ const getTradableAssets = async (req, res) => {
         const baseAsset = {
           symbol: asset.symbol,
           name: asset.name,
+          logo: alpacaService.getCompanyLogo(asset.symbol, asset.name),
           exchange: asset.exchange,
           assetClass: asset.class,
           marginable: asset.marginable,
@@ -506,6 +509,7 @@ const getTradableAssets = async (req, res) => {
           baseAsset.currentPrice = quote.ap || quote.bp;
           baseAsset.lastUpdated = quote.t;
         } catch (quoteError) {
+          logger.debug(`No quote available for ${asset.symbol}:`, quoteError.message);
           baseAsset.currentPrice = null;
           baseAsset.lastUpdated = null;
         }
@@ -655,6 +659,7 @@ const getAssetsByExchange = async (req, res) => {
     const formattedAssets = tradableAssets.map(asset => ({
       symbol: asset.symbol,
       name: asset.name,
+      logo: alpacaService.getCompanyLogo(asset.symbol, asset.name),
       exchange: asset.exchange,
       assetClass: asset.class,
       tradable: asset.tradable,
