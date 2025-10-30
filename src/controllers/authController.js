@@ -238,9 +238,7 @@ const requestVerification = async (req, res) => {
         });
       }
 
-      // TEMPORARILY COMMENTED OUT: Generate verification token
-      // Will re-enable once we have a reliable email service
-      /*
+      // Generate verification token
       const verificationCode = generateVerificationCode();
       const verificationToken = EmailVerificationToken.generateToken();
 
@@ -256,35 +254,31 @@ const requestVerification = async (req, res) => {
         verification_code: verificationCode,
         expires_at: new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
       });
-      */
 
-      // TEMPORARY: Generate verification code for logging only
-      const verificationCode = generateVerificationCode();
+      // Send verification email
+      try {
+        const emailResult = await emailService.sendVerificationCodeEmail(user, verificationCode);
 
-      // TEMPORARILY COMMENTED OUT: Send verification email
-      // Will re-enable once we have a reliable email service
-      /*
-      const emailResult = await emailService.sendVerificationCodeEmail(user, verificationCode);
-
-      if (emailResult.success) {
-        res.status(200).json({
-          success: true,
-          message: 'Verification code sent successfully.'
-        });
-      } else {
+        if (emailResult.success) {
+          logger.info(`Verification code sent to ${user.email}`);
+          res.status(200).json({
+            success: true,
+            message: 'Verification code sent successfully.'
+          });
+        } else {
+          logger.error(`Failed to send verification email to ${user.email}`);
+          res.status(500).json({
+            success: false,
+            message: 'Failed to send verification code. Please try again.'
+          });
+        }
+      } catch (emailError) {
+        logger.error(`Email service error for ${user.email}:`, emailError);
         res.status(500).json({
           success: false,
-          message: 'Failed to send verification code'
+          message: 'Failed to send verification code. Please try again.'
         });
       }
-      */
-
-      // TEMPORARY: Always return success and log verification code
-      logger.info(`VERIFICATION CODE for ${user.email}: ${verificationCode}`);
-      res.status(200).json({
-        success: true,
-        message: 'Verification code sent successfully.'
-      });
     } else if (verificationType === 'phone') {
       if (user.is_phone_verified) {
         return res.status(400).json({

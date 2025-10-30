@@ -3,21 +3,18 @@ const logger = require('../utils/logger');
 
 class EmailService {
   constructor() {
+    const port = parseInt(process.env.MAIL_PORT) || 587;
     this.transporter = nodemailer.createTransport({
       host: process.env.MAIL_HOST || 'mail.rivenapp.com',
-      port: parseInt(process.env.MAIL_PORT) || 465,
-      secure: process.env.MAIL_PORT === '465',
+      port: port,
+      secure: port === 587, // true for 587, false for other ports
       auth: {
         user: process.env.MAIL_USERNAME,
         pass: process.env.MAIL_PASSWORD,
       },
       tls: {
-        rejectUnauthorized: false,
-        minVersion: 'TLSv1.2'
-      },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 10000,
+        rejectUnauthorized: false
+      }
     });
 
     // Verify connection configuration (only in production)
