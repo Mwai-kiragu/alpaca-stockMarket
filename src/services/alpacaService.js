@@ -3,34 +3,27 @@ const logger = require('../utils/logger');
 
 class AlpacaService {
   constructor() {
-    // Use Broker API credentials for account creation
     this.brokerApiKey = process.env.ALPACA_BROKER_API_KEY;
     this.brokerSecretKey = process.env.ALPACA_BROKER_SECRET_KEY;
     this.brokerUrl = process.env.ALPACA_BROKER_API_URL || 'https://broker-api.sandbox.alpaca.markets';
 
-    // Paper Trading API (commented out in env, but keeping for future use)
     this.paperApiKey = process.env.ALPACA_PAPER_API_KEY;
     this.paperSecretKey = process.env.ALPACA_PAPER_SECRET_KEY;
     this.paperUrl = process.env.ALPACA_PAPER_API_URL || 'https://paper-api.alpaca.markets';
 
-    // Use broker credentials by default for now
     this.apiKey = this.brokerApiKey;
     this.secretKey = this.brokerSecretKey;
 
-    // Trading URL for market data and trading operations
     this.tradingUrl = this.paperUrl || 'https://paper-api.alpaca.markets';
-    // Use the broker URL for account operations
     this.baseUrl = this.brokerUrl;
     this.dataBaseUrl = 'https://data.alpaca.markets';
 
-    // Headers for Broker API
     this.tradingHeaders = {
       'APCA-API-KEY-ID': this.brokerApiKey,
       'APCA-API-SECRET-KEY': this.brokerSecretKey,
       'Content-Type': 'application/json'
     };
 
-    // Headers for Paper Trading API (if needed)
     this.paperHeaders = {
       'APCA-API-KEY-ID': this.paperApiKey,
       'APCA-API-SECRET-KEY': this.paperSecretKey,
@@ -38,20 +31,16 @@ class AlpacaService {
     };
   }
 
-  // Map international addresses to valid US equivalents for Alpaca
   mapToUSState(state) {
     if (!state) return 'NY';
 
-    // Common international to US state mappings
     const stateMapping = {
-      // Kenya
       'Nairobi County': 'NY',
       'Mombasa County': 'CA',
       'Kisumu County': 'IL',
       'Nakuru County': 'TX',
       'Eldoret': 'FL',
 
-      // Other common patterns
       'Lagos': 'NY',
       'Johannesburg': 'CA',
       'Cape Town': 'FL',
@@ -59,32 +48,26 @@ class AlpacaService {
       'Toronto': 'NY',
       'Vancouver': 'CA',
 
-      // Default patterns
       'County': 'NY',
       'State': 'CA',
       'Province': 'TX'
     };
 
-    // Check for exact match first
     if (stateMapping[state]) {
       return stateMapping[state];
     }
 
-    // Check for partial matches
     for (const [key, value] of Object.entries(stateMapping)) {
       if (state.toLowerCase().includes(key.toLowerCase())) {
         return value;
       }
     }
-
-    // Default fallback
     return 'NY';
   }
 
   mapToUSCity(city) {
     if (!city) return 'New York';
 
-    // Map international cities to US equivalents
     const cityMapping = {
       'Nairobi': 'New York',
       'Mombasa': 'Los Angeles',
@@ -105,18 +88,14 @@ class AlpacaService {
   mapToUSZipCode(zipCode) {
     if (!zipCode) return '10001';
 
-    // Map international zip patterns to US equivalents
-    if (zipCode.startsWith('00')) return '10001'; // Kenya 00xxx -> NY
-    if (zipCode.startsWith('20')) return '90210'; // Kenya 20xxx -> CA
-    if (zipCode.startsWith('40')) return '60601'; // Kenya 40xxx -> IL
-    if (zipCode.startsWith('30')) return '75201'; // Kenya 30xxx -> TX
+    if (zipCode.startsWith('00')) return '10001';
+    if (zipCode.startsWith('20')) return '90210';
+    if (zipCode.startsWith('40')) return '60601';
+    if (zipCode.startsWith('30')) return '75201';
 
-    // If it's already US format (5 digits), keep it
     if (/^\d{5}(-\d{4})?$/.test(zipCode)) {
       return zipCode;
     }
-
-    // Default fallback
     return '10001';
   }
 
@@ -783,18 +762,16 @@ class AlpacaService {
 
   async getAsset(symbol) {
     try {
-      // Fetch asset details from Paper Trading API to get the real company name
       const assetResponse = await axios.get(`${this.paperUrl}/v2/assets/${symbol.toUpperCase()}`, {
         headers: this.paperHeaders
       });
 
       const asset = assetResponse.data;
 
-      // Return asset data with proper company name and logo
       return {
         symbol: asset.symbol,
-        name: asset.name, // Use real company name from Alpaca
-        logo: this.getCompanyLogo(asset.symbol, asset.name), // Pass company name for domain derivation
+        name: asset.name,
+        logo: this.getCompanyLogo(asset.symbol, asset.name),
         exchange: asset.exchange,
         class: asset.class,
         status: asset.status,
@@ -807,7 +784,6 @@ class AlpacaService {
     } catch (error) {
       logger.error('Get asset error:', error.response?.data || error.message);
 
-      // If asset fetch fails, try snapshot as fallback
       if (error.response?.status === 404) {
         throw new Error(`Asset ${symbol} not found`);
       }
@@ -817,13 +793,11 @@ class AlpacaService {
 
   async getLatestQuote(symbol) {
     try {
-      // Use Paper Trading API for market data
       const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/${symbol}/quotes/latest`, {
         headers: this.paperHeaders
       });
       return response.data.quote;
     } catch (error) {
-      // Use debug level for missing quotes as some assets legitimately don't have real-time quotes
       logger.debug('Get latest quote error:', error.response?.data || error.message);
       throw new Error('Failed to get latest quote');
     }
@@ -973,7 +947,6 @@ class AlpacaService {
 
   async getMarketStatus() {
     try {
-      // Use Paper Trading API for market status
       logger.info('Getting market status from:', `${this.paperUrl}/v2/clock`);
       const response = await axios.get(`${this.paperUrl}/v2/clock`, {
         headers: this.paperHeaders
@@ -986,7 +959,6 @@ class AlpacaService {
         response: error.response?.data,
         status: error.response?.status
       });
-      // Return default values if API fails
       return {
         is_open: false,
         next_open: null,
@@ -996,34 +968,26 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Get most active stocks from Alpaca screener
-   * @param {number} limit - Number of stocks to return (default 30)
-   * @returns {Promise<Array>} Array of most active stock symbols
-   */
   async getMostActiveStocks(limit = 30) {
     try {
       const response = await axios.get(`${this.dataBaseUrl}/v1beta1/screener/stocks/most-actives`, {
         headers: this.paperHeaders,
         params: {
           by: 'volume',
-          top: Math.min(limit, 50) // Alpaca limits to 50
+          top: Math.min(limit, 50)
         }
       });
 
-      // Extract just the symbols
       const symbols = response.data.most_actives.map(stock => stock.symbol);
       logger.info(`Retrieved ${symbols.length} most active stocks from Alpaca screener`);
       return symbols;
     } catch (error) {
       logger.error('Get most active stocks error:', error.response?.data || error.message);
 
-      // Fallback: Get regular tradable assets and return top symbols
       logger.warn('Screener API failed, falling back to regular assets endpoint');
       try {
         const assets = await this.getAssets('active', 'us_equity');
 
-        // Filter to major exchanges and sort by symbol (basic fallback)
         const majorExchangeAssets = assets
           .filter(asset => ['NASDAQ', 'NYSE'].includes(asset.exchange) && asset.tradable)
           .slice(0, Math.min(limit, 30))
@@ -1033,19 +997,11 @@ class AlpacaService {
         return majorExchangeAssets;
       } catch (fallbackError) {
         logger.error('Fallback assets fetch also failed:', fallbackError.message);
-        return []; // Return empty array if everything fails
+        return [];
       }
     }
   }
 
-  // ============================================================
-  // WATCHLIST MANAGEMENT - Alpaca API Integration
-  // ============================================================
-
-  /**
-   * Get all watchlists for the authenticated user
-   * @returns {Promise<Array>} Array of watchlist objects
-   */
   async getAllWatchlists() {
     try {
       const response = await axios.get(`${this.paperUrl}/v2/watchlists`, {
@@ -1060,12 +1016,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Create a new watchlist
-   * @param {string} name - Name of the watchlist
-   * @param {Array<string>} symbols - Array of stock symbols
-   * @returns {Promise<Object>} Created watchlist object
-   */
   async createWatchlist(name, symbols = []) {
     try {
       const response = await axios.post(
@@ -1087,11 +1037,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Get a specific watchlist by ID
-   * @param {string} watchlistId - UUID of the watchlist
-   * @returns {Promise<Object>} Watchlist object with assets
-   */
   async getWatchlistById(watchlistId) {
     try {
       logger.info(`Fetching watchlist by ID: ${watchlistId} from ${this.paperUrl}/v2/watchlists/${watchlistId}`);
@@ -1111,13 +1056,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Update a watchlist (name and/or symbols)
-   * @param {string} watchlistId - UUID of the watchlist
-   * @param {string} name - New name for the watchlist
-   * @param {Array<string>} symbols - New array of symbols
-   * @returns {Promise<Object>} Updated watchlist object
-   */
   async updateWatchlist(watchlistId, name, symbols) {
     try {
       const response = await axios.put(
@@ -1139,12 +1077,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Add a symbol to a watchlist
-   * @param {string} watchlistId - UUID of the watchlist
-   * @param {string} symbol - Stock symbol to add
-   * @returns {Promise<Object>} Updated watchlist object
-   */
   async addSymbolToWatchlist(watchlistId, symbol) {
     try {
       const response = await axios.post(
@@ -1170,12 +1102,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Remove a symbol from a watchlist
-   * @param {string} watchlistId - UUID of the watchlist
-   * @param {string} symbol - Stock symbol to remove
-   * @returns {Promise<Object>} Updated watchlist object
-   */
   async removeSymbolFromWatchlist(watchlistId, symbol) {
     try {
       const response = await axios.delete(
@@ -1193,11 +1119,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Delete a watchlist
-   * @param {string} watchlistId - UUID of the watchlist
-   * @returns {Promise<boolean>} Success status
-   */
   async deleteWatchlist(watchlistId) {
     try {
       await axios.delete(`${this.paperUrl}/v2/watchlists/${watchlistId}`, {
@@ -1212,11 +1133,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Get watchlist with enriched market data for each symbol
-   * @param {string} watchlistId - UUID of the watchlist
-   * @returns {Promise<Object>} Watchlist with real-time quotes and price changes
-   */
   async getWatchlistWithMarketData(watchlistId) {
     try {
       const watchlist = await this.getWatchlistById(watchlistId);
@@ -1228,13 +1144,11 @@ class AlpacaService {
         };
       }
 
-      // Fetch market data for all symbols in parallel
       const marketDataPromises = watchlist.assets.map(async (asset) => {
         try {
           const quote = await this.getLatestQuote(asset.symbol);
           const bars = await this.getBars(asset.symbol, '1Day', null, null, 2);
 
-          // Use real company name from asset or fall back to hardcoded
           const companyName = asset.name || this.getCompanyName(asset.symbol);
 
           let changePercent = 0;
@@ -1291,6 +1205,291 @@ class AlpacaService {
     } catch (error) {
       logger.error('Get watchlist with market data error:', error.response?.data || error.message);
       throw new Error('Failed to get watchlist with market data');
+    }
+  }
+
+  // ============================================================
+  // FUNDING WALLET METHODS
+  // ============================================================
+
+  /**
+   * Check if we're in sandbox or production mode
+   */
+  isSandboxMode() {
+    const alpacaMode = process.env.ALPACA_MODE || 'sandbox';
+    return alpacaMode === 'sandbox';
+  }
+
+  /**
+   * Create a funding wallet for an account
+   * @param {string} accountId - Alpaca account ID
+   */
+  async createFundingWallet(accountId) {
+    try {
+      logger.info(`Creating funding wallet for account: ${accountId}`);
+
+      const response = await axios.post(
+        `${this.baseUrl}/v1/accounts/${accountId}/funding/wallets`,
+        {},
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      logger.info(`Funding wallet created successfully for account ${accountId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Create funding wallet error:', error.response?.data || error.message);
+
+      // If wallet already exists, try to get it
+      if (error.response?.status === 409) {
+        logger.info('Funding wallet already exists, fetching existing wallet');
+        return await this.getFundingWallet(accountId);
+      }
+
+      throw new Error('Failed to create funding wallet');
+    }
+  }
+
+  /**
+   * Get funding wallet for an account
+   * @param {string} accountId - Alpaca account ID
+   */
+  async getFundingWallet(accountId) {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/v1/accounts/${accountId}/funding/wallets`,
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      // Return the first wallet (accounts typically have one funding wallet)
+      return response.data[0] || null;
+    } catch (error) {
+      logger.error('Get funding wallet error:', error.response?.data || error.message);
+      throw new Error('Failed to get funding wallet');
+    }
+  }
+
+  /**
+   * Demo deposit to funding wallet (SANDBOX ONLY)
+   * Instantly adds virtual funds for testing
+   * @param {string} accountId - Alpaca account ID
+   * @param {number} amount - Amount in USD
+   */
+  async demoDepositToWallet(accountId, amount) {
+    try {
+      if (!this.isSandboxMode()) {
+        throw new Error('Demo deposits are only available in sandbox mode');
+      }
+
+      logger.info(`Demo deposit: Adding $${amount} to account ${accountId}`);
+
+      // Get or create funding wallet
+      let wallet = await this.getFundingWallet(accountId);
+      if (!wallet) {
+        wallet = await this.createFundingWallet(accountId);
+      }
+
+      // Demo deposit endpoint
+      const response = await axios.post(
+        `${this.baseUrl}/v1/accounts/${accountId}/funding/wallets/demo/deposit`,
+        {
+          amount: amount.toString(),
+          currency: 'USD'
+        },
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      logger.info(`Demo deposit successful: $${amount} added to account ${accountId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Demo deposit error:', error.response?.data || error.message);
+      throw new Error('Failed to process demo deposit');
+    }
+  }
+
+  /**
+   * Create ACH relationship (for production funding)
+   * @param {string} accountId - Alpaca account ID
+   * @param {object} bankDetails - Bank account details
+   */
+  async createACHRelationship(accountId, bankDetails) {
+    try {
+      if (this.isSandboxMode()) {
+        logger.info('Creating ACH relationship in sandbox mode');
+      }
+
+      const response = await axios.post(
+        `${this.baseUrl}/v1/accounts/${accountId}/ach_relationships`,
+        {
+          account_owner_name: bankDetails.accountOwnerName,
+          bank_account_type: bankDetails.accountType, // CHECKING or SAVINGS
+          bank_account_number: bankDetails.accountNumber,
+          bank_routing_number: bankDetails.routingNumber,
+          nickname: bankDetails.nickname || 'Primary Bank'
+        },
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      logger.info(`ACH relationship created for account ${accountId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Create ACH relationship error:', error.response?.data || error.message);
+      throw new Error('Failed to create ACH relationship');
+    }
+  }
+
+  /**
+   * Get ACH relationships for an account
+   * @param {string} accountId - Alpaca account ID
+   */
+  async getACHRelationships(accountId) {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/v1/accounts/${accountId}/ach_relationships`,
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get ACH relationships error:', error.response?.data || error.message);
+      throw new Error('Failed to get ACH relationships');
+    }
+  }
+
+  /**
+   * Create a transfer (deposit or withdrawal)
+   * @param {string} accountId - Alpaca account ID
+   * @param {object} transferData - Transfer details
+   */
+  async createTransfer(accountId, transferData) {
+    try {
+      logger.info(`Creating transfer for account ${accountId}:`, {
+        amount: transferData.amount,
+        direction: transferData.direction
+      });
+
+      const response = await axios.post(
+        `${this.baseUrl}/v1/accounts/${accountId}/transfers`,
+        {
+          transfer_type: 'ach',
+          relationship_id: transferData.relationshipId,
+          amount: transferData.amount.toString(),
+          direction: transferData.direction // INCOMING or OUTGOING
+        },
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      logger.info(`Transfer created successfully for account ${accountId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Create transfer error:', error.response?.data || error.message);
+      throw new Error('Failed to create transfer');
+    }
+  }
+
+  /**
+   * Get transfer details
+   * @param {string} accountId - Alpaca account ID
+   * @param {string} transferId - Transfer ID
+   */
+  async getTransfer(accountId, transferId) {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/v1/accounts/${accountId}/transfers/${transferId}`,
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get transfer error:', error.response?.data || error.message);
+      throw new Error('Failed to get transfer');
+    }
+  }
+
+  /**
+   * Get all transfers for an account
+   * @param {string} accountId - Alpaca account ID
+   */
+  async getTransfers(accountId) {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/v1/accounts/${accountId}/transfers`,
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get transfers error:', error.response?.data || error.message);
+      throw new Error('Failed to get transfers');
+    }
+  }
+
+  /**
+   * Unified deposit method - handles both sandbox and production
+   * @param {string} accountId - Alpaca account ID
+   * @param {number} amount - Amount in USD
+   * @param {string} relationshipId - ACH relationship ID (production only)
+   */
+  async depositToAccount(accountId, amount, relationshipId = null) {
+    try {
+      if (this.isSandboxMode()) {
+        // Sandbox: Use demo deposit
+        return await this.demoDepositToWallet(accountId, amount);
+      } else {
+        // Production: Use ACH transfer
+        if (!relationshipId) {
+          throw new Error('ACH relationship ID required for production deposits');
+        }
+        return await this.createTransfer(accountId, {
+          amount,
+          direction: 'INCOMING',
+          relationshipId
+        });
+      }
+    } catch (error) {
+      logger.error('Deposit to account error:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Withdraw from account
+   * @param {string} accountId - Alpaca account ID
+   * @param {number} amount - Amount in USD
+   * @param {string} relationshipId - ACH relationship ID
+   */
+  async withdrawFromAccount(accountId, amount, relationshipId) {
+    try {
+      if (this.isSandboxMode()) {
+        // In sandbox, we can simulate withdrawal
+        logger.info(`Sandbox withdrawal: $${amount} from account ${accountId}`);
+        // Note: Alpaca sandbox might not have a demo withdrawal endpoint
+        // We'll create an outgoing transfer instead
+      }
+
+      return await this.createTransfer(accountId, {
+        amount,
+        direction: 'OUTGOING',
+        relationshipId
+      });
+    } catch (error) {
+      logger.error('Withdraw from account error:', error.message);
+      throw error;
     }
   }
 }

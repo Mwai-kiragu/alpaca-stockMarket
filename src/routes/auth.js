@@ -8,11 +8,9 @@ const {
   acceptTermsAndPrivacy,
   getMe,
   checkKYCStatus,
-  // Rivenapp pattern endpoints
   requestPasswordReset,
   resetPassword,
   getCurrentUser,
-  // Account management
   deleteAccount,
   recoverAccount
 } = require('../controllers/authController');

@@ -22,6 +22,7 @@ const onboardingRoutes = require('./routes/onboarding');
 // Additional platform routes
 const biometricRoutes = require('./routes/biometric');
 const walletRoutes = require('./routes/wallet');
+const fundingRoutes = require('./routes/funding');
 const orderRoutes = require('./routes/orders');
 const stockRoutes = require('./routes/stocks');
 const portfolioRoutes = require('./routes/portfolio');
@@ -98,6 +99,7 @@ app.use('/api/v1/callback', callbackRoutes);
 // Trading platform endpoints
 app.use('/api/v1/biometric', biometricRoutes);
 app.use('/api/v1/wallet', walletRoutes);
+app.use('/api/v1/funding', fundingRoutes);
 app.use('/api/v1/orders', orderRoutes);
 app.use('/api/v1/stocks', stockRoutes);
 app.use('/api/v1/portfolio', portfolioRoutes);
