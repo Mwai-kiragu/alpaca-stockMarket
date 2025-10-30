@@ -7,7 +7,7 @@ class EmailService {
     this.transporter = nodemailer.createTransport({
       host: process.env.MAIL_HOST || 'mail.rivenapp.com',
       port: port,
-      secure: port === 587, // true for 587, false for other ports
+      secure: port === 465, // true for 465 (SSL), false for 587 (STARTTLS)
       auth: {
         user: process.env.MAIL_USERNAME,
         pass: process.env.MAIL_PASSWORD,
