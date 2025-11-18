@@ -2,8 +2,6 @@ const express = require('express');
 const {
   getWallet,
   getTransactions,
-  initiateDeposit,
-  mpesaCallback,
   checkDepositStatus,
   convertCurrency,
   initiateWithdrawal,
@@ -31,10 +29,11 @@ const router = express.Router();
 router.get('/', auth, getWallet);
 router.get('/transactions', auth, paginationValidation, getTransactions);
 
-// Deposit endpoints
-router.post('/deposit', auth, depositValidation, initiateDeposit);
-router.post('/mpesa/callback/:reference', mpesaCallback);
-router.post('/mpesa/callback', mpesaCallback);
+// Deposit endpoints - DEPRECATED
+// Old M-Pesa Direct endpoints removed - Use KCB M-Pesa STK Push instead at /api/v1/kcb/stkpush
+// router.post('/deposit', auth, depositValidation, initiateDeposit);
+// router.post('/mpesa/callback/:reference', mpesaCallback);
+// router.post('/mpesa/callback', mpesaCallback);
 router.get('/deposit/status/:reference', auth, checkDepositStatus);
 
 // Withdrawal endpoints

@@ -1,6 +1,5 @@
 const { Wallet, Transaction } = require('../models/Wallet');
 const { User } = require('../models');
-const mpesaService = require('../services/mpesaDirectService');
 const exchangeService = require('../services/exchangeService');
 const logger = require('../utils/logger');
 
