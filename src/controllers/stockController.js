@@ -973,14 +973,6 @@ const deleteWatchlist = async (req, res) => {
   }
 };
 
-// ============================================================
-// MARKET MOVERS & EVENTS
-// ============================================================
-
-/**
- * Get top movers (gainers and losers)
- * GET /api/v1/stocks/movers
- */
 const getTopMovers = async (req, res) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
@@ -994,12 +986,34 @@ const getTopMovers = async (req, res) => {
 
     const movers = await alpacaService.getTopMovers(limit);
 
+    // Get market status
+    let marketStatus;
+    try {
+      marketStatus = await alpacaService.getMarketStatus();
+      if (!marketStatus.is_open) {
+        marketStatus.message = 'Market closed. Showing data from last trading session';
+      } else {
+        marketStatus.message = 'Market is open. Showing live data';
+      }
+    } catch (error) {
+      marketStatus = {
+        is_open: false,
+        message: 'Market status unavailable'
+      };
+    }
+
     res.json({
       success: true,
       data: {
         gainers: movers.gainers,
         losers: movers.losers,
         lastUpdated: movers.lastUpdated
+      },
+      marketStatus: {
+        isOpen: marketStatus.is_open,
+        message: marketStatus.message,
+        nextOpen: marketStatus.next_open,
+        nextClose: marketStatus.next_close
       },
       count: {
         gainers: movers.gainers.length,
@@ -1015,10 +1029,6 @@ const getTopMovers = async (req, res) => {
   }
 };
 
-/**
- * Get upcoming market events
- * GET /api/v1/stocks/events
- */
 const getUpcomingEvents = async (req, res) => {
   try {
     const daysAhead = parseInt(req.query.days) || 7;
@@ -1050,6 +1060,215 @@ const getUpcomingEvents = async (req, res) => {
   }
 };
 
+const getStockChart = async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { timeframe = '1Day', limit = 30, chartType = 'line' } = req.query;
+
+    // Validate inputs
+    const validTimeframes = ['1Min', '5Min', '15Min', '30Min', '1Hour', '1Day', '1Week', '1Month'];
+    if (!validTimeframes.includes(timeframe)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid timeframe. Valid options: ${validTimeframes.join(', ')}`
+      });
+    }
+
+    const validChartTypes = ['line', 'candlestick', 'bar'];
+    if (!validChartTypes.includes(chartType)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid chart type. Valid options: ${validChartTypes.join(', ')}`
+      });
+    }
+
+    // Get bars data
+    logger.info(`Fetching bars for ${symbol}: timeframe=${timeframe}, limit=${limit}`);
+
+    const bars = await alpacaService.getBars(
+      symbol.toUpperCase(),
+      timeframe,
+      null,
+      null,
+      Math.min(parseInt(limit), 100)
+    );
+
+    logger.info(`Received ${bars?.length || 0} bars for ${symbol}`);
+
+    if (!bars || bars.length === 0) {
+      logger.warn(`No bars data returned for ${symbol} with timeframe ${timeframe}`);
+      return res.status(404).json({
+        success: false,
+        message: 'No chart data available for this symbol. The market may be closed or this symbol may not have recent trading data.'
+      });
+    }
+
+    // Get asset info
+    let assetName = symbol;
+    try {
+      const asset = await alpacaService.getAsset(symbol.toUpperCase());
+      assetName = asset.name;
+    } catch (error) {
+      logger.debug(`Could not fetch asset name for ${symbol}`);
+    }
+
+    // Format data for response
+    const chartData = bars.map(bar => ({
+      timestamp: bar.t,
+      open: parseFloat(bar.o),
+      high: parseFloat(bar.h),
+      low: parseFloat(bar.l),
+      close: parseFloat(bar.c),
+      volume: parseInt(bar.v)
+    }));
+
+    // Generate QuickChart URL for chart image
+    const labels = chartData.map(d => new Date(d.timestamp).toLocaleDateString());
+    const prices = chartData.map(d => d.close);
+
+    let chartConfig;
+    if (chartType === 'candlestick') {
+      // For candlestick, return data for frontend to render
+      chartConfig = null;
+    } else {
+      // Generate line/bar chart URL
+      chartConfig = {
+        type: chartType === 'bar' ? 'bar' : 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: `${symbol.toUpperCase()} Price`,
+            data: prices,
+            borderColor: prices[prices.length - 1] >= prices[0] ? '#10b981' : '#ef4444',
+            backgroundColor: prices[prices.length - 1] >= prices[0] ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+            fill: true,
+            tension: 0.4
+          }]
+        },
+        options: {
+          plugins: {
+            title: {
+              display: true,
+              text: `${assetName} (${symbol.toUpperCase()})`
+            },
+            legend: {
+              display: false
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: false
+            }
+          }
+        }
+      };
+    }
+
+    // Calculate trend
+    const firstPrice = chartData[0].close;
+    const lastPrice = chartData[chartData.length - 1].close;
+    const change = lastPrice - firstPrice;
+    const changePercent = ((change / firstPrice) * 100).toFixed(2);
+
+    // Get market status to indicate if showing historical data
+    let marketStatus;
+    let lastDataTimestamp = chartData[chartData.length - 1].timestamp;
+    let isLiveData = false;
+
+    try {
+      marketStatus = await alpacaService.getMarketStatus();
+      const lastDataDate = new Date(lastDataTimestamp);
+      const now = new Date();
+      const daysSinceLastData = Math.floor((now - lastDataDate) / (1000 * 60 * 60 * 24));
+      const hoursSinceLastData = Math.floor((now - lastDataDate) / (1000 * 60 * 60));
+      const minutesSinceLastData = Math.floor((now - lastDataDate) / (1000 * 60));
+
+      // Determine if data is recent enough to be considered "live"
+      // Data more than 1 day old is definitely historical
+      if (daysSinceLastData > 30) {
+        // Data is extremely old (more than 30 days) - free tier limitation
+        const monthsOld = Math.floor(daysSinceLastData / 30);
+        marketStatus.message = `⚠️ Historical data from ${lastDataDate.toLocaleDateString()} (${monthsOld} months ago). Free tier IEX feed has limited access to recent data. Upgrade to a paid Alpaca subscription for real-time data.`;
+        isLiveData = false;
+      } else if (daysSinceLastData > 1) {
+        // Data is old (more than 1 day)
+        marketStatus.message = `Historical data from ${lastDataDate.toLocaleDateString()} (${daysSinceLastData} days ago) - Most recent available on free tier`;
+        isLiveData = false;
+      } else if (hoursSinceLastData >= 1) {
+        // Data is several hours old
+        marketStatus.message = `Delayed data from ${lastDataDate.toLocaleTimeString()} (${hoursSinceLastData} hours ago)`;
+        isLiveData = false;
+      } else if (minutesSinceLastData >= 15) {
+        // Data is 15+ minutes old (typical free tier delay)
+        if (marketStatus.is_open) {
+          marketStatus.message = `Market open. Delayed ${minutesSinceLastData} min - Free tier limitation`;
+        } else {
+          marketStatus.message = `Market closed. Showing last session from ${lastDataDate.toLocaleString()}`;
+        }
+        isLiveData = false;
+      } else {
+        // Data is recent (under 15 minutes old)
+        if (marketStatus.is_open) {
+          marketStatus.message = 'Market open. Showing near real-time data';
+          isLiveData = true;
+        } else {
+          marketStatus.message = `Market closed. Last session data from ${lastDataDate.toLocaleString()}`;
+          isLiveData = false;
+        }
+      }
+    } catch (error) {
+      logger.warn('Could not fetch market status:', error.message);
+      const lastDataDate = new Date(lastDataTimestamp);
+      const now = new Date();
+      const daysSinceLastData = Math.floor((now - lastDataDate) / (1000 * 60 * 60 * 24));
+
+      marketStatus = {
+        is_open: false,
+        message: daysSinceLastData > 1
+          ? `Historical data from ${lastDataDate.toLocaleDateString()} (${daysSinceLastData} days ago)`
+          : `Showing data from ${lastDataDate.toLocaleDateString()}`
+      };
+    }
+
+    res.json({
+      success: true,
+      symbol: symbol.toUpperCase(),
+      name: assetName,
+      logo: alpacaService.getCompanyLogo(symbol.toUpperCase(), assetName),
+      timeframe,
+      chartType,
+      data: chartData,
+      chartImageUrl: chartConfig ? `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}` : null,
+      marketStatus: {
+        isOpen: marketStatus.is_open,
+        message: marketStatus.message,
+        nextOpen: marketStatus.next_open,
+        nextClose: marketStatus.next_close,
+        isLiveData: isLiveData,
+        lastDataTimestamp: lastDataTimestamp
+      },
+      stats: {
+        firstPrice,
+        lastPrice,
+        change,
+        changePercent: parseFloat(changePercent),
+        trend: change >= 0 ? 'up' : 'down',
+        high: Math.max(...chartData.map(d => d.high)),
+        low: Math.min(...chartData.map(d => d.low)),
+        totalVolume: chartData.reduce((sum, d) => sum + d.volume, 0),
+        dataAge: isLiveData ? 'live' : `Last updated: ${new Date(lastDataTimestamp).toLocaleString()}`
+      },
+      count: chartData.length
+    });
+  } catch (error) {
+    logger.error('Get stock chart error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch chart data. Please try again in a moment.'
+    });
+  }
+};
+
 module.exports = {
   getQuote,
   getLatestTrade,
@@ -1070,5 +1289,7 @@ module.exports = {
   deleteWatchlist,
   // Market movers & events
   getTopMovers,
-  getUpcomingEvents
+  getUpcomingEvents,
+  // Charts
+  getStockChart
 };

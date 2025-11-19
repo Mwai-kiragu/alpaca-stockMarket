@@ -10,8 +10,11 @@ class WebSocketService {
     this.server = null;
     this.connectedClients = new Map();
     this.subscribedSymbols = new Set();
+    this.chartSubscriptions = new Map(); // symbol -> Set of socketIds
     this.priceUpdateInterval = null;
-    this.updateIntervalMs = 5000; // 5 seconds
+    this.chartUpdateInterval = null;
+    this.updateIntervalMs = 5000; // 5 seconds for general updates
+    this.chartUpdateIntervalMs = 1000; // 1 second for chart updates (faster)
     this.popularSymbols = [
       'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX',
       'V', 'JPM', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC', 'DIS'
@@ -36,6 +39,7 @@ class WebSocketService {
 
       this.setupEventHandlers();
       this.startPriceUpdates();
+      this.startChartUpdates();
 
       logger.info('WebSocket service initialized successfully');
       return this.io;
@@ -107,6 +111,16 @@ class WebSocketService {
       // Handle popular assets subscription
       socket.on('subscribe_popular', () => {
         this.handlePopularSubscription(socket);
+      });
+
+      // Handle chart subscription for real-time updates
+      socket.on('subscribe_chart', (data) => {
+        this.handleChartSubscription(socket, data);
+      });
+
+      // Handle chart unsubscription
+      socket.on('unsubscribe_chart', (data) => {
+        this.handleChartUnsubscription(socket, data);
       });
 
       // Handle ping/pong for connection health
@@ -289,6 +303,100 @@ class WebSocketService {
     logger.debug(`Client ${socket.id} subscribed to popular assets`);
   }
 
+  handleChartSubscription(socket, data) {
+    try {
+      const { symbol, timeframe = '1Min' } = data;
+
+      if (!symbol) {
+        socket.emit('error', { message: 'Symbol is required for chart subscription' });
+        return;
+      }
+
+      const upperSymbol = symbol.toUpperCase();
+
+      // Add to chart subscriptions
+      if (!this.chartSubscriptions.has(upperSymbol)) {
+        this.chartSubscriptions.set(upperSymbol, new Set());
+      }
+      this.chartSubscriptions.get(upperSymbol).add(socket.id);
+
+      // Also add to general subscriptions
+      const client = this.connectedClients.get(socket.id);
+      if (client) {
+        client.subscribedSymbols.add(upperSymbol);
+        this.subscribedSymbols.add(upperSymbol);
+      }
+
+      socket.emit('chart_subscription_confirmed', {
+        symbol: upperSymbol,
+        timeframe,
+        timestamp: Date.now()
+      });
+
+      logger.debug(`Client ${socket.id} subscribed to chart for ${upperSymbol} (${timeframe})`);
+      this.updateClientActivity(socket.id);
+
+      // Send initial chart data
+      this.sendInitialChartData(socket, upperSymbol, timeframe);
+    } catch (error) {
+      logger.error('Error handling chart subscription:', error);
+      socket.emit('error', { message: 'Chart subscription failed' });
+    }
+  }
+
+  handleChartUnsubscription(socket, data) {
+    try {
+      const { symbol } = data;
+
+      if (!symbol) return;
+
+      const upperSymbol = symbol.toUpperCase();
+
+      // Remove from chart subscriptions
+      if (this.chartSubscriptions.has(upperSymbol)) {
+        this.chartSubscriptions.get(upperSymbol).delete(socket.id);
+
+        // Clean up empty sets
+        if (this.chartSubscriptions.get(upperSymbol).size === 0) {
+          this.chartSubscriptions.delete(upperSymbol);
+        }
+      }
+
+      socket.emit('chart_unsubscription_confirmed', {
+        symbol: upperSymbol,
+        timestamp: Date.now()
+      });
+
+      logger.debug(`Client ${socket.id} unsubscribed from chart for ${upperSymbol}`);
+    } catch (error) {
+      logger.error('Error handling chart unsubscription:', error);
+    }
+  }
+
+  async sendInitialChartData(socket, symbol, timeframe) {
+    try {
+      const bars = await alpacaService.getBars(symbol, timeframe, null, null, 50);
+
+      const chartData = bars.map(bar => ({
+        timestamp: bar.t,
+        open: parseFloat(bar.o),
+        high: parseFloat(bar.h),
+        low: parseFloat(bar.l),
+        close: parseFloat(bar.c),
+        volume: parseInt(bar.v)
+      }));
+
+      socket.emit('chart_initial_data', {
+        symbol,
+        timeframe,
+        data: chartData,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      logger.error(`Error sending initial chart data for ${symbol}:`, error);
+    }
+  }
+
   handleDisconnection(socketId) {
     const client = this.connectedClients.get(socketId);
     if (client) {
@@ -300,6 +408,14 @@ class WebSocketService {
 
         if (!stillSubscribed) {
           this.subscribedSymbols.delete(symbol);
+        }
+      });
+
+      // Clean up chart subscriptions
+      this.chartSubscriptions.forEach((socketIds, symbol) => {
+        socketIds.delete(socketId);
+        if (socketIds.size === 0) {
+          this.chartSubscriptions.delete(symbol);
         }
       });
 
@@ -381,6 +497,18 @@ class WebSocketService {
     logger.info(`Started price updates with ${this.updateIntervalMs}ms interval`);
   }
 
+  startChartUpdates() {
+    if (this.chartUpdateInterval) {
+      clearInterval(this.chartUpdateInterval);
+    }
+
+    this.chartUpdateInterval = setInterval(async () => {
+      await this.broadcastChartUpdates();
+    }, this.chartUpdateIntervalMs);
+
+    logger.info(`Started chart updates with ${this.chartUpdateIntervalMs}ms interval`);
+  }
+
   async broadcastPriceUpdates() {
     try {
       if (this.subscribedSymbols.size === 0) {
@@ -453,6 +581,56 @@ class WebSocketService {
       logger.debug(`Broadcasted ${Object.keys(updates).length} price updates to ${this.connectedClients.size} clients`);
     } catch (error) {
       logger.error('Error broadcasting price updates:', error);
+    }
+  }
+
+  async broadcastChartUpdates() {
+    try {
+      if (this.chartSubscriptions.size === 0) {
+        return;
+      }
+
+      const timestamp = Date.now();
+
+      // Fetch latest bar for each subscribed chart
+      for (const [symbol, socketIds] of this.chartSubscriptions.entries()) {
+        if (socketIds.size === 0) continue;
+
+        try {
+          // Get the latest 1-minute bar
+          const bars = await alpacaService.getBars(symbol, '1Min', null, null, 1);
+
+          if (bars && bars.length > 0) {
+            const latestBar = bars[0];
+            const chartUpdate = {
+              symbol,
+              data: {
+                timestamp: latestBar.t,
+                open: parseFloat(latestBar.o),
+                high: parseFloat(latestBar.h),
+                low: parseFloat(latestBar.l),
+                close: parseFloat(latestBar.c),
+                volume: parseInt(latestBar.v)
+              },
+              timestamp
+            };
+
+            // Emit to all clients subscribed to this chart
+            socketIds.forEach(socketId => {
+              const client = this.connectedClients.get(socketId);
+              if (client) {
+                client.socket.emit('chart_update', chartUpdate);
+              }
+            });
+          }
+        } catch (error) {
+          logger.debug(`Failed to get chart update for ${symbol}:`, error.message);
+        }
+      }
+
+      logger.debug(`Broadcasted chart updates for ${this.chartSubscriptions.size} symbols`);
+    } catch (error) {
+      logger.error('Error broadcasting chart updates:', error);
     }
   }
 
@@ -573,6 +751,11 @@ class WebSocketService {
     if (this.priceUpdateInterval) {
       clearInterval(this.priceUpdateInterval);
       this.priceUpdateInterval = null;
+    }
+
+    if (this.chartUpdateInterval) {
+      clearInterval(this.chartUpdateInterval);
+      this.chartUpdateInterval = null;
     }
 
     if (this.io) {

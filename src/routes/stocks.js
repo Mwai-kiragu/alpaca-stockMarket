@@ -17,7 +17,8 @@ const {
   removeSymbolFromWatchlist,
   deleteWatchlist,
   getTopMovers,
-  getUpcomingEvents
+  getUpcomingEvents,
+  getStockChart
 } = require('../controllers/stockController');
 const { auth } = require('../middleware/auth');
 
@@ -27,6 +28,7 @@ const router = express.Router();
 router.get('/quote/:symbol', auth, getQuote);
 router.get('/trade/:symbol', auth, getLatestTrade);
 router.get('/bars/:symbol', auth, getBars);
+router.get('/chart/:symbol', auth, getStockChart);
 router.post('/quotes/multiple', auth, getMultipleQuotes);
 router.get('/market/status', auth, getMarketStatus);
 router.get('/news', auth, getNews);

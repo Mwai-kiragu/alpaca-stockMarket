@@ -821,21 +821,116 @@ class AlpacaService {
       const params = {
         symbols: symbol,
         timeframe,
-        limit
+        limit,
+        feed: 'iex', // Use IEX feed for free tier (instead of SIP which requires paid subscription)
+        adjustment: 'split' // Adjust for stock splits
       };
 
-      if (start) params.start = start;
-      if (end) params.end = end;
+      // If no start/end specified, get most recent data available
+      if (!start && !end) {
+        const now = new Date();
+        const startDate = new Date();
 
-      // Use Paper Trading API for market data
+        // Go back far enough to get the requested number of bars
+        if (timeframe.includes('Day')) {
+          startDate.setDate(startDate.getDate() - (limit * 2)); // Go back 2x the limit in days
+        } else if (timeframe.includes('Week')) {
+          startDate.setDate(startDate.getDate() - (limit * 7 * 2)); // Go back weeks
+        } else if (timeframe.includes('Month')) {
+          startDate.setMonth(startDate.getMonth() - (limit * 2)); // Go back months
+        } else {
+          // For intraday (minutes/hours), go back several days
+          startDate.setDate(startDate.getDate() - 7);
+        }
+
+        params.start = startDate.toISOString().split('T')[0];
+        // Explicitly set end date to today to request most recent data
+        params.end = now.toISOString().split('T')[0];
+
+        logger.info(`Date range for ${symbol}: start=${params.start}, end=${params.end}`);
+      } else {
+        if (start) params.start = start;
+        if (end) params.end = end;
+      }
+
+      logger.debug(`Fetching bars for ${symbol}: ${JSON.stringify(params)}`);
+
+      // Use Data API for market data
       const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/bars`, {
         headers: this.paperHeaders,
         params
       });
 
-      return response.data.bars[symbol] || [];
+      const bars = response.data.bars[symbol] || [];
+
+      if (bars.length > 0) {
+        const firstBar = bars[0];
+        const lastBar = bars[bars.length - 1];
+        const lastBarDate = new Date(lastBar.t);
+        const now = new Date();
+        const daysSinceLastBar = Math.floor((now - lastBarDate) / (1000 * 60 * 60 * 24));
+
+        logger.info(`Received ${bars.length} bars for ${symbol}:`);
+        logger.info(`  First bar: ${firstBar.t}`);
+        logger.info(`  Last bar: ${lastBar.t}`);
+        logger.info(`  Data age: ${daysSinceLastBar} days old`);
+        logger.info(`  Current date: ${now.toISOString()}`);
+
+        if (daysSinceLastBar > 30) {
+          logger.warn(`⚠️  DATA AGE WARNING: Data for ${symbol} is ${daysSinceLastBar} days old!`);
+          logger.warn(`⚠️  This indicates the free tier IEX feed has limited access to recent data.`);
+          logger.warn(`⚠️  Free tier typically provides historical data only, not real-time or recent data.`);
+          logger.warn(`⚠️  Consider upgrading to a paid Alpaca subscription for real-time data access.`);
+        }
+      } else {
+        logger.warn(`No bars data received for ${symbol}`);
+      }
+
+      return bars;
     } catch (error) {
       logger.error('Get bars error:', error.response?.data || error.message);
+
+      // Handle subscription/permission errors gracefully
+      if (error.response?.data?.message?.includes('subscription') ||
+          error.response?.data?.message?.includes('permit')) {
+        logger.warn(`Subscription limitation for ${symbol}, trying alternative approach`);
+
+        // Try with longer delay and IEX feed explicitly
+        try {
+          const endDate = new Date();
+          endDate.setDate(endDate.getDate() - 1); // Yesterday's data
+          const startDate = new Date();
+          startDate.setDate(startDate.getDate() - 90); // 90 days ago
+
+          const fallbackParams = {
+            symbols: symbol,
+            timeframe: '1Day',
+            limit: Math.min(limit, 100),
+            feed: 'iex',
+            start: startDate.toISOString().split('T')[0],
+            end: endDate.toISOString().split('T')[0]
+          };
+
+          logger.info(`Retrying with fallback params: ${JSON.stringify(fallbackParams)}`);
+
+          const fallbackResponse = await axios.get(`${this.dataBaseUrl}/v2/stocks/bars`, {
+            headers: this.paperHeaders,
+            params: fallbackParams
+          });
+
+          return fallbackResponse.data.bars[symbol] || [];
+        } catch (fallbackError) {
+          logger.error('Fallback bars request also failed:', fallbackError.message);
+          return [];
+        }
+      }
+
+      // Return empty array for other non-critical errors
+      if (error.response?.status === 404 || error.response?.status === 422) {
+        logger.warn(`No bars data available for ${symbol}`);
+        return [];
+      }
+
       throw new Error('Failed to get price bars');
     }
   }
