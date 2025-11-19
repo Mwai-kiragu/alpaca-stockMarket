@@ -1002,6 +1002,184 @@ class AlpacaService {
     }
   }
 
+  async getTopGainers(limit = 20) {
+    try {
+      const response = await axios.get(`${this.dataBaseUrl}/v1beta1/screener/stocks/movers`, {
+        headers: this.paperHeaders,
+        params: {
+          top: Math.min(limit, 20)
+        }
+      });
+
+      logger.info(`Retrieved ${response.data.gainers?.length || 0} top gainers from Alpaca`);
+      return response.data.gainers || [];
+    } catch (error) {
+      logger.error('Get top gainers error:', error.response?.data || error.message);
+      return [];
+    }
+  }
+
+  async getTopLosers(limit = 20) {
+    try {
+      const response = await axios.get(`${this.dataBaseUrl}/v1beta1/screener/stocks/movers`, {
+        headers: this.paperHeaders,
+        params: {
+          top: Math.min(limit, 20)
+        }
+      });
+
+      logger.info(`Retrieved ${response.data.losers?.length || 0} top losers from Alpaca`);
+      return response.data.losers || [];
+    } catch (error) {
+      logger.error('Get top losers error:', error.response?.data || error.message);
+      return [];
+    }
+  }
+
+  async getTopMovers(limit = 20) {
+    try {
+      const response = await axios.get(`${this.dataBaseUrl}/v1beta1/screener/stocks/movers`, {
+        headers: this.paperHeaders,
+        params: {
+          top: Math.min(limit, 20)
+        }
+      });
+
+      const gainers = response.data.gainers || [];
+      const losers = response.data.losers || [];
+
+      // Enrich with market data (quotes and logos)
+      const enrichGainers = await Promise.all(
+        gainers.slice(0, limit).map(async (stock) => {
+          try {
+            const quote = await this.getLatestQuote(stock.symbol);
+            const asset = await this.getAsset(stock.symbol);
+
+            return {
+              symbol: stock.symbol,
+              name: asset.name || stock.symbol,
+              logo: this.getCompanyLogo(stock.symbol, asset.name),
+              price: stock.price,
+              change: stock.change,
+              changePercent: stock.percent_change,
+              volume: stock.volume,
+              marketCap: stock.market_cap,
+              askPrice: quote.ap,
+              bidPrice: quote.bp,
+              lastUpdated: quote.t
+            };
+          } catch (error) {
+            logger.warn(`Failed to enrich data for ${stock.symbol}:`, error.message);
+            return {
+              symbol: stock.symbol,
+              name: stock.symbol,
+              logo: this.getCompanyLogo(stock.symbol, stock.symbol),
+              price: stock.price,
+              change: stock.change,
+              changePercent: stock.percent_change,
+              volume: stock.volume,
+              marketCap: stock.market_cap
+            };
+          }
+        })
+      );
+
+      const enrichLosers = await Promise.all(
+        losers.slice(0, limit).map(async (stock) => {
+          try {
+            const quote = await this.getLatestQuote(stock.symbol);
+            const asset = await this.getAsset(stock.symbol);
+
+            return {
+              symbol: stock.symbol,
+              name: asset.name || stock.symbol,
+              logo: this.getCompanyLogo(stock.symbol, asset.name),
+              price: stock.price,
+              change: stock.change,
+              changePercent: stock.percent_change,
+              volume: stock.volume,
+              marketCap: stock.market_cap,
+              askPrice: quote.ap,
+              bidPrice: quote.bp,
+              lastUpdated: quote.t
+            };
+          } catch (error) {
+            logger.warn(`Failed to enrich data for ${stock.symbol}:`, error.message);
+            return {
+              symbol: stock.symbol,
+              name: stock.symbol,
+              logo: this.getCompanyLogo(stock.symbol, stock.symbol),
+              price: stock.price,
+              change: stock.change,
+              changePercent: stock.percent_change,
+              volume: stock.volume,
+              marketCap: stock.market_cap
+            };
+          }
+        })
+      );
+
+      logger.info(`Retrieved ${enrichGainers.length} gainers and ${enrichLosers.length} losers`);
+
+      return {
+        gainers: enrichGainers,
+        losers: enrichLosers,
+        lastUpdated: new Date().toISOString()
+      };
+    } catch (error) {
+      logger.error('Get top movers error:', error.response?.data || error.message);
+      return {
+        gainers: [],
+        losers: [],
+        lastUpdated: new Date().toISOString()
+      };
+    }
+  }
+
+  async getUpcomingEvents(daysAhead = 7) {
+    try {
+      const today = new Date();
+      const endDate = new Date();
+      endDate.setDate(today.getDate() + daysAhead);
+
+      const formatDate = (date) => {
+        return date.toISOString().split('T')[0];
+      };
+
+      // Get market calendar
+      const calendar = await this.getMarketCalendar(formatDate(today), formatDate(endDate));
+
+      // Format events
+      const events = calendar.map(day => ({
+        date: day.date,
+        status: day.status || 'open',
+        open: day.open,
+        close: day.close,
+        sessionOpen: day.session_open,
+        sessionClose: day.session_close,
+        type: day.status === 'closed' ? 'market_closed' : 'market_open',
+        description: day.status === 'closed' ? 'Market Closed' : 'Market Trading Day'
+      }));
+
+      logger.info(`Retrieved ${events.length} upcoming market events`);
+
+      return {
+        events,
+        startDate: formatDate(today),
+        endDate: formatDate(endDate),
+        count: events.length
+      };
+    } catch (error) {
+      logger.error('Get upcoming events error:', error.response?.data || error.message);
+      return {
+        events: [],
+        startDate: null,
+        endDate: null,
+        count: 0
+      };
+    }
+  }
+
   async getAllWatchlists() {
     try {
       const response = await axios.get(`${this.paperUrl}/v2/watchlists`, {

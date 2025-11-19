@@ -9,6 +9,7 @@ const PhoneVerificationToken = require('./PhoneVerificationToken');
 const PasswordResetToken = require('./PasswordResetToken');
 const BiometricAuth = require('./BiometricAuth');
 const NotificationPreferences = require('./NotificationPreferences');
+const Watchlist = require('./Watchlist');
 
 // Define associations
 User.hasOne(Wallet, { foreignKey: 'user_id', as: 'wallet' });
@@ -48,6 +49,10 @@ BiometricAuth.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasOne(NotificationPreferences, { foreignKey: 'user_id', as: 'notificationPreferences' });
 NotificationPreferences.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
+// Watchlist associations (one watchlist per user)
+User.hasOne(Watchlist, { foreignKey: 'user_id', as: 'watchlist' });
+Watchlist.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
 module.exports = {
   sequelize,
   User,
@@ -61,5 +66,6 @@ module.exports = {
   PhoneVerificationToken,
   PasswordResetToken,
   BiometricAuth,
-  NotificationPreferences
+  NotificationPreferences,
+  Watchlist
 };

@@ -1,6 +1,7 @@
 const alpacaService = require('../services/alpacaService');
 const logger = require('../utils/logger');
 const { mapConditionCodes } = require('../utils/conditionCodes');
+const { Watchlist } = require('../models');
 
 const getQuote = async (req, res) => {
   const { symbol } = req.params;
@@ -476,49 +477,35 @@ const calculateSMA = (prices, period) => {
 /**
  * Get all watchlists for the user
  * GET /api/v1/stocks/watchlists
+ * Note: Users are limited to one watchlist, so this returns an array with max 1 item
  */
 const getAllWatchlists = async (req, res) => {
   try {
-    const watchlists = await alpacaService.getAllWatchlists();
+    const userId = req.user.id;
 
-    // Log the raw response to debug
-    logger.info('Raw watchlists from Alpaca:', JSON.stringify(watchlists, null, 2));
+    // Fetch user's watchlist from database (limited to one per user)
+    const watchlist = await Watchlist.findOne({ where: { user_id: userId } });
 
-    // Alpaca's GET /v2/watchlists sometimes returns empty assets array
-    // We need to fetch each watchlist individually to get full details
-    const detailedWatchlists = await Promise.all(
-      watchlists.map(async (w) => {
-        try {
-          // Fetch full watchlist details
-          const fullWatchlist = await alpacaService.getWatchlistById(w.id);
-
-          return {
-            id: fullWatchlist.id,
-            name: fullWatchlist.name,
-            symbolCount: fullWatchlist.assets ? fullWatchlist.assets.length : 0,
-            symbols: fullWatchlist.assets ? fullWatchlist.assets.map(a => a.symbol) : [],
-            createdAt: fullWatchlist.created_at,
-            updatedAt: fullWatchlist.updated_at
-          };
-        } catch (error) {
-          logger.warn(`Failed to fetch details for watchlist ${w.id}:`, error.message);
-          // Fallback to basic info
-          return {
-            id: w.id,
-            name: w.name,
-            symbolCount: w.assets ? w.assets.length : 0,
-            symbols: w.assets ? w.assets.map(a => a.symbol || a) : [],
-            createdAt: w.created_at,
-            updatedAt: w.updated_at
-          };
-        }
-      })
-    );
+    if (!watchlist) {
+      return res.json({
+        success: true,
+        watchlists: [],
+        count: 0
+      });
+    }
 
     res.json({
       success: true,
-      watchlists: detailedWatchlists,
-      count: detailedWatchlists.length
+      watchlists: [{
+        id: watchlist.id,
+        alpacaWatchlistId: watchlist.alpaca_watchlist_id,
+        name: watchlist.name,
+        symbolCount: watchlist.symbols.length,
+        symbols: watchlist.symbols,
+        createdAt: watchlist.created_at,
+        updatedAt: watchlist.updated_at
+      }],
+      count: 1
     });
   } catch (error) {
     logger.error('Get all watchlists error:', error);
@@ -536,6 +523,7 @@ const getAllWatchlists = async (req, res) => {
 const createWatchlist = async (req, res) => {
   try {
     const { name, symbols } = req.body;
+    const userId = req.user.id;
 
     if (!name || name.trim().length === 0) {
       return res.status(400).json({
@@ -551,26 +539,65 @@ const createWatchlist = async (req, res) => {
       });
     }
 
-    const watchlist = await alpacaService.createWatchlist(name.trim(), symbols);
+    // Check if user already has a watchlist in database (one watchlist per user limit)
+    const existingWatchlist = await Watchlist.findOne({ where: { user_id: userId } });
+
+    if (existingWatchlist) {
+      return res.status(400).json({
+        success: false,
+        message: 'You can only have one watchlist. Please update your existing watchlist instead.',
+        existingWatchlist: {
+          id: existingWatchlist.id,
+          name: existingWatchlist.name
+        }
+      });
+    }
+
+    // Clean up any existing Alpaca watchlists (from before database storage was implemented)
+    try {
+      const existingAlpacaWatchlists = await alpacaService.getAllWatchlists();
+      if (existingAlpacaWatchlists && existingAlpacaWatchlists.length > 0) {
+        logger.info(`Found ${existingAlpacaWatchlists.length} existing Alpaca watchlists. Cleaning up...`);
+        for (const wl of existingAlpacaWatchlists) {
+          await alpacaService.deleteWatchlist(wl.id);
+          logger.info(`Deleted old Alpaca watchlist: ${wl.id} (${wl.name})`);
+        }
+      }
+    } catch (cleanupError) {
+      logger.warn('Error cleaning up old watchlists:', cleanupError.message);
+      // Continue with creation even if cleanup fails
+    }
+
+    // Create watchlist in Alpaca
+    const alpacaWatchlist = await alpacaService.createWatchlist(name.trim(), symbols);
+
+    // Save to database
+    const dbWatchlist = await Watchlist.create({
+      user_id: userId,
+      alpaca_watchlist_id: alpacaWatchlist.id,
+      name: alpacaWatchlist.name,
+      symbols: alpacaWatchlist.assets.map(a => a.symbol)
+    });
 
     res.status(201).json({
       success: true,
       message: `Watchlist "${name}" created successfully.`,
       watchlist: {
-        id: watchlist.id,
-        name: watchlist.name,
-        symbols: watchlist.assets.map(a => a.symbol),
-        createdAt: watchlist.created_at,
-        updatedAt: watchlist.updated_at
+        id: dbWatchlist.id,
+        alpacaWatchlistId: dbWatchlist.alpaca_watchlist_id,
+        name: dbWatchlist.name,
+        symbols: dbWatchlist.symbols,
+        createdAt: dbWatchlist.created_at,
+        updatedAt: dbWatchlist.updated_at
       }
     });
   } catch (error) {
     logger.error('Create watchlist error:', error);
 
-    if (error.message.includes('already exists')) {
+    if (error.message.includes('already exists') || error.message.includes('must be unique')) {
       return res.status(400).json({
         success: false,
-        message: 'A watchlist with this name already exists. Please choose a different name.'
+        message: 'A watchlist with this name already exists. Please choose a different name or try again.'
       });
     }
 
@@ -583,30 +610,51 @@ const createWatchlist = async (req, res) => {
 
 /**
  * Get a specific watchlist with market data
- * GET /api/v1/stocks/watchlist/:watchlistId
+ * GET /api/v1/stocks/watchlist/:watchlistId (optional)
+ * If watchlistId is not provided, returns the user's single watchlist
  */
 const getWatchlist = async (req, res) => {
   try {
     const { watchlistId } = req.params;
+    const userId = req.user.id;
 
-    if (!watchlistId) {
-      return res.status(400).json({
+    let dbWatchlist;
+
+    if (watchlistId) {
+      // Fetch by provided ID and ensure it belongs to the user
+      dbWatchlist = await Watchlist.findOne({
+        where: {
+          id: watchlistId,
+          user_id: userId
+        }
+      });
+    } else {
+      // Fetch user's single watchlist
+      dbWatchlist = await Watchlist.findOne({ where: { user_id: userId } });
+    }
+
+    if (!dbWatchlist) {
+      return res.status(404).json({
         success: false,
-        message: 'Watchlist ID is required.'
+        message: 'You don\'t have a watchlist yet. Create one to get started.'
       });
     }
 
-    const watchlist = await alpacaService.getWatchlistWithMarketData(watchlistId);
+    // Fetch market data from Alpaca using the alpaca_watchlist_id
+    const watchlistWithMarketData = await alpacaService.getWatchlistWithMarketData(
+      dbWatchlist.alpaca_watchlist_id
+    );
 
     res.json({
       success: true,
       watchlist: {
-        id: watchlist.id,
-        name: watchlist.name,
-        assets: watchlist.assets,
-        count: watchlist.count,
-        createdAt: watchlist.created_at,
-        updatedAt: watchlist.updated_at
+        id: dbWatchlist.id,
+        alpacaWatchlistId: dbWatchlist.alpaca_watchlist_id,
+        name: watchlistWithMarketData.name,
+        assets: watchlistWithMarketData.assets,
+        count: watchlistWithMarketData.count,
+        createdAt: dbWatchlist.created_at,
+        updatedAt: dbWatchlist.updated_at
       }
     });
   } catch (error) {
@@ -628,19 +676,13 @@ const getWatchlist = async (req, res) => {
 
 /**
  * Update a watchlist (name and/or symbols)
- * PUT /api/v1/stocks/watchlist/:watchlistId
+ * PUT /api/v1/stocks/watchlist/:watchlistId (optional - uses user's single watchlist if not provided)
  */
 const updateWatchlist = async (req, res) => {
   try {
     const { watchlistId } = req.params;
     const { name, symbols } = req.body;
-
-    if (!watchlistId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Watchlist ID is required.'
-      });
-    }
+    const userId = req.user.id;
 
     if (!name || name.trim().length === 0) {
       return res.status(400).json({
@@ -656,16 +698,48 @@ const updateWatchlist = async (req, res) => {
       });
     }
 
-    const watchlist = await alpacaService.updateWatchlist(watchlistId, name.trim(), symbols);
+    // Find user's watchlist
+    let dbWatchlist;
+    if (watchlistId) {
+      dbWatchlist = await Watchlist.findOne({
+        where: {
+          id: watchlistId,
+          user_id: userId
+        }
+      });
+    } else {
+      dbWatchlist = await Watchlist.findOne({ where: { user_id: userId } });
+    }
+
+    if (!dbWatchlist) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find this watchlist. It may have been deleted.'
+      });
+    }
+
+    // Update in Alpaca
+    const alpacaWatchlist = await alpacaService.updateWatchlist(
+      dbWatchlist.alpaca_watchlist_id,
+      name.trim(),
+      symbols
+    );
+
+    // Update in database
+    await dbWatchlist.update({
+      name: alpacaWatchlist.name,
+      symbols: alpacaWatchlist.assets.map(a => a.symbol)
+    });
 
     res.json({
       success: true,
       message: 'Watchlist updated successfully.',
       watchlist: {
-        id: watchlist.id,
-        name: watchlist.name,
-        symbols: watchlist.assets.map(a => a.symbol),
-        updatedAt: watchlist.updated_at
+        id: dbWatchlist.id,
+        alpacaWatchlistId: dbWatchlist.alpaca_watchlist_id,
+        name: dbWatchlist.name,
+        symbols: dbWatchlist.symbols,
+        updatedAt: dbWatchlist.updated_at
       }
     });
   } catch (error) {
@@ -687,19 +761,13 @@ const updateWatchlist = async (req, res) => {
 
 /**
  * Add a symbol to a watchlist
- * POST /api/v1/stocks/watchlist/:watchlistId/symbols
+ * POST /api/v1/stocks/watchlist/:watchlistId/symbols (watchlistId optional)
  */
 const addSymbolToWatchlist = async (req, res) => {
   try {
     const { watchlistId } = req.params;
     const { symbol } = req.body;
-
-    if (!watchlistId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Watchlist ID is required.'
-      });
-    }
+    const userId = req.user.id;
 
     if (!symbol || typeof symbol !== 'string') {
       return res.status(400).json({
@@ -708,16 +776,46 @@ const addSymbolToWatchlist = async (req, res) => {
       });
     }
 
-    const watchlist = await alpacaService.addSymbolToWatchlist(watchlistId, symbol);
+    // Find user's watchlist
+    let dbWatchlist;
+    if (watchlistId) {
+      dbWatchlist = await Watchlist.findOne({
+        where: {
+          id: watchlistId,
+          user_id: userId
+        }
+      });
+    } else {
+      dbWatchlist = await Watchlist.findOne({ where: { user_id: userId } });
+    }
+
+    if (!dbWatchlist) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find this watchlist. It may have been deleted.'
+      });
+    }
+
+    // Add to Alpaca
+    const alpacaWatchlist = await alpacaService.addSymbolToWatchlist(
+      dbWatchlist.alpaca_watchlist_id,
+      symbol
+    );
+
+    // Update database
+    await dbWatchlist.update({
+      symbols: alpacaWatchlist.assets.map(a => a.symbol)
+    });
 
     res.json({
       success: true,
       message: `${symbol.toUpperCase()} added to your watchlist successfully.`,
       watchlist: {
-        id: watchlist.id,
-        name: watchlist.name,
-        symbols: watchlist.assets.map(a => a.symbol),
-        updatedAt: watchlist.updated_at
+        id: dbWatchlist.id,
+        alpacaWatchlistId: dbWatchlist.alpaca_watchlist_id,
+        name: dbWatchlist.name,
+        symbols: dbWatchlist.symbols,
+        updatedAt: dbWatchlist.updated_at
       }
     });
   } catch (error) {
@@ -746,29 +844,60 @@ const addSymbolToWatchlist = async (req, res) => {
 
 /**
  * Remove a symbol from a watchlist
- * DELETE /api/v1/stocks/watchlist/:watchlistId/symbols/:symbol
+ * DELETE /api/v1/stocks/watchlist/:watchlistId/symbols/:symbol (watchlistId optional)
  */
 const removeSymbolFromWatchlist = async (req, res) => {
   try {
     const { watchlistId, symbol } = req.params;
+    const userId = req.user.id;
 
-    if (!watchlistId || !symbol) {
+    if (!symbol) {
       return res.status(400).json({
         success: false,
-        message: 'Both watchlist ID and symbol are required.'
+        message: 'Symbol is required.'
       });
     }
 
-    const watchlist = await alpacaService.removeSymbolFromWatchlist(watchlistId, symbol);
+    // Find user's watchlist
+    let dbWatchlist;
+    if (watchlistId) {
+      dbWatchlist = await Watchlist.findOne({
+        where: {
+          id: watchlistId,
+          user_id: userId
+        }
+      });
+    } else {
+      dbWatchlist = await Watchlist.findOne({ where: { user_id: userId } });
+    }
+
+    if (!dbWatchlist) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find this watchlist.'
+      });
+    }
+
+    // Remove from Alpaca
+    const alpacaWatchlist = await alpacaService.removeSymbolFromWatchlist(
+      dbWatchlist.alpaca_watchlist_id,
+      symbol
+    );
+
+    // Update database
+    await dbWatchlist.update({
+      symbols: alpacaWatchlist.assets.map(a => a.symbol)
+    });
 
     res.json({
       success: true,
       message: `${symbol.toUpperCase()} removed from your watchlist successfully.`,
       watchlist: {
-        id: watchlist.id,
-        name: watchlist.name,
-        symbols: watchlist.assets.map(a => a.symbol),
-        updatedAt: watchlist.updated_at
+        id: dbWatchlist.id,
+        alpacaWatchlistId: dbWatchlist.alpaca_watchlist_id,
+        name: dbWatchlist.name,
+        symbols: dbWatchlist.symbols,
+        updatedAt: dbWatchlist.updated_at
       }
     });
   } catch (error) {
@@ -790,20 +919,38 @@ const removeSymbolFromWatchlist = async (req, res) => {
 
 /**
  * Delete a watchlist
- * DELETE /api/v1/stocks/watchlist/:watchlistId
+ * DELETE /api/v1/stocks/watchlist/:watchlistId (optional - deletes user's single watchlist if not provided)
  */
 const deleteWatchlist = async (req, res) => {
   try {
     const { watchlistId } = req.params;
+    const userId = req.user.id;
 
-    if (!watchlistId) {
-      return res.status(400).json({
+    // Find user's watchlist
+    let dbWatchlist;
+    if (watchlistId) {
+      dbWatchlist = await Watchlist.findOne({
+        where: {
+          id: watchlistId,
+          user_id: userId
+        }
+      });
+    } else {
+      dbWatchlist = await Watchlist.findOne({ where: { user_id: userId } });
+    }
+
+    if (!dbWatchlist) {
+      return res.status(404).json({
         success: false,
-        message: 'Watchlist ID is required.'
+        message: 'We couldn\'t find this watchlist. It may have already been deleted.'
       });
     }
 
-    await alpacaService.deleteWatchlist(watchlistId);
+    // Delete from Alpaca
+    await alpacaService.deleteWatchlist(dbWatchlist.alpaca_watchlist_id);
+
+    // Delete from database
+    await dbWatchlist.destroy();
 
     res.json({
       success: true,
@@ -826,6 +973,83 @@ const deleteWatchlist = async (req, res) => {
   }
 };
 
+// ============================================================
+// MARKET MOVERS & EVENTS
+// ============================================================
+
+/**
+ * Get top movers (gainers and losers)
+ * GET /api/v1/stocks/movers
+ */
+const getTopMovers = async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+
+    if (limit < 1 || limit > 20) {
+      return res.status(400).json({
+        success: false,
+        message: 'Limit must be between 1 and 20.'
+      });
+    }
+
+    const movers = await alpacaService.getTopMovers(limit);
+
+    res.json({
+      success: true,
+      data: {
+        gainers: movers.gainers,
+        losers: movers.losers,
+        lastUpdated: movers.lastUpdated
+      },
+      count: {
+        gainers: movers.gainers.length,
+        losers: movers.losers.length
+      }
+    });
+  } catch (error) {
+    logger.error('Get top movers error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch top movers. Please try again in a moment.'
+    });
+  }
+};
+
+/**
+ * Get upcoming market events
+ * GET /api/v1/stocks/events
+ */
+const getUpcomingEvents = async (req, res) => {
+  try {
+    const daysAhead = parseInt(req.query.days) || 7;
+
+    if (daysAhead < 1 || daysAhead > 30) {
+      return res.status(400).json({
+        success: false,
+        message: 'Days must be between 1 and 30.'
+      });
+    }
+
+    const eventsData = await alpacaService.getUpcomingEvents(daysAhead);
+
+    res.json({
+      success: true,
+      data: eventsData.events,
+      meta: {
+        startDate: eventsData.startDate,
+        endDate: eventsData.endDate,
+        count: eventsData.count
+      }
+    });
+  } catch (error) {
+    logger.error('Get upcoming events error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch upcoming events. Please try again in a moment.'
+    });
+  }
+};
+
 module.exports = {
   getQuote,
   getLatestTrade,
@@ -843,5 +1067,8 @@ module.exports = {
   updateWatchlist,
   addSymbolToWatchlist,
   removeSymbolFromWatchlist,
-  deleteWatchlist
+  deleteWatchlist,
+  // Market movers & events
+  getTopMovers,
+  getUpcomingEvents
 };
