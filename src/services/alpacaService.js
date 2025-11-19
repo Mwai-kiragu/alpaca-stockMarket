@@ -1150,28 +1150,50 @@ class AlpacaService {
           const bars = await this.getBars(asset.symbol, '1Day', null, null, 2);
 
           const companyName = asset.name || this.getCompanyName(asset.symbol);
+          const currentPrice = quote.ap || quote.bp;
 
           let changePercent = 0;
           let change = 0;
+          let high = 0;
+          let low = 0;
+          let volume = 0;
+
           if (bars.length >= 2) {
-            const currentPrice = quote.ap || quote.bp;
             const previousClose = parseFloat(bars[bars.length - 2].c);
             change = currentPrice - previousClose;
             changePercent = (change / previousClose) * 100;
           }
 
+          // Get today's bar data for high, low, volume
+          if (bars.length >= 1) {
+            const todayBar = bars[bars.length - 1];
+            high = parseFloat(todayBar.h);
+            low = parseFloat(todayBar.l);
+            volume = parseInt(todayBar.v) || 0;
+          }
+
           return {
             symbol: asset.symbol,
             name: companyName,
-            logo: this.getCompanyLogo(asset.symbol, companyName),
-            price: quote.ap || quote.bp,
-            askPrice: quote.ap,
-            bidPrice: quote.bp,
-            change: change,
-            changePercent: changePercent.toFixed(2),
-            timestamp: quote.t,
+            logo: `/api/v1/assets/logo/${asset.symbol}`,
             exchange: asset.exchange,
-            assetClass: asset.class
+            assetClass: asset.class,
+            status: asset.status,
+            tradable: asset.tradable,
+            marginable: asset.marginable,
+            shortable: asset.shortable,
+            easyToBorrow: asset.easy_to_borrow,
+            fractionable: asset.fractionable,
+            marketData: {
+              currentPrice: currentPrice,
+              change: change,
+              changePercent: changePercent,
+              volume: volume,
+              high: high,
+              low: low,
+              lastUpdated: quote.t,
+              isProfit: change >= 0
+            }
           };
         } catch (error) {
           logger.warn(`Failed to get market data for ${asset.symbol}:`, error.message);
@@ -1179,14 +1201,25 @@ class AlpacaService {
           return {
             symbol: asset.symbol,
             name: companyName,
-            logo: this.getCompanyLogo(asset.symbol, companyName),
-            price: 0,
-            askPrice: 0,
-            bidPrice: 0,
-            change: 0,
-            changePercent: '0.00',
-            timestamp: new Date().toISOString(),
-            error: 'Market data unavailable'
+            logo: `/api/v1/assets/logo/${asset.symbol}`,
+            exchange: asset.exchange || 'UNKNOWN',
+            assetClass: asset.class || 'us_equity',
+            status: asset.status || 'active',
+            tradable: asset.tradable !== false,
+            marginable: asset.marginable !== false,
+            shortable: asset.shortable !== false,
+            easyToBorrow: asset.easy_to_borrow !== false,
+            fractionable: asset.fractionable !== false,
+            marketData: {
+              currentPrice: 0,
+              change: 0,
+              changePercent: 0,
+              volume: 0,
+              high: 0,
+              low: 0,
+              lastUpdated: new Date().toISOString(),
+              isProfit: true
+            }
           };
         }
       });

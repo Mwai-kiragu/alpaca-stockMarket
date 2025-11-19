@@ -293,6 +293,61 @@ const getNews = async (req, res) => {
   }
 };
 
+/**
+ * Get a specific news article by ID
+ * GET /api/v1/stocks/news/:newsId
+ */
+const getNewsById = async (req, res) => {
+  try {
+    const { newsId } = req.params;
+
+    if (!newsId) {
+      return res.status(400).json({
+        success: false,
+        message: 'News ID is required'
+      });
+    }
+
+    // Fetch all recent news (Alpaca doesn't have a direct "get by ID" endpoint)
+    // So we fetch recent news and filter by ID
+    const news = await alpacaService.getNews(null, 50); // Max limit allowed by Alpaca
+
+    const article = news.find(item => item.id === newsId || item.id === parseInt(newsId));
+
+    if (!article) {
+      return res.status(404).json({
+        success: false,
+        message: 'News article not found'
+      });
+    }
+
+    const formattedArticle = {
+      id: article.id,
+      headline: article.headline,
+      summary: article.summary,
+      content: article.content,
+      author: article.author,
+      source: article.source,
+      publishedAt: article.published_at,
+      updatedAt: article.updated_at,
+      url: article.url,
+      symbols: article.symbols || [],
+      images: article.images || []
+    };
+
+    res.json({
+      success: true,
+      article: formattedArticle
+    });
+  } catch (error) {
+    logger.error('Get news by ID error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch news article'
+    });
+  }
+};
+
 const getMarketCalendar = async (req, res) => {
   try {
     const { start, end } = req.query;
@@ -778,6 +833,7 @@ module.exports = {
   getMultipleQuotes,
   getMarketStatus,
   getNews,
+  getNewsById,
   getMarketCalendar,
   getStockFundamentals,
   // Watchlist management

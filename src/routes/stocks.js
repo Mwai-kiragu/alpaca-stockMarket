@@ -6,6 +6,7 @@ const {
   getMultipleQuotes,
   getMarketStatus,
   getNews,
+  getNewsById,
   getMarketCalendar,
   getStockFundamentals,
   getAllWatchlists,
@@ -27,6 +28,7 @@ router.get('/bars/:symbol', auth, getBars);
 router.post('/quotes/multiple', auth, getMultipleQuotes);
 router.get('/market/status', auth, getMarketStatus);
 router.get('/news', auth, getNews);
+router.get('/news/:newsId', auth, getNewsById);
 router.get('/market/calendar', auth, getMarketCalendar);
 router.get('/fundamentals/:symbol', auth, getStockFundamentals);
 router.get('/watchlists', auth, getAllWatchlists);
