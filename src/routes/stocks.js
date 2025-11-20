@@ -10,6 +10,7 @@ const {
   getMarketCalendar,
   getStockFundamentals,
   getAllWatchlists,
+  manageWatchlist,
   createWatchlist,
   getWatchlist,
   updateWatchlist,
@@ -42,7 +43,7 @@ router.get('/events', auth, getUpcomingEvents);
 
 // Watchlists
 router.get('/watchlists', auth, getAllWatchlists);
-router.post('/watchlists', auth, createWatchlist);
+router.post('/watchlists', auth, manageWatchlist); // Unified endpoint (CREATE, UPDATE, ADD, REMOVE, DELETE)
 router.get('/watchlist', auth, getWatchlist); // Get user's single watchlist (no ID needed)
 router.get('/watchlist/:watchlistId', auth, getWatchlist);
 router.put('/watchlist', auth, updateWatchlist); // Update user's single watchlist (no ID needed)
