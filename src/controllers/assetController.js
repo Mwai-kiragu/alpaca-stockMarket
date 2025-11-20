@@ -1,5 +1,6 @@
 const alpacaService = require('../services/alpacaService');
 const logger = require('../utils/logger');
+const Watchlist = require('../models/Watchlist');
 
 const getAssets = async (req, res) => {
   try {
@@ -17,6 +18,19 @@ const getAssets = async (req, res) => {
     let assets;
     let isPopular = false;
     let isWatchlistOnly = false;
+
+    // Fetch user's watchlist symbols to mark assets that are in watchlist
+    let userWatchlistSymbols = [];
+    try {
+      const userWatchlist = await Watchlist.findOne({
+        where: { user_id: req.user.id }
+      });
+      if (userWatchlist && Array.isArray(userWatchlist.symbols)) {
+        userWatchlistSymbols = userWatchlist.symbols.map(s => s.toUpperCase());
+      }
+    } catch (watchlistError) {
+      logger.warn('Failed to fetch user watchlist:', watchlistError);
+    }
 
     // Check if requesting watchlist assets only
     if (isWatchlist === 'true') {
@@ -230,7 +244,8 @@ const getAssets = async (req, res) => {
           marginable: asset.marginable,
           shortable: asset.shortable,
           easyToBorrow: asset.easy_to_borrow,
-          fractionable: asset.fractionable
+          fractionable: asset.fractionable,
+          inWatchlist: userWatchlistSymbols.includes(asset.symbol.toUpperCase())
         };
 
         // Add market data for popular, watchlist, and regular assets
