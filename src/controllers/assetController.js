@@ -32,100 +32,12 @@ const getAssets = async (req, res) => {
       logger.warn('Failed to fetch user watchlist:', watchlistError);
     }
 
-    // Check if requesting watchlist assets only
+    // Check if requesting watchlist-prioritized view
     if (isWatchlist === 'true') {
       isWatchlistOnly = true;
-      // Fetch user's watchlists
-      const watchlists = await alpacaService.getAllWatchlists();
+    }
 
-      if (!watchlists || watchlists.length === 0) {
-        return res.json({
-          success: true,
-          assets: [],
-          pagination: {
-            currentPage: 1,
-            totalPages: 0,
-            totalItems: 0,
-            itemsPerPage: parseInt(limit),
-            hasNextPage: false,
-            hasPrevPage: false
-          },
-          filters: {
-            status,
-            assetClass,
-            isWatchlist: true
-          }
-        });
-      }
-
-      // Fetch detailed data for each watchlist to get symbols
-      const detailedWatchlists = await Promise.all(
-        watchlists.map(w => alpacaService.getWatchlistById(w.id))
-      );
-
-      // Collect all unique symbols from all watchlists
-      const watchlistSymbols = new Set();
-      detailedWatchlists.forEach(watchlist => {
-        if (watchlist.assets && Array.isArray(watchlist.assets)) {
-          watchlist.assets.forEach(asset => {
-            if (asset.symbol) {
-              watchlistSymbols.add(asset.symbol);
-            }
-          });
-        }
-      });
-
-      // Fetch full asset details for each watchlist symbol
-      const watchlistAssets = [];
-      await Promise.allSettled(
-        Array.from(watchlistSymbols).map(async (symbol) => {
-          try {
-            const [asset, quote, bars] = await Promise.all([
-              alpacaService.getAsset(symbol),
-              alpacaService.getLatestQuote(symbol),
-              alpacaService.getBars(symbol, '1Day', null, null, 2)
-            ]);
-
-            let changePercent = 0;
-            let change = 0;
-            const currentPrice = quote.ap || quote.bp || 0;
-
-            if (bars.length >= 2 && currentPrice > 0) {
-              const previousClose = parseFloat(bars[bars.length - 2].c);
-              change = currentPrice - previousClose;
-              changePercent = (change / previousClose) * 100;
-            }
-
-            watchlistAssets.push({
-              symbol: asset.symbol,
-              name: asset.name,
-              logo: asset.logo,
-              exchange: asset.exchange,
-              class: asset.class,
-              asset_class: asset.class,
-              status: asset.status,
-              tradable: asset.tradable,
-              marginable: asset.marginable,
-              shortable: asset.shortable,
-              easy_to_borrow: asset.easy_to_borrow,
-              fractionable: asset.fractionable,
-              currentPrice: currentPrice,
-              change: change,
-              changePercent: parseFloat(changePercent.toFixed(2)),
-              volume: bars.length > 0 ? parseInt(bars[bars.length - 1].v || 0) : 0,
-              high: bars.length > 0 ? parseFloat(bars[bars.length - 1].h || 0) : 0,
-              low: bars.length > 0 ? parseFloat(bars[bars.length - 1].l || 0) : 0,
-              lastUpdated: quote.t,
-              inWatchlist: true
-            });
-          } catch (error) {
-            logger.warn(`Failed to get data for watchlist asset ${symbol}:`, error);
-          }
-        })
-      );
-
-      assets = watchlistAssets;
-    } else if (category === 'popular') {
+    if (category === 'popular') {
       isPopular = true;
 
       // Fetch most active stocks dynamically from Alpaca
@@ -218,6 +130,21 @@ const getAssets = async (req, res) => {
         asset.symbol.toLowerCase().includes(searchLower) ||
         asset.name.toLowerCase().includes(searchLower)
       );
+    }
+
+    // Sort to prioritize watchlist items if isWatchlist flag is set
+    if (isWatchlistOnly && userWatchlistSymbols.length > 0) {
+      assets = assets.sort((a, b) => {
+        const aInWatchlist = userWatchlistSymbols.includes(a.symbol.toUpperCase());
+        const bInWatchlist = userWatchlistSymbols.includes(b.symbol.toUpperCase());
+
+        // Watchlist items first
+        if (aInWatchlist && !bInWatchlist) return -1;
+        if (!aInWatchlist && bInWatchlist) return 1;
+
+        // Within same group, maintain existing order
+        return 0;
+      });
     }
 
     // Calculate pagination
