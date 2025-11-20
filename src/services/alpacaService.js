@@ -1346,6 +1346,11 @@ class AlpacaService {
       return response.data;
     } catch (error) {
       logger.error('Update watchlist error:', error.response?.data || error.message);
+
+      if (error.response?.status === 404) {
+        throw new Error(`Watchlist not found: ${watchlistId}`);
+      }
+
       throw new Error('Failed to update watchlist');
     }
   }
@@ -1366,6 +1371,10 @@ class AlpacaService {
       return response.data;
     } catch (error) {
       logger.error('Add symbol to watchlist error:', error.response?.data || error.message);
+
+      if (error.response?.status === 404) {
+        throw new Error(`Watchlist not found: ${watchlistId}`);
+      }
 
       if (error.response?.status === 422) {
         throw new Error('Symbol already exists in watchlist or is invalid');
@@ -1388,6 +1397,11 @@ class AlpacaService {
       return response.data;
     } catch (error) {
       logger.error('Remove symbol from watchlist error:', error.response?.data || error.message);
+
+      if (error.response?.status === 404) {
+        throw new Error(`Watchlist not found: ${watchlistId}`);
+      }
+
       throw new Error('Failed to remove symbol from watchlist');
     }
   }
@@ -1402,6 +1416,11 @@ class AlpacaService {
       return true;
     } catch (error) {
       logger.error('Delete watchlist error:', error.response?.data || error.message);
+
+      if (error.response?.status === 404) {
+        throw new Error(`Watchlist not found: ${watchlistId}`);
+      }
+
       throw new Error('Failed to delete watchlist');
     }
   }

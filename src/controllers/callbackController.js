@@ -1,6 +1,8 @@
 const { Wallet, Transaction, User } = require('../models');
 const logger = require('../utils/logger');
 const { sequelize } = require('../config/database');
+const websocketService = require('../services/websocketService');
+const { publishPaymentEvent } = require('../utils/redisPayment');
 
 const handleKCBMpesaCallback = async (req, res) => {
   const dbTransaction = await sequelize.transaction();
@@ -139,6 +141,46 @@ const handleKCBMpesaCallback = async (req, res) => {
         transactionId: pendingTransaction.id
       });
 
+      // Broadcast payment success via WebSocket to all subscribed clients
+      try {
+        // Reload wallet to get updated balance
+        await wallet.reload();
+
+        const paymentData = {
+          status: 'completed',
+          amount: amount,
+          currency: 'KES',
+          reference: mpesaReceiptNumber,
+          timestamp: new Date().toISOString(),
+          message: 'Payment completed successfully! Your wallet has been credited.',
+          wallet: {
+            balance_kes: wallet.kes_balance,
+            balance_usd: wallet.usd_balance
+          },
+          metadata: {
+            mpesaReceiptNumber,
+            transactionDate,
+            phoneNumber,
+            transactionId: pendingTransaction.id
+          },
+          userId: wallet.user_id
+        };
+
+        // Broadcast via WebSocket (for Socket.IO clients)
+        websocketService.broadcastPaymentUpdate(pendingTransaction.reference, paymentData);
+
+        // Publish to Redis (for WebSocket clients using Redis pub/sub)
+        await publishPaymentEvent(pendingTransaction.reference, paymentData);
+
+        logger.info('Payment success WebSocket broadcast sent:', {
+          messageId: pendingTransaction.reference,
+          amount
+        });
+      } catch (wsError) {
+        logger.error('Failed to broadcast payment success via WebSocket:', wsError);
+        // Don't fail the callback if WebSocket fails
+      }
+
       return res.status(200).json({
         ResultCode: 0,
         ResultDesc: 'Payment processed successfully'
@@ -188,6 +230,51 @@ const handleKCBMpesaCallback = async (req, res) => {
       }, { transaction: dbTransaction });
 
       await dbTransaction.commit();
+
+      // Broadcast payment failure via WebSocket to all subscribed clients
+      try {
+        // Get wallet for balance info
+        let wallet = pendingTransaction.wallet;
+        if (!wallet) {
+          wallet = await Wallet.findOne({
+            where: { id: pendingTransaction.wallet_id }
+          });
+        }
+
+        const paymentData = {
+          status: 'failed',
+          amount: pendingTransaction.amount,
+          currency: 'KES',
+          reference: pendingTransaction.reference,
+          timestamp: new Date().toISOString(),
+          message: `Payment failed: ${failureReason}`,
+          wallet: wallet ? {
+            balance_kes: wallet.kes_balance,
+            balance_usd: wallet.usd_balance
+          } : null,
+          metadata: {
+            resultCode,
+            failureReason,
+            checkoutRequestId,
+            transactionId: pendingTransaction.id
+          },
+          userId: wallet ? wallet.user_id : null
+        };
+
+        // Broadcast via WebSocket (for Socket.IO clients)
+        websocketService.broadcastPaymentUpdate(pendingTransaction.reference, paymentData);
+
+        // Publish to Redis (for WebSocket clients using Redis pub/sub)
+        await publishPaymentEvent(pendingTransaction.reference, paymentData);
+
+        logger.info('Payment failure WebSocket broadcast sent:', {
+          messageId: pendingTransaction.reference,
+          failureReason
+        });
+      } catch (wsError) {
+        logger.error('Failed to broadcast payment failure via WebSocket:', wsError);
+        // Don't fail the callback if WebSocket fails
+      }
 
       return res.status(200).json({
         ResultCode: 0,

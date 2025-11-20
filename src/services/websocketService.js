@@ -11,6 +11,7 @@ class WebSocketService {
     this.connectedClients = new Map();
     this.subscribedSymbols = new Set();
     this.chartSubscriptions = new Map(); // symbol -> Set of socketIds
+    this.paymentSubscriptions = new Map(); // messageId -> Set of socketIds
     this.priceUpdateInterval = null;
     this.chartUpdateInterval = null;
     this.updateIntervalMs = 5000; // 5 seconds for general updates
@@ -121,6 +122,15 @@ class WebSocketService {
       // Handle chart unsubscription
       socket.on('unsubscribe_chart', (data) => {
         this.handleChartUnsubscription(socket, data);
+      });
+
+      // Handle M-Pesa STK Push status subscription
+      socket.on('subscribe_payment', (data) => {
+        this.handlePaymentSubscription(socket, data);
+      });
+
+      socket.on('unsubscribe_payment', (data) => {
+        this.handlePaymentUnsubscription(socket, data);
       });
 
       // Handle ping/pong for connection health
@@ -744,6 +754,146 @@ class WebSocketService {
     this.updateIntervalMs = Math.max(1000, intervalMs); // Min 1 second
     this.startPriceUpdates();
     logger.info(`Update interval changed to ${this.updateIntervalMs}ms`);
+  }
+
+  // ============================================================
+  // M-PESA STK PUSH PAYMENT STATUS HANDLERS
+  // ============================================================
+
+  /**
+   * Handle M-Pesa payment subscription
+   * Client subscribes to real-time updates for a specific payment transaction
+   */
+  handlePaymentSubscription(socket, data) {
+    try {
+      const { messageId, userId } = data;
+
+      if (!messageId) {
+        socket.emit('payment_error', { message: 'Message ID is required for payment subscription' });
+        return;
+      }
+
+      // Add to payment subscriptions
+      if (!this.paymentSubscriptions.has(messageId)) {
+        this.paymentSubscriptions.set(messageId, new Set());
+      }
+      this.paymentSubscriptions.get(messageId).add(socket.id);
+
+      // Store payment subscription on client
+      const client = this.connectedClients.get(socket.id);
+      if (client) {
+        if (!client.paymentSubscriptions) {
+          client.paymentSubscriptions = new Set();
+        }
+        client.paymentSubscriptions.add(messageId);
+        client.userId = userId; // Store user ID for authorization
+      }
+
+      socket.emit('payment_subscription_confirmed', {
+        messageId,
+        timestamp: Date.now()
+      });
+
+      logger.info(`Client ${socket.id} subscribed to payment updates: ${messageId}`);
+    } catch (error) {
+      logger.error('Error handling payment subscription:', error);
+      socket.emit('payment_error', { message: 'Payment subscription failed' });
+    }
+  }
+
+  /**
+   * Handle M-Pesa payment unsubscription
+   */
+  handlePaymentUnsubscription(socket, data) {
+    try {
+      const { messageId } = data;
+
+      if (!messageId) {
+        return;
+      }
+
+      // Remove from payment subscriptions
+      if (this.paymentSubscriptions.has(messageId)) {
+        this.paymentSubscriptions.get(messageId).delete(socket.id);
+
+        // Clean up empty subscriptions
+        if (this.paymentSubscriptions.get(messageId).size === 0) {
+          this.paymentSubscriptions.delete(messageId);
+        }
+      }
+
+      // Remove from client's subscriptions
+      const client = this.connectedClients.get(socket.id);
+      if (client && client.paymentSubscriptions) {
+        client.paymentSubscriptions.delete(messageId);
+      }
+
+      socket.emit('payment_unsubscription_confirmed', {
+        messageId,
+        timestamp: Date.now()
+      });
+
+      logger.info(`Client ${socket.id} unsubscribed from payment: ${messageId}`);
+    } catch (error) {
+      logger.error('Error handling payment unsubscription:', error);
+    }
+  }
+
+  /**
+   * Broadcast payment status update to all subscribed clients
+   * This is called by the M-Pesa callback handler when payment status changes
+   *
+   * @param {string} messageId - M-Pesa message/transaction ID
+   * @param {object} paymentData - Payment status data
+   */
+  broadcastPaymentUpdate(messageId, paymentData) {
+    try {
+      if (!messageId || !this.paymentSubscriptions.has(messageId)) {
+        logger.debug(`No subscribers for payment: ${messageId}`);
+        return;
+      }
+
+      const socketIds = this.paymentSubscriptions.get(messageId);
+
+      if (socketIds.size === 0) {
+        logger.debug(`No active subscribers for payment: ${messageId}`);
+        return;
+      }
+
+      logger.info(`Broadcasting payment update to ${socketIds.size} clients:`, {
+        messageId,
+        status: paymentData.status,
+        amount: paymentData.amount
+      });
+
+      // Emit to all subscribed clients
+      socketIds.forEach(socketId => {
+        const client = this.connectedClients.get(socketId);
+        if (client && client.socket) {
+          client.socket.emit('payment_update', {
+            messageId,
+            status: paymentData.status,
+            amount: paymentData.amount,
+            currency: paymentData.currency,
+            reference: paymentData.reference,
+            timestamp: paymentData.timestamp || Date.now(),
+            message: paymentData.message,
+            wallet: paymentData.wallet, // Updated wallet balance
+            metadata: paymentData.metadata
+          });
+        }
+      });
+
+      // If payment is completed or failed, clean up subscriptions after a delay
+      if (paymentData.status === 'completed' || paymentData.status === 'failed') {
+        setTimeout(() => {
+          this.paymentSubscriptions.delete(messageId);
+          logger.info(`Cleaned up payment subscriptions for: ${messageId}`);
+        }, 60000); // Clean up after 1 minute
+      }
+    } catch (error) {
+      logger.error('Error broadcasting payment update:', error);
+    }
   }
 
   // Graceful shutdown
