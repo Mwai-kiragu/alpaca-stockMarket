@@ -37,8 +37,14 @@ const adminRoutes = require('./routes/admin');
 const smsTestRoutes = require('./routes/smsTest');
 const callbackRoutes = require('./routes/callback');
 
+// Payment WebSocket handler
+const { handlePaymentWebSocket } = require('./routes/paymentWebSocket');
+
 const app = express();
 const server = createServer(app);
+
+// Enable WebSocket support for native WebSocket connections
+const expressWs = require('express-ws')(app, server);
 
 // Trust proxy to properly handle X-Forwarded-* headers
 // Trust only the first hop (immediate proxy) for better security
@@ -143,9 +149,13 @@ app.get('/', (req, res) => {
 
 app.use(errorHandler);
 
-// Initialize WebSocket service
+// Initialize WebSocket service (Socket.IO)
 const io = websocketService.initialize(server);
 app.set('io', io);
+
+// Register native WebSocket endpoint for payment notifications (Redis-based)
+app.ws('/ws/payment/:messageId', handlePaymentWebSocket);
+logger.info('Native WebSocket endpoint registered: /ws/payment/:messageId');
 
 // Initialize real-time notification services
 try {
@@ -161,7 +171,8 @@ server.listen(PORT, () => {
   logger.info('Services status:');
   logger.info('- Database: Connected');
   logger.info(`- Redis: ${redisService.isConnected ? 'Connected' : 'Disconnected'}`);
-  logger.info('- WebSocket: Active');
+  logger.info('- WebSocket (Socket.IO): Active');
+  logger.info('- WebSocket (Native): Active at /ws/payment/:messageId');
   logger.info('- Notification System: Active');
   logger.info('- Batch Processor: Running');
 });
