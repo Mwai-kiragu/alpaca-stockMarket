@@ -930,9 +930,38 @@ const getWatchlist = async (req, res) => {
     }
 
     // Fetch market data from Alpaca using the alpaca_watchlist_id
-    const watchlistWithMarketData = await alpacaService.getWatchlistWithMarketData(
-      dbWatchlist.alpaca_watchlist_id
-    );
+    let watchlistWithMarketData;
+
+    try {
+      watchlistWithMarketData = await alpacaService.getWatchlistWithMarketData(
+        dbWatchlist.alpaca_watchlist_id
+      );
+    } catch (alpacaError) {
+      // Handle stale Alpaca watchlist ID (404 error) - auto-recovery
+      if (alpacaError.message.includes('not found') || alpacaError.message.includes('404')) {
+        logger.warn(`Stale Alpaca watchlist ID ${dbWatchlist.alpaca_watchlist_id}. Recreating with symbols: ${dbWatchlist.symbols.join(', ')}`);
+
+        // Recreate watchlist in Alpaca with current symbols from database
+        const newAlpacaWatchlist = await alpacaService.createWatchlist(
+          dbWatchlist.name,
+          dbWatchlist.symbols
+        );
+
+        // Update database with new Alpaca ID
+        await dbWatchlist.update({
+          alpaca_watchlist_id: newAlpacaWatchlist.id
+        });
+
+        // Fetch market data with new ID
+        watchlistWithMarketData = await alpacaService.getWatchlistWithMarketData(
+          newAlpacaWatchlist.id
+        );
+
+        logger.info(`Successfully recreated watchlist with new ID: ${newAlpacaWatchlist.id}`);
+      } else {
+        throw alpacaError;
+      }
+    }
 
     res.json({
       success: true,
