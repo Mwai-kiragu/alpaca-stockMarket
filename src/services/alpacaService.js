@@ -1063,6 +1063,63 @@ class AlpacaService {
     }
   }
 
+  async getCorporateActions(params = {}) {
+    try {
+      // Build query parameters
+      const queryParams = {};
+
+      // ca_types: dividend, merger, spinoff, split
+      if (params.ca_types) queryParams.ca_types = params.ca_types;
+      else queryParams.ca_types = 'dividend'; // Default to dividends
+
+      // Date range (required, max 90 days)
+      if (params.since) queryParams.since = params.since;
+      if (params.until) queryParams.until = params.until;
+
+      // Optional filters
+      if (params.symbol) queryParams.symbol = params.symbol;
+      if (params.cusip) queryParams.cusip = params.cusip;
+
+      // date_type: declaration_date, ex_date, record_date, payable_date
+      if (params.date_type) queryParams.date_type = params.date_type;
+      else queryParams.date_type = 'ex_date'; // Default to ex-dividend date
+
+      logger.info('Getting corporate actions from Alpaca:', queryParams);
+
+      const response = await axios.get(`${this.paperUrl}/v2/corporate_actions/announcements`, {
+        headers: this.paperHeaders,
+        params: queryParams
+      });
+
+      logger.info(`Retrieved ${response.data.length || 0} corporate action announcements`);
+
+      // Log first announcement for debugging
+      if (response.data && response.data.length > 0) {
+        logger.info('First announcement keys:', Object.keys(response.data[0]));
+        logger.info('First announcement sample:', {
+          id: response.data[0].id,
+          ca_type: response.data[0].ca_type,
+          ca_sub_type: response.data[0].ca_sub_type,
+          initiating_symbol: response.data[0].initiating_symbol,
+          initiating_original_cusip: response.data[0].initiating_original_cusip,
+          target_symbol: response.data[0].target_symbol,
+          declaration_date: response.data[0].declaration_date,
+          ex_date: response.data[0].ex_date,
+          record_date: response.data[0].record_date,
+          payable_date: response.data[0].payable_date
+        });
+      }
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get corporate actions error:', error.response?.data || error.message);
+
+      // Return empty array on error instead of throwing
+      // This prevents the entire calendar endpoint from failing
+      return [];
+    }
+  }
+
   async getMostActiveStocks(limit = 30) {
     try {
       const response = await axios.get(`${this.dataBaseUrl}/v1beta1/screener/stocks/most-actives`, {

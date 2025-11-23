@@ -372,45 +372,83 @@ const getEconomicCalendar = async (req, res) => {
       }
     ];
 
-    // Sample dividend events (in production, fetch from Alpaca or financial data provider)
-    const dividendEvents = [
-      {
-        id: 'div-aapl-1',
-        symbol: 'AAPL',
-        title: 'Apple Inc. Dividend',
-        description: 'Quarterly dividend payment',
-        exDividendDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        paymentDate: new Date(Date.now() + 12 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        amount: 0.24,
-        currency: 'USD',
-        frequency: 'quarterly',
-        category: 'dividend'
-      },
-      {
-        id: 'div-msft-1',
-        symbol: 'MSFT',
-        title: 'Microsoft Corporation Dividend',
-        description: 'Quarterly dividend payment',
-        exDividendDate: new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        paymentDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        amount: 0.75,
-        currency: 'USD',
-        frequency: 'quarterly',
-        category: 'dividend'
-      },
-      {
-        id: 'div-googl-1',
-        symbol: 'GOOGL',
-        title: 'Alphabet Inc. Dividend',
-        description: 'Annual dividend payment',
-        exDividendDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        paymentDate: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-        amount: 0.20,
-        currency: 'USD',
-        frequency: 'annual',
-        category: 'dividend'
+    // Fetch real dividend data from Alpaca Corporate Actions API
+    // Note: Alpaca API has 90-day limit, so we need to split large date ranges
+    let dividendAnnouncements = [];
+    try {
+      const startDate = new Date(defaultStart);
+      const endDate = new Date(defaultEnd);
+      const daysDiff = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
+
+      if (daysDiff <= 90) {
+        // Single request for ranges <= 90 days
+        dividendAnnouncements = await alpacaService.getCorporateActions({
+          ca_types: 'dividend',
+          since: defaultStart,
+          until: defaultEnd,
+          date_type: 'ex_date'
+        });
+      } else {
+        // Split into 90-day chunks for larger ranges
+        const allAnnouncements = [];
+        let currentStart = new Date(startDate);
+
+        while (currentStart <= endDate) {
+          const currentEnd = new Date(currentStart);
+          currentEnd.setDate(currentEnd.getDate() + 89); // 90 days inclusive
+
+          if (currentEnd > endDate) {
+            currentEnd.setTime(endDate.getTime());
+          }
+
+          const chunkStart = currentStart.toISOString().split('T')[0];
+          const chunkEnd = currentEnd.toISOString().split('T')[0];
+
+          const chunk = await alpacaService.getCorporateActions({
+            ca_types: 'dividend',
+            since: chunkStart,
+            until: chunkEnd,
+            date_type: 'ex_date'
+          });
+
+          allAnnouncements.push(...chunk);
+
+          // Move to next chunk
+          currentStart.setDate(currentStart.getDate() + 90);
+        }
+
+        dividendAnnouncements = allAnnouncements;
       }
-    ];
+
+      logger.info(`Fetched ${dividendAnnouncements.length} dividend announcements from Alpaca`);
+      if (dividendAnnouncements.length > 0) {
+        logger.info('Sample dividend announcement structure:', JSON.stringify(dividendAnnouncements[0], null, 2));
+      }
+    } catch (error) {
+      logger.warn('Failed to fetch dividend announcements:', error);
+    }
+
+    // Transform Alpaca corporate actions response to dividend events format
+    const dividendEvents = dividendAnnouncements
+      .filter(announcement => announcement && announcement.target_symbol)
+      .map(announcement => ({
+        id: announcement.id,
+        symbol: announcement.target_symbol,
+        title: `${announcement.target_symbol} Dividend`,
+        description: announcement.cash?.rate ? `$${announcement.cash.rate} per share` : 'Dividend payment',
+        exDividendDate: announcement.ex_date,
+        declarationDate: announcement.declaration_date,
+        recordDate: announcement.record_date,
+        paymentDate: announcement.payable_date,
+        amount: announcement.cash?.rate || 0,
+        currency: announcement.cash?.currency || 'USD',
+        frequency: announcement.cash?.frequency || 'quarterly',
+        category: 'dividend',
+        caType: announcement.ca_type,
+        caSubType: announcement.ca_sub_type
+      }));
+
+    logger.info(`After filtering and transformation: ${dividendEvents.length} dividend events`);
 
     const formattedCalendar = calendar.map(day => ({
       date: day.date,

@@ -26,20 +26,31 @@ const getPortfolio = async (req, res) => {
     const cash = parseFloat(account.cash || 0);
 
     // Format positions
-    const formattedPositions = positions.map(position => ({
-      symbol: position.symbol,
-      logo: alpacaService.getCompanyLogo(position.symbol),
-      quantity: parseFloat(position.qty),
-      marketValue: parseFloat(position.market_value),
-      costBasis: parseFloat(position.cost_basis),
-      unrealizedPL: parseFloat(position.unrealized_pl),
-      unrealizedPLPercent: parseFloat(position.unrealized_plpc) * 100,
-      averageEntryPrice: parseFloat(position.avg_entry_price),
-      lastDayPrice: parseFloat(position.lastday_price),
-      changeToday: parseFloat(position.change_today),
-      side: position.side,
-      exchange: position.exchange || 'NASDAQ'
-    }));
+    const formattedPositions = positions.map(position => {
+      // Check if there are any pending orders for this symbol
+      const hasPendingOrders = userOrders.some(order =>
+        order.symbol.toUpperCase() === position.symbol.toUpperCase() &&
+        ['pending', 'new', 'partially_filled', 'accepted', 'pending_new',
+         'accepted_for_bidding', 'pending_cancel', 'pending_replace'].includes(order.status)
+      );
+
+      return {
+        symbol: position.symbol,
+        logo: alpacaService.getCompanyLogo(position.symbol),
+        quantity: parseFloat(position.qty),
+        marketValue: parseFloat(position.market_value),
+        costBasis: parseFloat(position.cost_basis),
+        unrealizedPL: parseFloat(position.unrealized_pl),
+        unrealizedPLPercent: parseFloat(position.unrealized_plpc) * 100,
+        averageEntryPrice: parseFloat(position.avg_entry_price),
+        lastDayPrice: parseFloat(position.lastday_price),
+        changeToday: parseFloat(position.change_today),
+        side: position.side,
+        exchange: position.exchange || 'NASDAQ',
+        assetClass: position.asset_class || 'us_equity',
+        status: hasPendingOrders ? 'pending' : 'open'
+      };
+    });
 
     // Get current exchange rate for KES users
     const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
@@ -491,10 +502,165 @@ const closePosition = async (req, res) => {
   }
 };
 
+const getAssetTrend = async (req, res) => {
+  try {
+    const { timeframe = '1Day', limit = 30 } = req.query;
+
+    // Get all user's positions
+    const positions = await alpacaService.getPositions();
+
+    if (!positions || positions.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No positions found'
+      });
+    }
+
+    // Get exchange rate for KES conversion
+    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
+    // Calculate total cost basis for all positions
+    const totalCostBasis = positions.reduce((sum, pos) => sum + parseFloat(pos.cost_basis), 0);
+
+    // Fetch historical data for all positions in parallel
+    const historicalDataPromises = positions.map(async (position) => {
+      try {
+        const bars = await alpacaService.getBars(
+          position.symbol.toUpperCase(),
+          timeframe,
+          null,
+          null,
+          Math.min(parseInt(limit), 100)
+        );
+
+        return {
+          symbol: position.symbol,
+          quantity: parseFloat(position.qty),
+          costBasis: parseFloat(position.cost_basis),
+          bars: bars || []
+        };
+      } catch (error) {
+        logger.warn(`Failed to fetch bars for ${position.symbol}:`, error);
+        return {
+          symbol: position.symbol,
+          quantity: parseFloat(position.qty),
+          costBasis: parseFloat(position.cost_basis),
+          bars: []
+        };
+      }
+    });
+
+    const allPositionData = await Promise.all(historicalDataPromises);
+
+    // Group all bars by date and calculate total portfolio value per date
+    const dateMap = new Map();
+
+    allPositionData.forEach(posData => {
+      posData.bars.forEach(bar => {
+        const date = new Date(bar.t).toISOString().split('T')[0];
+        const closePrice = parseFloat(bar.c);
+        const marketValue = posData.quantity * closePrice;
+
+        if (!dateMap.has(date)) {
+          dateMap.set(date, {
+            timestamp: bar.t,
+            date,
+            totalMarketValue: 0,
+            positions: []
+          });
+        }
+
+        const dateData = dateMap.get(date);
+        dateData.totalMarketValue += marketValue;
+        dateData.positions.push({
+          symbol: posData.symbol,
+          closePrice,
+          quantity: posData.quantity,
+          marketValue
+        });
+      });
+    });
+
+    // Convert map to sorted array and calculate P&L
+    const chartData = Array.from(dateMap.values())
+      .sort((a, b) => new Date(a.date) - new Date(b.date))
+      .map(dateData => {
+        const profitLoss = dateData.totalMarketValue - totalCostBasis;
+        const profitLossPercent = totalCostBasis > 0 ? (profitLoss / totalCostBasis) * 100 : 0;
+
+        return {
+          timestamp: dateData.timestamp,
+          date: dateData.date,
+          totalMarketValue: parseFloat(dateData.totalMarketValue.toFixed(2)),
+          totalMarketValueKES: parseFloat((dateData.totalMarketValue * exchangeRate).toFixed(2)),
+          profitLoss: parseFloat(profitLoss.toFixed(2)),
+          profitLossKES: parseFloat((profitLoss * exchangeRate).toFixed(2)),
+          profitLossPercent: parseFloat(profitLossPercent.toFixed(2)),
+          positionsCount: dateData.positions.length
+        };
+      });
+
+    if (chartData.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No historical data available for portfolio'
+      });
+    }
+
+    // Calculate current stats
+    const latestBar = chartData[chartData.length - 1];
+    const firstBar = chartData[0];
+
+    res.json({
+      success: true,
+      portfolio: {
+        invested: totalCostBasis,
+        investedKES: totalCostBasis * exchangeRate,
+        currentValue: latestBar.totalMarketValue,
+        currentValueKES: latestBar.totalMarketValueKES,
+        profit: latestBar.profitLoss,
+        profitKES: latestBar.profitLossKES,
+        profitPercent: latestBar.profitLossPercent,
+        totalStocks: positions.length
+      },
+      chartData: chartData.map(d => ({
+        date: d.date,
+        value: d.totalMarketValue,
+        valueKES: d.totalMarketValueKES,
+        profit: d.profitLoss,
+        profitKES: d.profitLossKES,
+        profitPercent: d.profitLossPercent,
+        stocks: d.positionsCount
+      })),
+      summary: {
+        period: {
+          from: firstBar.date,
+          to: latestBar.date,
+          days: chartData.length
+        },
+        highest: Math.max(...chartData.map(d => d.totalMarketValue)),
+        lowest: Math.min(...chartData.map(d => d.totalMarketValue)),
+        bestDay: Math.max(...chartData.map(d => d.profitLoss)),
+        worstDay: Math.min(...chartData.map(d => d.profitLoss)),
+        average: parseFloat((chartData.reduce((sum, d) => sum + d.profitLoss, 0) / chartData.length).toFixed(2))
+      },
+      exchangeRate,
+      lastUpdated: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Get asset trend error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch asset trend data'
+    });
+  }
+};
+
 module.exports = {
   getPortfolio,
   getPositions,
   getPosition,
   getPerformance,
-  closePosition
+  closePosition,
+  getAssetTrend
 };
