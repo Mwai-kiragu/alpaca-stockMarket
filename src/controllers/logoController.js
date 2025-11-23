@@ -1,10 +1,6 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
 
-/**
- * Symbol to domain mapping for major stocks
- * Used to fetch logos from Clearbit since Alpaca logos require paid subscription
- */
 const symbolToDomain = {
   'AAPL': 'apple.com',
   'GOOGL': 'google.com',
@@ -47,11 +43,6 @@ const symbolToDomain = {
   'CRWD': 'crowdstrike.com'
 };
 
-/**
- * Proxy endpoint to fetch company logos
- * Uses Clearbit as primary source (free, no auth required)
- * Falls back to generic placeholder if logo not found
- */
 const getCompanyLogo = async (req, res) => {
   try {
     const { symbol } = req.params;

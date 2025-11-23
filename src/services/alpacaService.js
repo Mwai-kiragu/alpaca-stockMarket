@@ -1590,22 +1590,11 @@ class AlpacaService {
     }
   }
 
-  // ============================================================
-  // FUNDING WALLET METHODS
-  // ============================================================
-
-  /**
-   * Check if we're in sandbox or production mode
-   */
   isSandboxMode() {
     const alpacaMode = process.env.ALPACA_MODE || 'sandbox';
     return alpacaMode === 'sandbox';
   }
 
-  /**
-   * Create a funding wallet for an account
-   * @param {string} accountId - Alpaca account ID
-   */
   async createFundingWallet(accountId) {
     try {
       logger.info(`Creating funding wallet for account: ${accountId}`);
@@ -1633,10 +1622,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Get funding wallet for an account
-   * @param {string} accountId - Alpaca account ID
-   */
   async getFundingWallet(accountId) {
     try {
       const response = await axios.get(
@@ -1654,12 +1639,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Demo deposit to funding wallet (SANDBOX ONLY)
-   * Instantly adds virtual funds for testing
-   * @param {string} accountId - Alpaca account ID
-   * @param {number} amount - Amount in USD
-   */
   async demoDepositToWallet(accountId, amount) {
     try {
       if (!this.isSandboxMode()) {
@@ -1694,11 +1673,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Create ACH relationship (for production funding)
-   * @param {string} accountId - Alpaca account ID
-   * @param {object} bankDetails - Bank account details
-   */
   async createACHRelationship(accountId, bankDetails) {
     try {
       if (this.isSandboxMode()) {
@@ -1727,10 +1701,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Get ACH relationships for an account
-   * @param {string} accountId - Alpaca account ID
-   */
   async getACHRelationships(accountId) {
     try {
       const response = await axios.get(
@@ -1747,11 +1717,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Create a transfer (deposit or withdrawal)
-   * @param {string} accountId - Alpaca account ID
-   * @param {object} transferData - Transfer details
-   */
   async createTransfer(accountId, transferData) {
     try {
       logger.info(`Creating transfer for account ${accountId}:`, {
@@ -1780,11 +1745,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Get transfer details
-   * @param {string} accountId - Alpaca account ID
-   * @param {string} transferId - Transfer ID
-   */
   async getTransfer(accountId, transferId) {
     try {
       const response = await axios.get(
@@ -1801,10 +1761,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Get all transfers for an account
-   * @param {string} accountId - Alpaca account ID
-   */
   async getTransfers(accountId) {
     try {
       const response = await axios.get(
@@ -1821,12 +1777,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Unified deposit method - handles both sandbox and production
-   * @param {string} accountId - Alpaca account ID
-   * @param {number} amount - Amount in USD
-   * @param {string} relationshipId - ACH relationship ID (production only)
-   */
   async depositToAccount(accountId, amount, relationshipId = null) {
     try {
       if (this.isSandboxMode()) {
@@ -1849,12 +1799,6 @@ class AlpacaService {
     }
   }
 
-  /**
-   * Withdraw from account
-   * @param {string} accountId - Alpaca account ID
-   * @param {number} amount - Amount in USD
-   * @param {string} relationshipId - ACH relationship ID
-   */
   async withdrawFromAccount(accountId, amount, relationshipId) {
     try {
       if (this.isSandboxMode()) {

@@ -56,10 +56,6 @@ const getMarketNews = async (req, res) => {
   }
 };
 
-/**
- * Get a specific news article by ID
- * GET /api/v1/updates/news/:newsId
- */
 const getNewsById = async (req, res) => {
   try {
     const { newsId } = req.params;

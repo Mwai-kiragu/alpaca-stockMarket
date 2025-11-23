@@ -2,19 +2,6 @@ const redisService = require('../config/redis');
 const logger = require('../utils/logger');
 const crypto = require('crypto');
 
-/**
- * NotificationDeduplicationService
- *
- * Prevents duplicate notifications/alerts using Redis-based deduplication
- * with unique alert-id tracking and TTL-based expiration.
- *
- * Features:
- * - Alert deduplication using unique alert-id
- * - User-specific rate limiting
- * - Batch processing support
- * - Real-time notification tracking
- * - Load balancer compatible
- */
 class NotificationDeduplicationService {
   constructor() {
     this.KEYS = {
@@ -43,13 +30,6 @@ class NotificationDeduplicationService {
     };
   }
 
-  /**
-   * Generate a unique alert ID based on content and user
-   * @param {number} userId - User ID
-   * @param {string} type - Alert type (price_alert, order_filled, etc.)
-   * @param {object} data - Alert data
-   * @returns {string} Unique alert ID
-   */
   generateAlertId(userId, type, data) {
     const content = JSON.stringify({
       userId,
@@ -63,11 +43,6 @@ class NotificationDeduplicationService {
     return crypto.createHash('sha256').update(content).digest('hex');
   }
 
-  /**
-   * Check if an alert has already been sent (deduplication)
-   * @param {string} alertId - Unique alert ID
-   * @returns {Promise<boolean>} True if alert was already sent
-   */
   async isAlertSent(alertId) {
     try {
       const key = `${this.KEYS.ALERT_SENT}${alertId}`;
@@ -80,12 +55,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Mark an alert as sent with TTL
-   * @param {string} alertId - Unique alert ID
-   * @param {object} metadata - Alert metadata
-   * @returns {Promise<boolean>} Success status
-   */
   async markAlertSent(alertId, metadata = {}) {
     try {
       const key = `${this.KEYS.ALERT_SENT}${alertId}`;
@@ -109,12 +78,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Add alert to user's alert history
-   * @param {number} userId - User ID
-   * @param {string} alertId - Alert ID
-   * @returns {Promise<boolean>} Success status
-   */
   async addToUserHistory(userId, alertId) {
     try {
       const key = `${this.KEYS.USER_ALERTS}${userId}`;
@@ -130,12 +93,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Get user's recent alerts
-   * @param {number} userId - User ID
-   * @param {number} lastNMinutes - Look back N minutes (default 60)
-   * @returns {Promise<Array>} Array of alert IDs
-   */
   async getUserRecentAlerts(userId, lastNMinutes = 60) {
     try {
       const key = `${this.KEYS.USER_ALERTS}${userId}`;
@@ -149,12 +106,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Check if user has exceeded rate limit for a notification type
-   * @param {number} userId - User ID
-   * @param {string} type - Notification type
-   * @returns {Promise<boolean>} True if rate limit exceeded
-   */
   async checkRateLimit(userId, type) {
     try {
       const key = `${this.KEYS.RATE_LIMIT}${userId}:${type}`;
@@ -180,11 +131,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Acquire a processing lock to prevent duplicate processing
-   * @param {string} alertId - Alert ID
-   * @returns {Promise<boolean>} True if lock acquired
-   */
   async acquireProcessingLock(alertId) {
     try {
       const key = `${this.KEYS.PROCESSING_LOCK}${alertId}`;
@@ -204,11 +150,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Release a processing lock
-   * @param {string} alertId - Alert ID
-   * @returns {Promise<boolean>} Success status
-   */
   async releaseProcessingLock(alertId) {
     try {
       const key = `${this.KEYS.PROCESSING_LOCK}${alertId}`;
@@ -220,14 +161,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Process a notification with deduplication and rate limiting
-   * @param {number} userId - User ID
-   * @param {string} type - Notification type
-   * @param {object} data - Notification data
-   * @param {Function} sendCallback - Callback function to send notification
-   * @returns {Promise<object>} Result object
-   */
   async processNotification(userId, type, data, sendCallback) {
     const alertId = this.generateAlertId(userId, type, data);
 
@@ -302,12 +235,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Add notification to batch queue for processing
-   * @param {string} type - Batch type
-   * @param {object} notification - Notification data
-   * @returns {Promise<number>} Queue length
-   */
   async addToBatchQueue(type, notification) {
     try {
       const key = `${this.KEYS.BATCH_QUEUE}${type}`;
@@ -323,12 +250,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Get batch of notifications from queue
-   * @param {string} type - Batch type
-   * @param {number} batchSize - Number of items to retrieve
-   * @returns {Promise<Array>} Array of notifications
-   */
   async getBatchFromQueue(type, batchSize = 100) {
     try {
       const key = `${this.KEYS.BATCH_QUEUE}${type}`;
@@ -345,12 +266,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Clean up old alerts from user history
-   * @param {number} userId - User ID
-   * @param {number} olderThanMinutes - Remove alerts older than N minutes
-   * @returns {Promise<number>} Number of alerts removed
-   */
   async cleanupUserAlerts(userId, olderThanMinutes = 1440) {
     try {
       const key = `${this.KEYS.USER_ALERTS}${userId}`;
@@ -363,10 +278,6 @@ class NotificationDeduplicationService {
     }
   }
 
-  /**
-   * Get notification statistics
-   * @returns {Promise<object>} Statistics object
-   */
   async getStats() {
     try {
       const client = redisService.getClient();

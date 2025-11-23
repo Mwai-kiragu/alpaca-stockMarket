@@ -1042,9 +1042,6 @@ const queryWithdrawalStatus = async (req, res) => {
   }
 };
 
-/**
- * Check deposit/STK Push status
- */
 const checkDepositStatus = async (req, res) => {
   try {
     const { messageId } = req.params;

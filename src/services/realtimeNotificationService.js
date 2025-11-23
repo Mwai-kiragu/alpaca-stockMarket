@@ -3,20 +3,7 @@ const notificationDeduplicationService = require('./notificationDeduplicationSer
 const pushNotificationService = require('./pushNotificationService');
 const logger = require('../utils/logger');
 
-/**
- * RealtimeNotificationService
- *
- * Handles real-time notification delivery across multiple server instances
- * using Redis pub/sub. Ensures notifications are delivered in real-time
- * to tens of thousands of users without duplicates.
- *
- * Features:
- * - Redis pub/sub for cross-server communication
- * - Alert deduplication
- * - Batch processing
- * - Rate limiting
- * - WebSocket integration
- */
+
 class RealtimeNotificationService {
   constructor() {
     this.websocketService = null;
@@ -29,10 +16,6 @@ class RealtimeNotificationService {
     };
   }
 
-  /**
-   * Initialize the service and set up pub/sub listeners
-   * @param {object} websocketService - WebSocket service instance
-   */
   async initialize(websocketService) {
     if (this.isInitialized) {
       logger.warn('RealtimeNotificationService already initialized');
@@ -58,9 +41,6 @@ class RealtimeNotificationService {
     }
   }
 
-  /**
-   * Set up Redis pub/sub subscriptions
-   */
   async setupSubscriptions() {
     const subscriber = redisService.getSubscriber();
 
@@ -95,11 +75,6 @@ class RealtimeNotificationService {
     logger.info('Redis pub/sub subscriptions set up successfully');
   }
 
-  /**
-   * Handle incoming pub/sub messages
-   * @param {string} channel - Channel name
-   * @param {object} data - Message data
-   */
   async handleIncomingMessage(channel, data) {
     try {
       if (channel === this.channels.BROADCAST_NOTIFICATION) {
@@ -119,14 +94,6 @@ class RealtimeNotificationService {
     }
   }
 
-  /**
-   * Send notification to a specific user across all servers
-   * @param {number} userId - User ID
-   * @param {string} event - Event name
-   * @param {object} payload - Event payload
-   * @param {object} options - Additional options (dedupe, etc.)
-   * @returns {Promise<object>} Result object
-   */
   async sendToUser(userId, event, payload, options = {}) {
     const { dedupe = true, type = 'general', sendPush = true, deviceTokens = null } = options;
 
@@ -172,13 +139,6 @@ class RealtimeNotificationService {
     }
   }
 
-  /**
-   * Send Firebase push notification to user
-   * @param {number} userId - User ID
-   * @param {string} event - Event name
-   * @param {object} payload - Notification payload
-   * @param {Array} deviceTokens - Optional device tokens
-   */
   async sendPushNotificationToUser(userId, event, payload, deviceTokens = null) {
     try {
       // If no device tokens provided, get from user preferences
@@ -221,11 +181,6 @@ class RealtimeNotificationService {
     }
   }
 
-  /**
-   * Get default title for event type
-   * @param {string} event - Event name
-   * @returns {string} Default title
-   */
   getDefaultTitle(event) {
     const titles = {
       'price_alert': 'Price Alert',
@@ -240,13 +195,6 @@ class RealtimeNotificationService {
     return titles[event] || 'Notification';
   }
 
-  /**
-   * Publish user notification to Redis
-   * @param {number} userId - User ID
-   * @param {string} event - Event name
-   * @param {object} payload - Event payload
-   * @returns {Promise<void>}
-   */
   async publishUserNotification(userId, event, payload) {
     const publisher = redisService.getPublisher();
     const channel = `${this.channels.USER_NOTIFICATION}${userId}`;
@@ -260,12 +208,6 @@ class RealtimeNotificationService {
     logger.debug(`Published notification to channel ${channel}`);
   }
 
-  /**
-   * Broadcast notification to all users across all servers
-   * @param {string} event - Event name
-   * @param {object} payload - Event payload
-   * @returns {Promise<void>}
-   */
   async broadcastToAll(event, payload) {
     try {
       const publisher = redisService.getPublisher();
@@ -283,10 +225,6 @@ class RealtimeNotificationService {
     }
   }
 
-  /**
-   * Handle triggered alert
-   * @param {object} alertData - Alert data
-   */
   async handleTriggeredAlert(alertData) {
     try {
       const { userId, alertId, symbol, currentPrice, targetPrice, condition } = alertData;
@@ -315,11 +253,6 @@ class RealtimeNotificationService {
     }
   }
 
-  /**
-   * Publish alert triggered event
-   * @param {object} alertData - Alert data
-   * @returns {Promise<void>}
-   */
   async publishAlertTriggered(alertData) {
     try {
       const publisher = redisService.getPublisher();
@@ -336,12 +269,6 @@ class RealtimeNotificationService {
     }
   }
 
-  /**
-   * Send batch notifications efficiently
-   * @param {Array} notifications - Array of {userId, event, payload}
-   * @param {object} options - Batch options
-   * @returns {Promise<object>} Batch result
-   */
   async sendBatch(notifications, options = {}) {
     const { dedupe = true, type = 'general', concurrency = 10 } = options;
 
@@ -398,12 +325,6 @@ class RealtimeNotificationService {
     }
   }
 
-  /**
-   * Send order notification
-   * @param {number} userId - User ID
-   * @param {object} orderData - Order data
-   * @returns {Promise<object>} Result
-   */
   async sendOrderNotification(userId, orderData) {
     return this.sendToUser(
       userId,
@@ -424,12 +345,6 @@ class RealtimeNotificationService {
     );
   }
 
-  /**
-   * Send price alert notification
-   * @param {number} userId - User ID
-   * @param {object} alertData - Alert data
-   * @returns {Promise<object>} Result
-   */
   async sendPriceAlert(userId, alertData) {
     return this.sendToUser(
       userId,
@@ -447,10 +362,6 @@ class RealtimeNotificationService {
     );
   }
 
-  /**
-   * Get service statistics
-   * @returns {Promise<object>} Statistics
-   */
   async getStats() {
     try {
       const dedupeStats = await notificationDeduplicationService.getStats();
@@ -466,9 +377,6 @@ class RealtimeNotificationService {
     }
   }
 
-  /**
-   * Shutdown service
-   */
   async shutdown() {
     try {
       const subscriber = redisService.getSubscriber();

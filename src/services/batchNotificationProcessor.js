@@ -2,19 +2,6 @@ const notificationDeduplicationService = require('./notificationDeduplicationSer
 const realtimeNotificationService = require('./realtimeNotificationService');
 const logger = require('../utils/logger');
 
-/**
- * BatchNotificationProcessor
- *
- * Efficiently processes notifications in batches to handle
- * tens of thousands of users without overwhelming the system.
- *
- * Features:
- * - Batch processing with configurable batch sizes
- * - Rate limiting per user
- * - Deduplication
- * - Priority queue support
- * - Automatic retry for failed notifications
- */
 class BatchNotificationProcessor {
   constructor() {
     this.isProcessing = false;
@@ -34,9 +21,6 @@ class BatchNotificationProcessor {
     this.retryQueue = new Map();   // Map<alertId, {notification, retries}>
   }
 
-  /**
-   * Start the batch processor
-   */
   start() {
     if (this.isProcessing) {
       logger.warn('BatchNotificationProcessor already running');
@@ -51,9 +35,6 @@ class BatchNotificationProcessor {
     logger.info('BatchNotificationProcessor started');
   }
 
-  /**
-   * Stop the batch processor
-   */
   stop() {
     if (this.processingInterval) {
       clearInterval(this.processingInterval);
@@ -64,11 +45,6 @@ class BatchNotificationProcessor {
     logger.info('BatchNotificationProcessor stopped');
   }
 
-  /**
-   * Add notification to queue
-   * @param {object} notification - Notification object
-   * @param {string} priority - Priority level (high, normal, low)
-   */
   addToQueue(notification, priority = 'normal') {
     try {
       const validPriorities = ['high', 'normal', 'low'];
@@ -86,11 +62,6 @@ class BatchNotificationProcessor {
     }
   }
 
-  /**
-   * Add multiple notifications to queue
-   * @param {Array} notifications - Array of notification objects
-   * @param {string} priority - Priority level
-   */
   addBulkToQueue(notifications, priority = 'normal') {
     notifications.forEach((notification) => {
       this.addToQueue(notification, priority);
@@ -99,10 +70,6 @@ class BatchNotificationProcessor {
     logger.info(`Added ${notifications.length} notifications to ${priority} priority queue`);
   }
 
-  /**
-   * Get next batch of notifications to process
-   * @returns {Array} Batch of notifications
-   */
   getNextBatch() {
     const batch = [];
 
@@ -124,9 +91,6 @@ class BatchNotificationProcessor {
     return batch;
   }
 
-  /**
-   * Process a batch of notifications
-   */
   async processBatch() {
     try {
       // Check retry queue first
@@ -172,11 +136,6 @@ class BatchNotificationProcessor {
     }
   }
 
-  /**
-   * Handle failed notifications for retry
-   * @param {Array} batch - Original batch
-   * @param {Array} errors - Array of errors
-   */
   handleFailedNotifications(batch, errors) {
     errors.forEach((error) => {
       // Find the notification that failed
@@ -209,9 +168,6 @@ class BatchNotificationProcessor {
     });
   }
 
-  /**
-   * Process retry queue
-   */
   async processRetries() {
     const now = Date.now();
     const retries = [];
@@ -230,11 +186,6 @@ class BatchNotificationProcessor {
     }
   }
 
-  /**
-   * Send price alerts to multiple users
-   * @param {Array} alerts - Array of {userId, symbol, currentPrice, targetPrice, condition}
-   * @returns {Promise<void>}
-   */
   async sendPriceAlerts(alerts) {
     const notifications = alerts.map((alert) => ({
       userId: alert.userId,
@@ -254,11 +205,6 @@ class BatchNotificationProcessor {
     logger.info(`Queued ${notifications.length} price alerts for batch processing`);
   }
 
-  /**
-   * Send order notifications to multiple users
-   * @param {Array} orders - Array of order notifications
-   * @returns {Promise<void>}
-   */
   async sendOrderNotifications(orders) {
     const notifications = orders.map((order) => ({
       userId: order.userId,
@@ -279,20 +225,12 @@ class BatchNotificationProcessor {
     logger.info(`Queued ${notifications.length} order notifications for batch processing`);
   }
 
-  /**
-   * Send market update to all users
-   * @param {object} marketData - Market data
-   * @returns {Promise<void>}
-   */
   async sendMarketUpdate(marketData) {
     await realtimeNotificationService.broadcastToAll('market_update', marketData);
     logger.info('Broadcasted market update to all users');
   }
 
-  /**
-   * Get queue statistics
-   * @returns {object} Statistics
-   */
+ 
   getStats() {
     return {
       isProcessing: this.isProcessing,
@@ -307,10 +245,6 @@ class BatchNotificationProcessor {
     };
   }
 
-  /**
-   * Update processor configuration
-   * @param {object} config - Configuration object
-   */
   updateConfig(config) {
     this.config = { ...this.config, ...config };
 
@@ -323,9 +257,6 @@ class BatchNotificationProcessor {
     logger.info('BatchNotificationProcessor config updated:', this.config);
   }
 
-  /**
-   * Clear all queues
-   */
   clearQueues() {
     this.queues.high = [];
     this.queues.normal = [];

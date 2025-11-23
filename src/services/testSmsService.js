@@ -9,12 +9,6 @@ class TestSmsService {
     this.sender = 'RIVEN'; // Your sender ID
   }
 
-  /**
-   * Send SMS via TestSMS API
-   * @param {string} phoneNumber - Phone number in international format (e.g., +254712345678)
-   * @param {string} message - SMS message content
-   * @returns {Promise<Object>} - API response
-   */
   async sendSMS(phoneNumber, message) {
     try {
       // Format phone number - TestSMS expects format without +
@@ -75,37 +69,18 @@ class TestSmsService {
     }
   }
 
-  /**
-   * Send verification code SMS
-   * @param {string} phoneNumber - Phone number
-   * @param {string} verificationCode - 6-digit verification code
-   * @param {string} userName - User's first name
-   * @returns {Promise<Object>} - API response
-   */
   async sendVerificationCode(phoneNumber, verificationCode, userName = '') {
     const message = `Hi ${userName}! Your RIVEN verification code is: ${verificationCode}. This code expires in 10 minutes. Do not share this code with anyone.`;
 
     return this.sendSMS(phoneNumber, message);
   }
 
-  /**
-   * Send welcome SMS
-   * @param {string} phoneNumber - Phone number
-   * @param {string} userName - User's first name
-   * @returns {Promise<Object>} - API response
-   */
   async sendWelcomeSMS(phoneNumber, userName) {
     const message = `Welcome to RIVEN, ${userName}! Your account has been created successfully. Start trading US stocks today. Download our app or visit our website.`;
 
     return this.sendSMS(phoneNumber, message);
   }
 
-  /**
-   * Send transaction notification SMS
-   * @param {string} phoneNumber - Phone number
-   * @param {Object} transaction - Transaction details
-   * @returns {Promise<Object>} - API response
-   */
   async sendTransactionSMS(phoneNumber, transaction) {
     const { type, amount, status, symbol } = transaction;
     let message;
@@ -119,25 +94,12 @@ class TestSmsService {
     return this.sendSMS(phoneNumber, message);
   }
 
-  /**
-   * Send security alert SMS
-   * @param {string} phoneNumber - Phone number
-   * @param {string} alertMessage - Security alert message
-   * @returns {Promise<Object>} - API response
-   */
   async sendSecurityAlert(phoneNumber, alertMessage) {
     const message = `RIVEN SECURITY ALERT: ${alertMessage}. If this wasn't you, contact support immediately.`;
 
     return this.sendSMS(phoneNumber, message);
   }
 
-  /**
-   * Send KYC status update SMS
-   * @param {string} phoneNumber - Phone number
-   * @param {string} status - KYC status (approved, rejected, under_review)
-   * @param {string} userName - User's first name
-   * @returns {Promise<Object>} - API response
-   */
   async sendKYCStatusSMS(phoneNumber, status, userName) {
     let message;
 
@@ -158,10 +120,6 @@ class TestSmsService {
     return this.sendSMS(phoneNumber, message);
   }
 
-  /**
-   * Test SMS connectivity
-   * @returns {Promise<Object>} - Test result
-   */
   async testConnection() {
     try {
       const testMessage = 'RIVEN: Test message from your trading platform. SMS service is working correctly.';
@@ -180,10 +138,6 @@ class TestSmsService {
     }
   }
 
-  /**
-   * Get account balance (if supported by TestSMS API)
-   * @returns {Promise<Object>} - Balance info
-   */
   async getBalance() {
     try {
       // Note: Check TestSMS documentation for balance endpoint

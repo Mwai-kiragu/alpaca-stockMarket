@@ -59,11 +59,7 @@ const CONDITION_CODES = {
   'UNKNOWN': 'Unknown Condition'
 };
 
-/**
- * Convert condition codes to human-readable descriptions
- * @param {Array|String} conditions - Array of condition codes or single code
- * @returns {Array} Array of condition descriptions
- */
+
 function mapConditionCodes(conditions) {
   if (!conditions) return [];
 
@@ -93,11 +89,6 @@ function mapConditionCodes(conditions) {
   });
 }
 
-/**
- * Get condition description for a single code
- * @param {String} code - Condition code
- * @returns {String} Condition description
- */
 function getConditionDescription(code) {
   if (!code) return 'Regular Trade';
 

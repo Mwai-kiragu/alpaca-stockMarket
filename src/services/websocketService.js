@@ -671,12 +671,6 @@ class WebSocketService {
     });
   }
 
-  /**
-   * Broadcast notification to specific user across all server instances
-   * @param {number} userId - User ID
-   * @param {string} event - Event name
-   * @param {object} data - Event data
-   */
   broadcastToUser(userId, event, data) {
     try {
       const room = `user:${userId}`;
@@ -691,11 +685,6 @@ class WebSocketService {
     }
   }
 
-  /**
-   * Broadcast notification to all connected clients across all server instances
-   * @param {string} event - Event name
-   * @param {object} data - Event data
-   */
   broadcastToAll(event, data) {
     try {
       this.io.emit(event, {
@@ -709,11 +698,6 @@ class WebSocketService {
     }
   }
 
-  /**
-   * Join user to their personal room for targeted notifications
-   * @param {object} socket - Socket instance
-   * @param {number} userId - User ID
-   */
   joinUserRoom(socket, userId) {
     try {
       const room = `user:${userId}`;
@@ -724,11 +708,6 @@ class WebSocketService {
     }
   }
 
-  /**
-   * Leave user room
-   * @param {object} socket - Socket instance
-   * @param {number} userId - User ID
-   */
   leaveUserRoom(socket, userId) {
     try {
       const room = `user:${userId}`;
@@ -760,10 +739,6 @@ class WebSocketService {
   // M-PESA STK PUSH PAYMENT STATUS HANDLERS
   // ============================================================
 
-  /**
-   * Handle M-Pesa payment subscription
-   * Client subscribes to real-time updates for a specific payment transaction
-   */
   handlePaymentSubscription(socket, data) {
     try {
       const { messageId, userId } = data;
@@ -801,9 +776,6 @@ class WebSocketService {
     }
   }
 
-  /**
-   * Handle M-Pesa payment unsubscription
-   */
   handlePaymentUnsubscription(socket, data) {
     try {
       const { messageId } = data;
@@ -839,13 +811,7 @@ class WebSocketService {
     }
   }
 
-  /**
-   * Broadcast payment status update to all subscribed clients
-   * This is called by the M-Pesa callback handler when payment status changes
-   *
-   * @param {string} messageId - M-Pesa message/transaction ID
-   * @param {object} paymentData - Payment status data
-   */
+  
   broadcastPaymentUpdate(messageId, paymentData) {
     try {
       if (!messageId || !this.paymentSubscriptions.has(messageId)) {

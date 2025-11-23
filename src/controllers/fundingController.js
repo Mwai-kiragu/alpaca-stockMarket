@@ -3,10 +3,6 @@ const alpacaService = require('../services/alpacaService');
 const exchangeService = require('../services/exchangeService');
 const logger = require('../utils/logger');
 
-/**
- * Sync funds from our wallet to Alpaca trading account
- * This allows users to transfer their wallet balance to Alpaca for trading
- */
 const syncToAlpaca = async (req, res) => {
   try {
     const { amount, currency = 'USD' } = req.body;
@@ -140,10 +136,6 @@ const syncToAlpaca = async (req, res) => {
   }
 };
 
-/**
- * Sync funds from Alpaca back to our wallet
- * This allows users to withdraw their Alpaca balance back to the wallet
- */
 const syncFromAlpaca = async (req, res) => {
   try {
     const { amount, currency = 'USD' } = req.body;
@@ -243,9 +235,6 @@ const syncFromAlpaca = async (req, res) => {
   }
 };
 
-/**
- * Get Alpaca funding wallet status
- */
 const getFundingWalletStatus = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id);
@@ -280,9 +269,6 @@ const getFundingWalletStatus = async (req, res) => {
   }
 };
 
-/**
- * Get Alpaca transfer history
- */
 const getAlpacaTransfers = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id);
@@ -309,9 +295,6 @@ const getAlpacaTransfers = async (req, res) => {
   }
 };
 
-/**
- * Create ACH relationship for production funding
- */
 const createBankAccount = async (req, res) => {
   try {
     const { accountOwnerName, accountType, accountNumber, routingNumber, nickname } = req.body;
@@ -355,9 +338,6 @@ const createBankAccount = async (req, res) => {
   }
 };
 
-/**
- * Get linked bank accounts
- */
 const getBankAccounts = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id);

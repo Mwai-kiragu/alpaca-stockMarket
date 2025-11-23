@@ -4,7 +4,7 @@
   "description": "Node.js backend service for trading platform with Alpaca integration",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "nodemon src/server.js",
     "dev": "nodemon src/server.js",
     "test": "jest",
     "lint": "eslint src/",
