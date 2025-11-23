@@ -19,7 +19,8 @@ const {
   deleteWatchlist,
   getTopMovers,
   getUpcomingEvents,
-  getStockChart
+  getStockChart,
+  getCompanyInfo
 } = require('../controllers/stockController');
 const { auth } = require('../middleware/auth');
 
@@ -36,6 +37,7 @@ router.get('/news', auth, getNews);
 router.get('/news/:newsId', auth, getNewsById);
 router.get('/market/calendar', auth, getMarketCalendar);
 router.get('/fundamentals/:symbol', auth, getStockFundamentals);
+router.get('/company/:symbol', auth, getCompanyInfo);
 
 // Market movers & events
 router.get('/movers', auth, getTopMovers);

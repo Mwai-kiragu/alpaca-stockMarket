@@ -1601,6 +1601,196 @@ const getStockChart = async (req, res) => {
   }
 };
 
+// Helper function to fetch financial data from free API
+const getFinancialData = async (symbol) => {
+  try {
+    const axios = require('axios');
+
+    const apiKey = process.env.ALPHA_VANTAGE_API_KEY || 'demo';
+    const overviewUrl = `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${symbol}&apikey=${apiKey}`;
+
+    logger.info(`Fetching financial data for ${symbol} from Alpha Vantage`);
+    const response = await axios.get(overviewUrl, { timeout: 5000 });
+
+    if (response.data && response.data.Symbol) {
+      const data = response.data;
+
+      return {
+        marketCap: data.MarketCapitalization ? `$${(parseFloat(data.MarketCapitalization) / 1e9).toFixed(2)}B` : null,
+        peRatio: data.PERatio ? parseFloat(data.PERatio) : null,
+        dividendYield: data.DividendYield ? `${(parseFloat(data.DividendYield) * 100).toFixed(2)}%` : null,
+        eps: data.EPS ? parseFloat(data.EPS) : null,
+        beta: data.Beta ? parseFloat(data.Beta) : null,
+        sector: data.Sector || null,
+        industry: data.Industry || null,
+        website: null,
+        description: data.Description || null,
+        ceo: null,
+        employees: null,
+        country: data.Country || null,
+        city: null,
+        revenue: data.RevenueTTM ? `$${(parseFloat(data.RevenueTTM) / 1e9).toFixed(2)}B` : null,
+        profitMargin: data.ProfitMargin ? `${(parseFloat(data.ProfitMargin) * 100).toFixed(2)}%` : null,
+        '52WeekHigh': data['52WeekHigh'] || null,
+        '52WeekLow': data['52WeekLow'] || null,
+        bookValue: data.BookValue || null
+      };
+    }
+
+    logger.warn(`No financial data found for ${symbol}`);
+    return {
+      marketCap: null,
+      peRatio: null,
+      dividendYield: null,
+      eps: null,
+      beta: null,
+      note: 'Financial data unavailable. Add ALPHA_VANTAGE_API_KEY to .env for full data.'
+    };
+  } catch (error) {
+    logger.error(`Failed to fetch financial data for ${symbol}:`, {
+      message: error.message,
+      status: error.response?.status
+    });
+    return {
+      marketCap: null,
+      peRatio: null,
+      dividendYield: null,
+      eps: null,
+      beta: null,
+      note: 'Financial data service temporarily unavailable'
+    };
+  }
+};
+
+const getCompanyInfo = async (req, res) => {
+  try {
+    const { symbol } = req.params;
+
+    if (!symbol) {
+      return res.status(400).json({
+        success: false,
+        message: 'Symbol is required'
+      });
+    }
+
+    // Get asset details from Alpaca
+    const asset = await alpacaService.getAsset(symbol.toUpperCase());
+
+    // Get latest quote for current price
+    let currentPrice = null;
+    let priceChange = null;
+    let priceChangePercent = null;
+
+    try {
+      const quote = await alpacaService.getLatestQuote(symbol.toUpperCase());
+      currentPrice = quote.ap || quote.bp;
+
+      // Get yesterday's closing price
+      const bars = await alpacaService.getBars(symbol.toUpperCase(), '1Day', null, null, 2);
+      if (bars && bars.length >= 2) {
+        const previousClose = parseFloat(bars[bars.length - 2].c);
+        priceChange = currentPrice - previousClose;
+        priceChangePercent = (priceChange / previousClose) * 100;
+      }
+    } catch (error) {
+      logger.warn(`Failed to get price data for ${symbol}:`, error);
+    }
+
+    // Get recent news
+    let recentNews = [];
+    try {
+      const news = await alpacaService.getNews([symbol.toUpperCase()], 5);
+      recentNews = news.map(article => ({
+        id: article.id,
+        headline: article.headline,
+        summary: article.summary,
+        publishedAt: article.published_at,
+        url: article.url,
+        source: article.source,
+        thumbnail: article.images?.[0]?.url
+      }));
+    } catch (error) {
+      logger.warn(`Failed to get news for ${symbol}:`, error);
+    }
+
+    // Get financial data (includes company info like sector, industry, etc.)
+    const financialData = await getFinancialData(symbol.toUpperCase());
+
+    // Build company information response
+    const companyInfo = {
+      symbol: asset.symbol,
+      name: asset.name,
+      exchange: asset.exchange,
+      assetClass: asset.class,
+      status: asset.status,
+      tradable: asset.tradable,
+
+      // Current pricing
+      currentPrice,
+      priceChange,
+      priceChangePercent: priceChangePercent ? parseFloat(priceChangePercent.toFixed(2)) : null,
+
+      // Trading info
+      tradingInfo: {
+        marginable: asset.marginable,
+        shortable: asset.shortable,
+        easyToBorrow: asset.easy_to_borrow,
+        fractionable: asset.fractionable,
+        maintenanceMarginRequirement: asset.maintenance_margin_requirement
+      },
+
+      // About (using data from financial API)
+      about: {
+        description: financialData.description || `${asset.name} (${asset.symbol}) is a ${asset.class} security trading on ${asset.exchange}.`,
+        sector: financialData.sector || null,
+        industry: financialData.industry || null,
+        website: financialData.website || null,
+        headquarters: financialData.city && financialData.country ? `${financialData.city}, ${financialData.country}` : null,
+        ceo: financialData.ceo || null,
+        employees: financialData.employees || null
+      },
+
+      // Financial highlights
+      financials: {
+        marketCap: financialData.marketCap,
+        peRatio: financialData.peRatio,
+        dividendYield: financialData.dividendYield,
+        eps: financialData.eps,
+        beta: financialData.beta,
+        revenue: financialData.revenue,
+        profitMargin: financialData.profitMargin,
+        note: financialData.note
+      },
+
+      // Recent news
+      recentNews,
+
+      logo: alpacaService.getCompanyLogo(symbol.toUpperCase()),
+      lastUpdated: new Date().toISOString()
+    };
+
+    res.json({
+      success: true,
+      company: companyInfo
+    });
+
+  } catch (error) {
+    logger.error('Get company info error:', error);
+
+    if (error.message.includes('symbol not found') || error.message.includes('asset not found')) {
+      return res.status(404).json({
+        success: false,
+        message: 'Symbol not found'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch company information'
+    });
+  }
+};
+
 module.exports = {
   getQuote,
   getLatestTrade,
@@ -1624,5 +1814,7 @@ module.exports = {
   getTopMovers,
   getUpcomingEvents,
   // Charts
-  getStockChart
+  getStockChart,
+  // Company info & financials
+  getCompanyInfo
 };
