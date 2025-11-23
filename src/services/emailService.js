@@ -135,7 +135,7 @@ class EmailService {
   }
 
   async sendWelcomeEmail(user, verificationToken) {
-    const verificationUrl = `${process.env.CLIENT_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
+    const verificationUrl = `${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/verify-email?token=${verificationToken}`;
 
     const html = `
       <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
@@ -207,7 +207,7 @@ class EmailService {
         <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
           <h2 style="color: #333; margin-top: 0;">Hello ${user.first_name}!</h2>
           <p style="color: #666; line-height: 1.6;">
-            You requested to reset your password for your Trading Platform account.
+            You requested to reset your password for your Riven account.
             Please use the verification code below to reset your password.
           </p>
         </div>
@@ -255,13 +255,13 @@ class EmailService {
 
       Hello ${user.first_name},
 
-      You requested to reset your password for your Trading Platform account.
+      You requested to reset your password for your Riven account.
       Please use the verification code below to reset your password:
 
       Password Reset Code: ${resetCode}
 
       How to use this code:
-      1. Open the Trading Platform app or website
+      1. Open your Riven App
       2. Go to "Forgot Password" or "Reset Password"
       3. Enter this verification code: ${resetCode}
       4. Create your new password
@@ -295,13 +295,13 @@ class EmailService {
         <div style="background: #d4edda; padding: 20px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #28a745;">
           <h2 style="color: #155724; margin-top: 0;">Hello ${user.first_name}!</h2>
           <p style="color: #155724; line-height: 1.6;">
-            Your password has been successfully reset for your Trading Platform account.
+            Your password has been successfully reset for your Riven account.
             You can now log in with your new password.
           </p>
         </div>
 
         <div style="text-align: center; margin: 30px 0;">
-          <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/login"
+          <a href="${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/login"
              style="background: #28a745; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
             Log In Now
           </a>
@@ -327,10 +327,10 @@ class EmailService {
 
       Hello ${user.first_name},
 
-      Your password has been successfully reset for your Trading Platform account.
+      Your password has been successfully reset for your Riven account.
       You can now log in with your new password.
 
-      Log in: ${process.env.CLIENT_URL || 'http://localhost:3000'}/login
+      Log in: ${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/login
 
       SECURITY NOTICE:
       If you didn't reset your password, please contact our support team immediately.
@@ -362,7 +362,7 @@ class EmailService {
         </ul>
 
         <div style="text-align: center; margin: 30px 0;">
-          <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/dashboard"
+          <a href="${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/dashboard"
              style="background: #28a745; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
             Go to Dashboard
           </a>
@@ -543,7 +543,7 @@ class EmailService {
         ` : ''}
 
         <div style="text-align: center; margin: 30px 0;">
-          <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/portfolio"
+          <a href="${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/portfolio"
              style="background: #2c5aa0; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
             View Full Portfolio
           </a>
@@ -616,7 +616,7 @@ class EmailService {
         </div>
 
         <div style="text-align: center; margin: 30px 0;">
-          <a href="${process.env.CLIENT_URL || 'http://134.209.217.111'}/dashboard"
+          <a href="${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/dashboard"
              style="background: #28a745; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
             Go to Dashboard
           </a>
@@ -656,7 +656,7 @@ class EmailService {
 
       Welcome Bonus: $10 USD credited to your account! 🎁
 
-      Visit your dashboard: ${process.env.CLIENT_URL || 'http://134.209.217.111'}/dashboard
+      Visit your dashboard: ${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/dashboard
 
       Thank you for choosing Riven Trading Platform!
     `;
@@ -693,7 +693,7 @@ class EmailService {
             <p>You can track your ticket status and add messages by visiting your support dashboard.</p>
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/support/tickets/${ticketData.ticketId}"
+              <a href="${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/support/tickets/${ticketData.ticketId}"
                  style="background: #2c5aa0; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
                 View Ticket
               </a>
@@ -720,7 +720,7 @@ class EmailService {
             </div>
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/support/tickets/${ticketData.ticketId}"
+              <a href="${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/support/tickets/${ticketData.ticketId}"
                  style="background: #2c5aa0; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
                 View & Reply
               </a>
@@ -746,7 +746,7 @@ class EmailService {
             <p>If you're satisfied with the resolution, you can close this ticket. If you need further assistance, feel free to reopen it or add a message.</p>
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/support/tickets/${ticketData.ticketId}"
+              <a href="${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/support/tickets/${ticketData.ticketId}"
                  style="background: #28a745; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
                 View Resolution
               </a>
@@ -770,7 +770,7 @@ class EmailService {
             </div>
 
             <div style="text-align: center; margin: 30px 0;">
-              <a href="${process.env.CLIENT_URL || 'http://localhost:3000'}/support/tickets/${ticketData.ticketId}"
+              <a href="${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/support/tickets/${ticketData.ticketId}"
                  style="background: #ffc107; color: black; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
                 View Ticket
               </a>
