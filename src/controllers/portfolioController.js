@@ -85,8 +85,15 @@ const getPortfolio = async (req, res) => {
 
 const getPositions = async (req, res) => {
   try {
+    const { market } = req.query;
     const positions = await alpacaService.getPositions();
     const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
+    // Get all user orders to check for pending orders
+    const userOrders = await Order.findAll({
+      where: { user_id: req.user.id },
+      order: [['created_at', 'DESC']]
+    });
 
     const formattedPositions = await Promise.all(
       positions.map(async (position) => {
@@ -104,6 +111,13 @@ const getPositions = async (req, res) => {
         const costBasis = parseFloat(position.cost_basis);
         const unrealizedPL = currentValue - costBasis;
         const unrealizedPLPercent = costBasis > 0 ? (unrealizedPL / costBasis) * 100 : 0;
+
+        // Check if there are any pending orders for this symbol
+        const hasPendingOrders = userOrders.some(order =>
+          order.symbol.toUpperCase() === position.symbol.toUpperCase() &&
+          ['pending', 'new', 'partially_filled', 'accepted', 'pending_new',
+           'accepted_for_bidding', 'pending_cancel', 'pending_replace'].includes(order.status)
+        );
 
         return {
           symbol: position.symbol,
@@ -123,22 +137,37 @@ const getPositions = async (req, res) => {
           changeTodayKES: parseFloat(position.change_today || 0) * exchangeRate,
           lastDayPrice: parseFloat(position.lastday_price || currentPrice),
           exchange: position.exchange || 'NASDAQ',
-          assetClass: position.asset_class || 'us_equity'
+          assetClass: position.asset_class || 'us_equity',
+          status: hasPendingOrders ? 'pending' : 'open'
         };
       })
     );
 
-    // Calculate totals
-    const totalValue = formattedPositions.reduce((sum, pos) => sum + pos.marketValue, 0);
-    const totalCostBasis = formattedPositions.reduce((sum, pos) => sum + pos.costBasis, 0);
+    let filteredPositions = formattedPositions;
+    if (market) {
+      const marketMap = {
+        'us_equity': ['us_equity', 'us_stock'],
+        'us_stock': ['us_equity', 'us_stock'],
+        'ke_stock': ['ke_equity', 'ke_stock']
+      };
+
+      const allowedMarkets = marketMap[market.toLowerCase()] || [market.toLowerCase()];
+      filteredPositions = formattedPositions.filter(pos =>
+        allowedMarkets.includes(pos.assetClass.toLowerCase())
+      );
+    }
+
+    // Calculate totals based on filtered positions
+    const totalValue = filteredPositions.reduce((sum, pos) => sum + pos.marketValue, 0);
+    const totalCostBasis = filteredPositions.reduce((sum, pos) => sum + pos.costBasis, 0);
     const totalUnrealizedPL = totalValue - totalCostBasis;
     const totalUnrealizedPLPercent = totalCostBasis > 0 ? (totalUnrealizedPL / totalCostBasis) * 100 : 0;
 
     res.json({
       success: true,
-      positions: formattedPositions,
+      positions: filteredPositions,
       summary: {
-        totalPositions: formattedPositions.length,
+        totalPositions: filteredPositions.length,
         totalValue,
         totalValueKES: totalValue * exchangeRate,
         totalCostBasis,
