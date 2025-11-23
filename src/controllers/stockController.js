@@ -931,16 +931,16 @@ const getWatchlist = async (req, res) => {
 
     // Fetch market data from Alpaca using the alpaca_watchlist_id
     let watchlistWithMarketData;
-
     try {
       watchlistWithMarketData = await alpacaService.getWatchlistWithMarketData(
         dbWatchlist.alpaca_watchlist_id
       );
     } catch (alpacaError) {
-      // Handle stale Alpaca watchlist ID (404 error) - auto-recovery
-      if (alpacaError.message.includes('not found') || alpacaError.message.includes('404')) {
-        logger.warn(`Stale Alpaca watchlist ID ${dbWatchlist.alpaca_watchlist_id}. Recreating with symbols: ${dbWatchlist.symbols.join(', ')}`);
+      // Handle stale Alpaca watchlist ID - auto-recovery
+      // getWatchlistWithMarketData wraps errors, so attempt recovery for any failure
+      logger.warn(`Error fetching watchlist from Alpaca: ${alpacaError.message}. Attempting recovery...`);
 
+      try {
         // Recreate watchlist in Alpaca with current symbols from database
         const newAlpacaWatchlist = await alpacaService.createWatchlist(
           dbWatchlist.name,
@@ -958,8 +958,9 @@ const getWatchlist = async (req, res) => {
         );
 
         logger.info(`Successfully recreated watchlist with new ID: ${newAlpacaWatchlist.id}`);
-      } else {
-        throw alpacaError;
+      } catch (recoveryError) {
+        logger.error('Failed to recover watchlist:', recoveryError);
+        throw alpacaError; // Throw original error if recovery fails
       }
     }
 
