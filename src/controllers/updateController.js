@@ -332,7 +332,7 @@ const getMarketInsights = async (req, res) => {
 
 const getEconomicCalendar = async (req, res) => {
   try {
-    const { start, end } = req.query;
+    const { start, end, isHoliday } = req.query;
 
     const defaultStart = start || new Date().toISOString().split('T')[0];
     const defaultEnd = end || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
@@ -372,6 +372,46 @@ const getEconomicCalendar = async (req, res) => {
       }
     ];
 
+    // Sample dividend events (in production, fetch from Alpaca or financial data provider)
+    const dividendEvents = [
+      {
+        id: 'div-aapl-1',
+        symbol: 'AAPL',
+        title: 'Apple Inc. Dividend',
+        description: 'Quarterly dividend payment',
+        exDividendDate: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        paymentDate: new Date(Date.now() + 12 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        amount: 0.24,
+        currency: 'USD',
+        frequency: 'quarterly',
+        category: 'dividend'
+      },
+      {
+        id: 'div-msft-1',
+        symbol: 'MSFT',
+        title: 'Microsoft Corporation Dividend',
+        description: 'Quarterly dividend payment',
+        exDividendDate: new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        paymentDate: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        amount: 0.75,
+        currency: 'USD',
+        frequency: 'quarterly',
+        category: 'dividend'
+      },
+      {
+        id: 'div-googl-1',
+        symbol: 'GOOGL',
+        title: 'Alphabet Inc. Dividend',
+        description: 'Annual dividend payment',
+        exDividendDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        paymentDate: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        amount: 0.20,
+        currency: 'USD',
+        frequency: 'annual',
+        category: 'dividend'
+      }
+    ];
+
     const formattedCalendar = calendar.map(day => ({
       date: day.date,
       marketOpen: day.open,
@@ -382,17 +422,27 @@ const getEconomicCalendar = async (req, res) => {
       events: economicEvents.filter(event => event.date === day.date)
     }));
 
+    // Filter by holiday status if isHoliday query parameter is provided
+    let filteredCalendar = formattedCalendar;
+    if (isHoliday !== undefined) {
+      const holidayFilter = isHoliday === 'true' || isHoliday === true;
+      filteredCalendar = formattedCalendar.filter(day => day.isHoliday === holidayFilter);
+    }
+
     res.json({
       success: true,
-      calendar: formattedCalendar,
+      calendar: filteredCalendar,
       economicEvents: economicEvents.filter(event =>
         event.date >= defaultStart && event.date <= defaultEnd
+      ),
+      dividends: dividendEvents.filter(dividend =>
+        dividend.exDividendDate >= defaultStart && dividend.exDividendDate <= defaultEnd
       ),
       period: {
         start: defaultStart,
         end: defaultEnd
       },
-      count: formattedCalendar.length
+      count: filteredCalendar.length
     });
   } catch (error) {
     logger.error('Get economic calendar error:', error);
