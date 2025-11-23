@@ -941,11 +941,40 @@ const getWatchlist = async (req, res) => {
       logger.warn(`Error fetching watchlist from Alpaca: ${alpacaError.message}. Attempting recovery...`);
 
       try {
-        // Recreate watchlist in Alpaca with current symbols from database
-        const newAlpacaWatchlist = await alpacaService.createWatchlist(
-          dbWatchlist.name,
-          dbWatchlist.symbols
-        );
+        // Try to recreate watchlist in Alpaca with current symbols from database
+        let newAlpacaWatchlist;
+        try {
+          newAlpacaWatchlist = await alpacaService.createWatchlist(
+            dbWatchlist.name,
+            dbWatchlist.symbols
+          );
+        } catch (createError) {
+          // If watchlist name already exists, clean it up first
+          if (createError.message && createError.message.includes('watchlist name must be unique')) {
+            logger.warn(`Watchlist name "${dbWatchlist.name}" already exists in Alpaca. Cleaning up...`);
+
+            // Fetch all Alpaca watchlists
+            const allWatchlists = await alpacaService.getAllWatchlists();
+
+            // Find and delete any watchlists with matching name
+            const conflictingWatchlists = allWatchlists.filter(w => w.name === dbWatchlist.name);
+
+            for (const conflictingWatchlist of conflictingWatchlists) {
+              logger.info(`Deleting conflicting watchlist: ${conflictingWatchlist.id}`);
+              await alpacaService.deleteWatchlist(conflictingWatchlist.id);
+            }
+
+            // Retry creating the watchlist
+            newAlpacaWatchlist = await alpacaService.createWatchlist(
+              dbWatchlist.name,
+              dbWatchlist.symbols
+            );
+
+            logger.info(`Successfully cleaned up and recreated watchlist "${dbWatchlist.name}"`);
+          } else {
+            throw createError;
+          }
+        }
 
         // Update database with new Alpaca ID
         await dbWatchlist.update({
