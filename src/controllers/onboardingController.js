@@ -1054,23 +1054,28 @@ const onboardingController = {
 
         logger.info('Creating Alpaca account with data:', JSON.stringify(alpacaAccountData, null, 2));
 
-        // Try to create account via Broker API, or link existing account
+        // Try to create account via Broker API
         let alpacaAccountId = null;
         try {
           const alpacaAccount = await alpacaService.createAccount(alpacaAccountData);
           alpacaAccountId = alpacaAccount.id;
         } catch (brokerError) {
-          // If broker API fails, try to get existing account info from Trading API
-          logger.info('Broker API account creation failed, checking for existing account');
-          try {
-            const existingAccount = await alpacaService.getAccount();
-            if (existingAccount && existingAccount.account_number) {
-              alpacaAccountId = existingAccount.account_number;
-              logger.info('Found existing Alpaca account:', alpacaAccountId);
-            }
-          } catch (accountError) {
-            logger.warn('Could not retrieve existing account:', accountError.message);
-          }
+          // Log the error - user will proceed without Alpaca account
+          // They can retry onboarding or it can be set up manually later
+          logger.error('Broker API account creation failed:', brokerError.message);
+
+          // REMOVED: Don't fallback to master trading account - causes unique constraint violations
+          // The master account ID is shared and can't be assigned to individual users
+          // logger.info('Broker API account creation failed, checking for existing account');
+          // try {
+          //   const existingAccount = await alpacaService.getAccount();
+          //   if (existingAccount && existingAccount.account_number) {
+          //     alpacaAccountId = existingAccount.account_number;
+          //     logger.info('Found existing Alpaca account:', alpacaAccountId);
+          //   }
+          // } catch (accountError) {
+          //   logger.warn('Could not retrieve existing account:', accountError.message);
+          // }
         }
 
         if (alpacaAccountId) {

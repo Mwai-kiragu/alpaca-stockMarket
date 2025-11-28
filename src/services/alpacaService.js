@@ -320,12 +320,26 @@ class AlpacaService {
         return '15551234567'; // Fallback
       };
 
+      // Format street address - Alpaca requires it to not be only digits
+      const formatStreetAddress = (street) => {
+        if (!street) return '123 Main Street';
+
+        // Check if street contains only digits (with optional spaces)
+        const trimmed = street.trim();
+        if (/^\d+$/.test(trimmed.replace(/\s/g, ''))) {
+          // If only digits, append "Street" to make it a valid address
+          return `${trimmed} Main Street`;
+        }
+
+        return trimmed;
+      };
+
       // For Alpaca Broker API, we need proper account creation data
       const accountData = {
         contact: {
           email_address: userData.email,
           phone_number: formatPhone(userData.phone),
-          street_address: [userData.address?.street || '123 Main St'],
+          street_address: [formatStreetAddress(userData.address?.street)],
           city: this.mapToUSCity(userData.address?.city) || 'New York',
           state: this.mapToUSState(userData.address?.state) || 'NY',
           postal_code: this.mapToUSZipCode(userData.address?.postalCode) || '10001',
@@ -353,7 +367,7 @@ class AlpacaService {
           immediate_family_exposed: false,
           employment_status: userData.employment?.status?.toLowerCase() || 'employed',
           employer_name: userData.employment?.employerName || 'Self Employed',
-          employer_address: userData.address?.street || '123 Main St',
+          employer_address: formatStreetAddress(userData.address?.street),
           employment_position: userData.employment?.jobTitle || 'Developer'
         },
         agreements: [
