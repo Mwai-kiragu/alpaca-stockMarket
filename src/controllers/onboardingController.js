@@ -152,19 +152,18 @@ const onboardingController = {
         return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
-      // Define step hierarchy for comparison
+      // Define step hierarchy for comparison (8-step flow - trustedContact removed)
       const stepHierarchy = {
         'email_verification': 0,
         'personal_info': 1,
         'employment_info': 2,
         'kyc_verification': 3,
-        'trusted_contact': 4,
-        'documents': 5,
-        'documents_id_front': 5,
-        'documents_id_back': 6,
-        'documents_proof_address': 7,
-        'agreements': 8,
-        'completed': 9
+        'documents': 4,
+        'documents_id_front': 4,
+        'documents_id_back': 5,
+        'documents_proof_address': 6,
+        'agreements': 7,
+        'completed': 8
       };
 
       // Only advance to employment_info if user hasn't progressed beyond it
@@ -313,7 +312,7 @@ const onboardingController = {
       await user.update({
         kyc_data: updatedKycData,
         kyc_status: 'pending',
-        registration_step: 'trusted_contact'  // Step 4: Trusted Contacts
+        registration_step: 'documents_id_front'  // Step 4: ID FRONT (trustedContact step removed)
       });
 
       return res.status(200).json(
@@ -598,7 +597,7 @@ const onboardingController = {
         terms_accepted_at: new Date(),
         privacy_accepted_at: new Date(),
         kyc_data: updatedKycData,
-        registration_step: 'completed'  // Step 8: Completion
+        registration_step: 'completed'  // Step 8: Completion (after agreements)
       });
 
       return res.status(200).json(
@@ -686,10 +685,6 @@ const onboardingController = {
             completed: !!kycData.kyc,
             data: kycData.kyc || null
           },
-          trustedContact: {
-            completed: !!kycData.trustedContact,
-            data: kycData.trustedContact || null
-          },
           documents: {
             completed: !!(kycData.documents?.idFront && kycData.documents?.idBack && kycData.documents?.proofOfAddress),
             data: kycData.documents || null
@@ -736,7 +731,6 @@ const onboardingController = {
         personalDetails: !!(user.date_of_birth && user.gender && user.address),
         employment: !!kycData.employment,
         kyc: !!kycData.kyc,
-        trustedContact: !!kycData.trustedContact,
         idFront: !!kycData.documents?.idFront,
         idBack: !!kycData.documents?.idBack,
         proofOfAddress: !!kycData.documents?.proofOfAddress,
@@ -748,22 +742,21 @@ const onboardingController = {
       const totalSteps = Object.keys(steps).length;
       const progressPercentage = Math.round((completedSteps / totalSteps) * 100);
 
-      // Map registration steps to step numbers (9-step flow as requested)
+      // Map registration steps to step numbers (8-step flow - trustedContact removed)
       const stepMapping = {
         'email_verification': 0,      // Email verification is pre-onboarding (handled at login)
         'personal_info': 1,           // Step 1: Personal Details
         'employment_info': 2,         // Step 2: Employment
         'kyc_verification': 3,        // Step 3: KYC
-        'trusted_contact': 4,         // Step 4: Trusted Contacts
-        'documents': 5,               // Step 5: ID FRONT (legacy)
-        'documents_id_front': 5,      // Step 5: ID FRONT
-        'documents_id_back': 6,       // Step 6: ID BACK
-        'documents_proof_address': 7, // Step 7: PROOF OF ADDRESS
-        'agreements': 8,              // Step 8: Accept Terms and Conditions
-        'kyc_pending': 9,             // Step 9: Completion
-        'kyc_under_review': 9,        // Step 9: Under Review
-        'completed': 9,               // Step 9: Completed
-        'initial_completed': 9        // Step 9: Initial Completed
+        'documents': 4,               // Step 4: ID FRONT (legacy)
+        'documents_id_front': 4,      // Step 4: ID FRONT
+        'documents_id_back': 5,       // Step 5: ID BACK
+        'documents_proof_address': 6, // Step 6: PROOF OF ADDRESS
+        'agreements': 7,              // Step 7: Accept Terms and Conditions
+        'kyc_pending': 8,             // Step 8: Completion
+        'kyc_under_review': 8,        // Step 8: Under Review
+        'completed': 8,               // Step 8: Completed
+        'initial_completed': 8        // Step 8: Initial Completed
       };
 
       let currentStepCount = stepMapping[user.registration_step];
@@ -855,41 +848,34 @@ const onboardingController = {
           },
           {
             stepNumber: 4,
-            stepName: 'Trusted Contacts',
-            endpoint: '/api/v1/onboarding/trusted-contact',
-            completed: !!kycData.trustedContact,
-            data: kycData.trustedContact || null
-          },
-          {
-            stepNumber: 5,
             stepName: 'ID FRONT',
             endpoint: '/api/v1/onboarding/upload-id-front',
             completed: !!kycData.documents?.idFront,
             data: kycData.documents?.idFront || null
           },
           {
-            stepNumber: 6,
+            stepNumber: 5,
             stepName: 'ID BACK',
             endpoint: '/api/v1/onboarding/upload-id-back',
             completed: !!kycData.documents?.idBack,
             data: kycData.documents?.idBack || null
           },
           {
-            stepNumber: 7,
-            stepName: 'PROF OF ADDRESS',
+            stepNumber: 6,
+            stepName: 'PROOF OF ADDRESS',
             endpoint: '/api/v1/onboarding/upload-proof-of-address',
             completed: !!kycData.documents?.proofOfAddress,
             data: kycData.documents?.proofOfAddress || null
           },
           {
-            stepNumber: 8,
+            stepNumber: 7,
             stepName: 'Accept Terms and Conditions',
             endpoint: '/api/v1/onboarding/agreements',
             completed: !!(user.terms_accepted && user.privacy_accepted),
             data: kycData.agreements || null
           },
           {
-            stepNumber: 9,
+            stepNumber: 8,
             stepName: 'Completion',
             endpoint: '/api/v1/onboarding/complete',
             completed: user.registration_status === 'completed',
@@ -903,14 +889,13 @@ const onboardingController = {
             personalDetails: !!(user.date_of_birth && user.gender && user.address),
             employment: !!kycData.employment,
             kyc: !!kycData.kyc,
-            trustedContact: !!kycData.trustedContact,
             idFront: !!kycData.documents?.idFront,
             idBack: !!kycData.documents?.idBack,
             proofOfAddress: !!kycData.documents?.proofOfAddress,
             agreements: !!(user.terms_accepted && user.privacy_accepted),
             completion: user.registration_status === 'completed'
           }).filter(Boolean).length : 0,
-          totalSteps: 9,
+          totalSteps: 8,
           isComplete: user.registration_status === 'completed',
           kycStatus: user.kyc_status,
           accountStatus: user.account_status
@@ -962,11 +947,6 @@ const onboardingController = {
       // Check KYC information
       if (!kycData.kyc) {
         missingSteps.push('KYC information not completed');
-      }
-
-      // Check trusted contact
-      if (!kycData.trustedContact) {
-        missingSteps.push('Trusted contact not added');
       }
 
       // Check documents
@@ -1048,14 +1028,14 @@ const onboardingController = {
             expectedTransactionVolume: kycData.kyc.expectedTransactionVolume
           },
 
-          // Trusted contact
-          trustedContact: {
+          // Trusted contact (optional - only include if provided)
+          trustedContact: kycData.trustedContact ? {
             fullName: kycData.trustedContact.fullName,
             relationship: kycData.trustedContact.relationship,
             email: kycData.trustedContact.email,
             phoneNumber: kycData.trustedContact.phoneNumber,
             address: kycData.trustedContact.address
-          },
+          } : null,
 
           // Compliance information
           citizenship: user.citizenship,
