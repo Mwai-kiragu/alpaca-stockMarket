@@ -2,6 +2,9 @@ const alpacaService = require('../services/alpacaService');
 const logger = require('../utils/logger');
 const { mapConditionCodes } = require('../utils/conditionCodes');
 const { Watchlist } = require('../models');
+const Order = require('../models/Order');
+const axios = require('axios');
+const { sequelize } = require('../config/database');
 
 const getQuote = async (req, res) => {
   const { symbol } = req.params;
@@ -1601,11 +1604,106 @@ const getStockChart = async (req, res) => {
   }
 };
 
-// Helper function to fetch financial data from free API
+// Helper function to fetch financial data from Yahoo Finance (fallback)
+const getYahooFinanceData = async (symbol) => {
+  try {
+    // Try Yahoo Finance v8 API (more reliable)
+    const url = `https://query2.finance.yahoo.com/v8/finance/chart/${symbol}?modules=assetProfile,summaryDetail,defaultKeyStatistics,financialData`;
+
+    logger.info(`Fetching financial data for ${symbol} from Yahoo Finance`);
+    const response = await axios.get(url, {
+      timeout: 8000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9'
+      }
+    });
+
+    // v8 chart API returns different structure
+    const meta = response.data?.chart?.result?.[0]?.meta;
+    if (meta) {
+      return {
+        marketCap: null, // Not in chart API
+        peRatio: null,
+        dividendYield: null,
+        eps: null,
+        beta: null,
+        sector: null,
+        industry: null,
+        website: null,
+        description: null,
+        ceo: null,
+        employees: null,
+        country: null,
+        city: null,
+        revenue: null,
+        profitMargin: null,
+        '52WeekHigh': meta.fiftyTwoWeekHigh || null,
+        '52WeekLow': meta.fiftyTwoWeekLow || null,
+        regularMarketPrice: meta.regularMarketPrice || null,
+        source: 'yahoo_chart'
+      };
+    }
+
+    return null;
+  } catch (error) {
+    logger.warn(`Yahoo Finance v8 failed for ${symbol}:`, error.message);
+
+    // Try alternative: Financial Modeling Prep (free tier)
+    try {
+      return await getFMPData(symbol);
+    } catch (fmpError) {
+      logger.warn(`FMP fallback also failed for ${symbol}:`, fmpError.message);
+      return null;
+    }
+  }
+};
+
+// Helper function to fetch from Financial Modeling Prep (free API)
+const getFMPData = async (symbol) => {
+  try {
+    const apiKey = process.env.FMP_API_KEY || 'demo';
+    const url = `https://financialmodelingprep.com/api/v3/profile/${symbol}?apikey=${apiKey}`;
+
+    logger.info(`Fetching financial data for ${symbol} from FMP`);
+    const response = await axios.get(url, { timeout: 5000 });
+
+    const data = response.data?.[0];
+    if (!data) {
+      return null;
+    }
+
+    return {
+      marketCap: data.mktCap ? `$${(data.mktCap / 1e9).toFixed(2)}B` : null,
+      peRatio: data.pe || null,
+      dividendYield: data.lastDiv ? `${data.lastDiv.toFixed(2)}%` : null,
+      eps: null,
+      beta: data.beta || null,
+      sector: data.sector || null,
+      industry: data.industry || null,
+      website: data.website || null,
+      description: data.description || null,
+      ceo: data.ceo || null,
+      employees: data.fullTimeEmployees || null,
+      country: data.country || null,
+      city: data.city || null,
+      revenue: null,
+      profitMargin: null,
+      '52WeekHigh': data.range ? parseFloat(data.range.split('-')[1]) : null,
+      '52WeekLow': data.range ? parseFloat(data.range.split('-')[0]) : null,
+      bookValue: null,
+      source: 'fmp'
+    };
+  } catch (error) {
+    logger.warn(`FMP API failed for ${symbol}:`, error.message);
+    return null;
+  }
+};
+
+// Helper function to fetch financial data from free API (Alpha Vantage with Yahoo fallback)
 const getFinancialData = async (symbol) => {
   try {
-    const axios = require('axios');
-
     const apiKey = process.env.ALPHA_VANTAGE_API_KEY || 'demo';
     const overviewUrl = `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${symbol}&apikey=${apiKey}`;
 
@@ -1633,24 +1731,40 @@ const getFinancialData = async (symbol) => {
         profitMargin: data.ProfitMargin ? `${(parseFloat(data.ProfitMargin) * 100).toFixed(2)}%` : null,
         '52WeekHigh': data['52WeekHigh'] || null,
         '52WeekLow': data['52WeekLow'] || null,
-        bookValue: data.BookValue || null
+        bookValue: data.BookValue || null,
+        source: 'alphavantage'
       };
     }
 
-    logger.warn(`No financial data found for ${symbol}`);
+    // Alpha Vantage returned no data, try Yahoo Finance as fallback
+    logger.info(`Alpha Vantage has no data for ${symbol}, trying Yahoo Finance fallback`);
+    const yahooData = await getYahooFinanceData(symbol);
+    if (yahooData) {
+      return yahooData;
+    }
+
+    logger.warn(`No financial data found for ${symbol} from any source`);
     return {
       marketCap: null,
       peRatio: null,
       dividendYield: null,
       eps: null,
       beta: null,
-      note: 'Financial data unavailable. Add ALPHA_VANTAGE_API_KEY to .env for full data.'
+      note: 'Financial data unavailable for this stock.'
     };
   } catch (error) {
     logger.error(`Failed to fetch financial data for ${symbol}:`, {
       message: error.message,
       status: error.response?.status
     });
+
+    // Try Yahoo Finance as fallback on Alpha Vantage error
+    logger.info(`Alpha Vantage error for ${symbol}, trying Yahoo Finance fallback`);
+    const yahooData = await getYahooFinanceData(symbol);
+    if (yahooData) {
+      return yahooData;
+    }
+
     return {
       marketCap: null,
       peRatio: null,
@@ -1680,14 +1794,16 @@ const getCompanyInfo = async (req, res) => {
 
     // Get user's position for this symbol (if authenticated)
     let userPosition = null;
+    const userId = req.user?.id;
+
     try {
-      // Get all positions and account info
+      // Get all positions and account info from Alpaca
       const [positions, account] = await Promise.all([
         alpacaService.getPositions(),
         alpacaService.getAccount()
       ]);
 
-      // Find position for this specific symbol
+      // Find position for this specific symbol in Alpaca
       const position = positions.find(p => p.symbol === upperSymbol);
 
       if (position) {
@@ -1717,8 +1833,84 @@ const getCompanyInfo = async (req, res) => {
           },
           side: position.side, // 'long' or 'short'
           currentPrice: parseFloat(position.current_price),
-          lastDayPrice: parseFloat(position.lastday_price)
+          lastDayPrice: parseFloat(position.lastday_price),
+          source: 'alpaca'
         };
+      } else if (userId) {
+        // No position in Alpaca, check local Order database
+        logger.info(`No Alpaca position for ${upperSymbol}, checking local orders for user ${userId}`);
+
+        // Get filled orders for this symbol and user
+        const filledOrders = await Order.findAll({
+          where: {
+            user_id: userId,
+            symbol: upperSymbol,
+            status: 'filled'
+          },
+          order: [['filled_at', 'ASC']]
+        });
+
+        if (filledOrders.length > 0) {
+          // Calculate position from orders (sum buys - sum sells)
+          let totalShares = 0;
+          let totalCostBasis = 0;
+
+          for (const order of filledOrders) {
+            const qty = parseFloat(order.filled_quantity) || parseFloat(order.quantity);
+            const price = parseFloat(order.average_price) || parseFloat(order.limit_price) || 0;
+
+            if (order.side === 'buy') {
+              totalShares += qty;
+              totalCostBasis += qty * price;
+            } else if (order.side === 'sell') {
+              // When selling, reduce position proportionally
+              if (totalShares > 0) {
+                const avgCostPerShare = totalCostBasis / totalShares;
+                totalCostBasis -= qty * avgCostPerShare;
+              }
+              totalShares -= qty;
+            }
+          }
+
+          // Only show position if user still holds shares
+          if (totalShares > 0) {
+            const avgCost = totalCostBasis / totalShares;
+            const totalEquity = parseFloat(account.equity) || 0;
+
+            // Get current price for calculations
+            let currentStockPrice = null;
+            try {
+              const quote = await alpacaService.getLatestQuote(upperSymbol);
+              currentStockPrice = quote.ap || quote.bp;
+            } catch (e) {
+              logger.warn(`Could not get current price for ${upperSymbol}`);
+            }
+
+            const marketValue = currentStockPrice ? totalShares * currentStockPrice : totalCostBasis;
+            const portfolioDiversity = totalEquity > 0 ? (marketValue / totalEquity) * 100 : 0;
+            const totalReturn = currentStockPrice ? marketValue - totalCostBasis : 0;
+            const totalReturnPercent = totalCostBasis > 0 ? (totalReturn / totalCostBasis) * 100 : 0;
+
+            userPosition = {
+              shares: parseFloat(totalShares.toFixed(6)),
+              marketValue: parseFloat(marketValue.toFixed(2)),
+              avgCost: parseFloat(avgCost.toFixed(2)),
+              portfolioDiversity: `${portfolioDiversity.toFixed(2)}%`,
+              todayReturn: {
+                amount: 0, // Can't calculate from local orders
+                percent: 0
+              },
+              totalReturn: {
+                amount: parseFloat(totalReturn.toFixed(2)),
+                percent: parseFloat(totalReturnPercent.toFixed(2))
+              },
+              side: 'long',
+              currentPrice: currentStockPrice,
+              lastDayPrice: null,
+              source: 'local_orders'
+            };
+          }
+        }
       }
     } catch (positionError) {
       logger.warn(`Failed to get user position for ${upperSymbol}:`, positionError.message);
