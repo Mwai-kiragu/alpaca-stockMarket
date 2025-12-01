@@ -1673,8 +1673,57 @@ const getCompanyInfo = async (req, res) => {
       });
     }
 
+    const upperSymbol = symbol.toUpperCase();
+
     // Get asset details from Alpaca
-    const asset = await alpacaService.getAsset(symbol.toUpperCase());
+    const asset = await alpacaService.getAsset(upperSymbol);
+
+    // Get user's position for this symbol (if authenticated)
+    let userPosition = null;
+    try {
+      // Get all positions and account info
+      const [positions, account] = await Promise.all([
+        alpacaService.getPositions(),
+        alpacaService.getAccount()
+      ]);
+
+      // Find position for this specific symbol
+      const position = positions.find(p => p.symbol === upperSymbol);
+
+      if (position) {
+        const shares = parseFloat(position.qty);
+        const marketValue = parseFloat(position.market_value);
+        const costBasis = parseFloat(position.cost_basis);
+        const avgCost = costBasis / shares;
+        const totalEquity = parseFloat(account.equity);
+        const portfolioDiversity = totalEquity > 0 ? (marketValue / totalEquity) * 100 : 0;
+        const todayReturn = parseFloat(position.unrealized_intraday_pl) || 0;
+        const todayReturnPercent = parseFloat(position.unrealized_intraday_plpc) * 100 || 0;
+        const totalReturn = parseFloat(position.unrealized_pl) || 0;
+        const totalReturnPercent = parseFloat(position.unrealized_plpc) * 100 || 0;
+
+        userPosition = {
+          shares: shares,
+          marketValue: parseFloat(marketValue.toFixed(2)),
+          avgCost: parseFloat(avgCost.toFixed(2)),
+          portfolioDiversity: `${portfolioDiversity.toFixed(2)}%`,
+          todayReturn: {
+            amount: parseFloat(todayReturn.toFixed(2)),
+            percent: parseFloat(todayReturnPercent.toFixed(2))
+          },
+          totalReturn: {
+            amount: parseFloat(totalReturn.toFixed(2)),
+            percent: parseFloat(totalReturnPercent.toFixed(2))
+          },
+          side: position.side, // 'long' or 'short'
+          currentPrice: parseFloat(position.current_price),
+          lastDayPrice: parseFloat(position.lastday_price)
+        };
+      }
+    } catch (positionError) {
+      logger.warn(`Failed to get user position for ${upperSymbol}:`, positionError.message);
+      // Continue without position data - user may not have a position
+    }
 
     // Get latest quote for current price
     let currentPrice = null;
@@ -1682,24 +1731,24 @@ const getCompanyInfo = async (req, res) => {
     let priceChangePercent = null;
 
     try {
-      const quote = await alpacaService.getLatestQuote(symbol.toUpperCase());
+      const quote = await alpacaService.getLatestQuote(upperSymbol);
       currentPrice = quote.ap || quote.bp;
 
       // Get yesterday's closing price
-      const bars = await alpacaService.getBars(symbol.toUpperCase(), '1Day', null, null, 2);
+      const bars = await alpacaService.getBars(upperSymbol, '1Day', null, null, 2);
       if (bars && bars.length >= 2) {
         const previousClose = parseFloat(bars[bars.length - 2].c);
         priceChange = currentPrice - previousClose;
         priceChangePercent = (priceChange / previousClose) * 100;
       }
     } catch (error) {
-      logger.warn(`Failed to get price data for ${symbol}:`, error);
+      logger.warn(`Failed to get price data for ${upperSymbol}:`, error);
     }
 
     // Get recent news
     let recentNews = [];
     try {
-      const news = await alpacaService.getNews([symbol.toUpperCase()], 5);
+      const news = await alpacaService.getNews([upperSymbol], 5);
       recentNews = news.map(article => ({
         id: article.id,
         headline: article.headline,
@@ -1710,11 +1759,11 @@ const getCompanyInfo = async (req, res) => {
         thumbnail: article.images?.[0]?.url
       }));
     } catch (error) {
-      logger.warn(`Failed to get news for ${symbol}:`, error);
+      logger.warn(`Failed to get news for ${upperSymbol}:`, error);
     }
 
     // Get financial data (includes company info like sector, industry, etc.)
-    const financialData = await getFinancialData(symbol.toUpperCase());
+    const financialData = await getFinancialData(upperSymbol);
 
     // Build company information response
     const companyInfo = {
@@ -1765,7 +1814,10 @@ const getCompanyInfo = async (req, res) => {
       // Recent news
       recentNews,
 
-      logo: alpacaService.getCompanyLogo(symbol.toUpperCase()),
+      // User's position (null if user has no position in this stock)
+      yourPosition: userPosition,
+
+      logo: alpacaService.getCompanyLogo(upperSymbol),
       lastUpdated: new Date().toISOString()
     };
 
