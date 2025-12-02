@@ -656,11 +656,215 @@ const getAssetTrend = async (req, res) => {
   }
 };
 
+// Get portfolio allocation for pie chart
+const getPortfolioAllocation = async (req, res) => {
+  try {
+    // Get all user's positions
+    const positions = await alpacaService.getPositions();
+
+    if (!positions || positions.length === 0) {
+      return res.json({
+        success: true,
+        allocation: {
+          byAssetClass: [],
+          bySector: [],
+          byStock: [],
+          byExchange: []
+        },
+        summary: {
+          totalValue: 0,
+          totalValueKES: 0,
+          totalPositions: 0
+        }
+      });
+    }
+
+    // Get exchange rate for KES conversion
+    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
+    // Calculate total portfolio value
+    const totalValue = positions.reduce((sum, pos) => sum + parseFloat(pos.market_value), 0);
+
+    // Fetch additional data for each position (sector, industry)
+    const positionDetails = await Promise.all(
+      positions.map(async (position) => {
+        const marketValue = parseFloat(position.market_value);
+        const percentage = totalValue > 0 ? (marketValue / totalValue) * 100 : 0;
+
+        // Try to get asset details for sector/industry info
+        let sector = 'Unknown';
+        let industry = 'Unknown';
+        let exchange = position.exchange || 'NASDAQ';
+        let assetClass = position.asset_class || 'us_equity';
+
+        try {
+          // Get asset info from Alpaca
+          const asset = await alpacaService.getAsset(position.symbol);
+          exchange = asset.exchange || exchange;
+          assetClass = asset.class || assetClass;
+        } catch (assetError) {
+          logger.warn(`Could not get asset details for ${position.symbol}`);
+        }
+
+        // Determine asset class label
+        let assetClassLabel = 'US Stocks';
+        if (assetClass === 'us_equity' || assetClass === 'us_stock') {
+          assetClassLabel = 'US Stocks';
+        } else if (assetClass === 'ke_equity' || assetClass === 'ke_stock') {
+          assetClassLabel = 'KE Stocks';
+        } else if (assetClass === 'crypto') {
+          assetClassLabel = 'Crypto';
+        } else if (assetClass === 'etf') {
+          assetClassLabel = 'ETFs';
+        }
+
+        return {
+          symbol: position.symbol,
+          name: position.symbol, // Could fetch company name
+          marketValue,
+          marketValueKES: marketValue * exchangeRate,
+          percentage: parseFloat(percentage.toFixed(2)),
+          quantity: parseFloat(position.qty),
+          currentPrice: parseFloat(position.current_price),
+          assetClass,
+          assetClassLabel,
+          sector,
+          industry,
+          exchange,
+          unrealizedPL: parseFloat(position.unrealized_pl),
+          unrealizedPLPercent: parseFloat(position.unrealized_plpc) * 100
+        };
+      })
+    );
+
+    // Group by Asset Class
+    const assetClassGroups = {};
+    positionDetails.forEach(pos => {
+      const key = pos.assetClassLabel;
+      if (!assetClassGroups[key]) {
+        assetClassGroups[key] = {
+          name: key,
+          value: 0,
+          valueKES: 0,
+          percentage: 0,
+          count: 0,
+          stocks: []
+        };
+      }
+      assetClassGroups[key].value += pos.marketValue;
+      assetClassGroups[key].valueKES += pos.marketValueKES;
+      assetClassGroups[key].count += 1;
+      assetClassGroups[key].stocks.push(pos.symbol);
+    });
+
+    // Calculate percentages for asset classes
+    const byAssetClass = Object.values(assetClassGroups).map(group => ({
+      ...group,
+      percentage: parseFloat(((group.value / totalValue) * 100).toFixed(2)),
+      value: parseFloat(group.value.toFixed(2)),
+      valueKES: parseFloat(group.valueKES.toFixed(2))
+    })).sort((a, b) => b.percentage - a.percentage);
+
+    // Group by Exchange
+    const exchangeGroups = {};
+    positionDetails.forEach(pos => {
+      const key = pos.exchange;
+      if (!exchangeGroups[key]) {
+        exchangeGroups[key] = {
+          name: key,
+          value: 0,
+          valueKES: 0,
+          percentage: 0,
+          count: 0,
+          stocks: []
+        };
+      }
+      exchangeGroups[key].value += pos.marketValue;
+      exchangeGroups[key].valueKES += pos.marketValueKES;
+      exchangeGroups[key].count += 1;
+      exchangeGroups[key].stocks.push(pos.symbol);
+    });
+
+    // Calculate percentages for exchanges
+    const byExchange = Object.values(exchangeGroups).map(group => ({
+      ...group,
+      percentage: parseFloat(((group.value / totalValue) * 100).toFixed(2)),
+      value: parseFloat(group.value.toFixed(2)),
+      valueKES: parseFloat(group.valueKES.toFixed(2))
+    })).sort((a, b) => b.percentage - a.percentage);
+
+    // Group by Sector (placeholder - would need external data source)
+    const sectorGroups = {};
+    positionDetails.forEach(pos => {
+      const key = pos.sector;
+      if (!sectorGroups[key]) {
+        sectorGroups[key] = {
+          name: key,
+          value: 0,
+          valueKES: 0,
+          percentage: 0,
+          count: 0,
+          stocks: []
+        };
+      }
+      sectorGroups[key].value += pos.marketValue;
+      sectorGroups[key].valueKES += pos.marketValueKES;
+      sectorGroups[key].count += 1;
+      sectorGroups[key].stocks.push(pos.symbol);
+    });
+
+    // Calculate percentages for sectors
+    const bySector = Object.values(sectorGroups).map(group => ({
+      ...group,
+      percentage: parseFloat(((group.value / totalValue) * 100).toFixed(2)),
+      value: parseFloat(group.value.toFixed(2)),
+      valueKES: parseFloat(group.valueKES.toFixed(2))
+    })).sort((a, b) => b.percentage - a.percentage);
+
+    // Individual stocks allocation
+    const byStock = positionDetails.map(pos => ({
+      symbol: pos.symbol,
+      name: pos.name,
+      value: parseFloat(pos.marketValue.toFixed(2)),
+      valueKES: parseFloat(pos.marketValueKES.toFixed(2)),
+      percentage: pos.percentage,
+      quantity: pos.quantity,
+      currentPrice: pos.currentPrice,
+      unrealizedPL: parseFloat(pos.unrealizedPL.toFixed(2)),
+      unrealizedPLPercent: parseFloat(pos.unrealizedPLPercent.toFixed(2))
+    })).sort((a, b) => b.percentage - a.percentage);
+
+    res.json({
+      success: true,
+      allocation: {
+        byAssetClass,
+        byExchange,
+        bySector,
+        byStock
+      },
+      summary: {
+        totalValue: parseFloat(totalValue.toFixed(2)),
+        totalValueKES: parseFloat((totalValue * exchangeRate).toFixed(2)),
+        totalPositions: positions.length,
+        exchangeRate
+      },
+      lastUpdated: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Get portfolio allocation error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch portfolio allocation data'
+    });
+  }
+};
+
 module.exports = {
   getPortfolio,
   getPositions,
   getPosition,
   getPerformance,
   closePosition,
-  getAssetTrend
+  getAssetTrend,
+  getPortfolioAllocation
 };
