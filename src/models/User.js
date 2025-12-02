@@ -165,6 +165,10 @@ User.init({
     type: DataTypes.BOOLEAN,
     defaultValue: false
   },
+  pin_enabled: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
   two_factor_enabled: {
     type: DataTypes.BOOLEAN,
     defaultValue: false

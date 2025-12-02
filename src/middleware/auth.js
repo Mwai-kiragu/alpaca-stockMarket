@@ -9,7 +9,9 @@ const auth = async (req, res, next) => {
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: 'Access denied. No token provided.'
+        message: 'Access denied. No token provided.',
+        code: 'NO_TOKEN',
+        statusCode: 401
       });
     }
 
@@ -21,14 +23,18 @@ const auth = async (req, res, next) => {
     if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'Token is not valid.'
+        message: 'Token is not valid.',
+        code: 'INVALID_TOKEN',
+        statusCode: 401
       });
     }
 
     if (user.status !== 'active') {
       return res.status(401).json({
         success: false,
-        message: 'Account is suspended or closed.'
+        message: 'Account is suspended or closed.',
+        code: 'ACCOUNT_INACTIVE',
+        statusCode: 401
       });
     }
 
@@ -40,20 +46,26 @@ const auth = async (req, res, next) => {
     if (error.name === 'JsonWebTokenError') {
       return res.status(401).json({
         success: false,
-        message: 'Token is not valid.'
+        message: 'Token is not valid.',
+        code: 'INVALID_TOKEN',
+        statusCode: 401
       });
     }
 
     if (error.name === 'TokenExpiredError') {
       return res.status(401).json({
         success: false,
-        message: 'Token has expired.'
+        message: 'Token has expired. Please login again.',
+        code: 'TOKEN_EXPIRED',
+        statusCode: 401
       });
     }
 
     res.status(500).json({
       success: false,
-      message: 'Server error during authentication.'
+      message: 'Server error during authentication.',
+      code: 'AUTH_ERROR',
+      statusCode: 500
     });
   }
 };

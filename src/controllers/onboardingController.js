@@ -1328,6 +1328,122 @@ const onboardingController = {
         ApiResponse.Error('An error occurred during sandbox bulk KYC approval', 500)
       );
     }
+  },
+
+  // Get user settings
+  getUserSettings: async (req, res) => {
+    try {
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const settings = {
+        pinEnabled: user.pin_enabled || false,
+        biometricEnabled: user.biometric_enabled || false,
+        twoFactorEnabled: user.two_factor_enabled || false,
+        autoConvertDeposits: user.auto_convert_deposits !== false,
+        securityPreferences: user.security_preferences || {
+          require_biometric_for_login: false,
+          require_biometric_for_transactions: true,
+          biometric_timeout_minutes: 15
+        }
+      };
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(settings, 'User settings retrieved successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error getting user settings:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while getting user settings', 500)
+      );
+    }
+  },
+
+  // Update user settings
+  updateUserSettings: async (req, res) => {
+    try {
+      const {
+        pinEnabled,
+        biometricEnabled,
+        twoFactorEnabled,
+        autoConvertDeposits,
+        securityPreferences
+      } = req.body;
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const updates = {};
+
+      // Update pinEnabled
+      if (typeof pinEnabled === 'boolean') {
+        updates.pin_enabled = pinEnabled;
+        // If disabling PIN and user wants to clear it
+        if (!pinEnabled) {
+          // Optionally clear the PIN hash when disabled
+          // updates.pin_hash = null;
+        }
+      }
+
+      // Update biometricEnabled
+      if (typeof biometricEnabled === 'boolean') {
+        updates.biometric_enabled = biometricEnabled;
+      }
+
+      // Update twoFactorEnabled
+      if (typeof twoFactorEnabled === 'boolean') {
+        updates.two_factor_enabled = twoFactorEnabled;
+      }
+
+      // Update autoConvertDeposits
+      if (typeof autoConvertDeposits === 'boolean') {
+        updates.auto_convert_deposits = autoConvertDeposits;
+      }
+
+      // Update security preferences
+      if (securityPreferences && typeof securityPreferences === 'object') {
+        const currentPrefs = user.security_preferences || {};
+        updates.security_preferences = {
+          ...currentPrefs,
+          ...securityPreferences
+        };
+      }
+
+      // Only update if there are changes
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json(
+          ApiResponse.Error('No valid settings provided to update', 400)
+        );
+      }
+
+      await user.update(updates);
+
+      // Return updated settings
+      const updatedSettings = {
+        pinEnabled: user.pin_enabled || false,
+        biometricEnabled: user.biometric_enabled || false,
+        twoFactorEnabled: user.two_factor_enabled || false,
+        autoConvertDeposits: user.auto_convert_deposits !== false,
+        securityPreferences: user.security_preferences || {}
+      };
+
+      logger.info(`User ${user.id} updated settings:`, Object.keys(updates));
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(updatedSettings, 'User settings updated successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error updating user settings:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while updating user settings', 500)
+      );
+    }
   }
 };
 
