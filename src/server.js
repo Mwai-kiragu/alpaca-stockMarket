@@ -36,6 +36,8 @@ const supportRoutes = require('./routes/support');
 const adminRoutes = require('./routes/admin');
 const smsTestRoutes = require('./routes/smsTest');
 const callbackRoutes = require('./routes/callback');
+const waitlistRoutes = require('./routes/waitlist');
+const referralRoutes = require('./routes/referral');
 
 // Payment WebSocket handler
 const { handlePaymentWebSocket } = require('./routes/paymentWebSocket');
@@ -102,6 +104,12 @@ app.use('/api/v1/onboarding', onboardingRoutes);
 
 // Payment callback endpoint (no auth required - called by external services)
 app.use('/api/v1/callback', callbackRoutes);
+
+// Waitlist endpoint (public + admin endpoints)
+app.use('/api/v1/waitlist', waitlistRoutes);
+
+// Referral endpoint (for logged-in users)
+app.use('/api/v1/referral', referralRoutes);
 
 // Trading platform endpoints
 app.use('/api/v1/biometric', biometricRoutes);

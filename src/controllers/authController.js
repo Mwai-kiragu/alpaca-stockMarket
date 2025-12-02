@@ -18,7 +18,7 @@ const generateVerificationCode = () => {
 // Registration - Step 1 of onboarding process
 const register = async (req, res) => {
   try {
-    const { fullName, email, password, phoneNumber } = req.body;
+    const { fullName, email, password, phoneNumber, ref } = req.body;
 
     // Check for existing email and phone
     logger.info(`Registration attempt for email: ${email}`);
@@ -56,6 +56,18 @@ const register = async (req, res) => {
     const firstName = nameParts[0];
     const lastName = nameParts.slice(1).join(' ') || firstName;
 
+    // Find referrer if referral code provided
+    let referrerId = null;
+    if (ref) {
+      const referrer = await User.findOne({
+        where: { referral_code: ref.toUpperCase() }
+      });
+      if (referrer) {
+        referrerId = referrer.id;
+        logger.info(`User referred by: ${referrer.email}`);
+      }
+    }
+
     const user = await User.create({
       first_name: firstName,
       last_name: lastName,
@@ -64,7 +76,8 @@ const register = async (req, res) => {
       password,
       registration_step: 'personal_info',
       kyc_status: 'not_started',
-      registration_status: 'started'
+      registration_status: 'started',
+      referred_by: referrerId
     });
 
     // TEMPORARILY COMMENTED OUT: Generate verification token
@@ -186,6 +199,21 @@ const login = async (req, res) => {
       });
     }
 
+    // Generate referral code for existing users who don't have one
+    if (!user.referral_code) {
+      let code;
+      let exists = true;
+      let attempts = 0;
+      while (exists && attempts < 10) {
+        code = User.generateReferralCode();
+        const existing = await User.findOne({ where: { referral_code: code } });
+        exists = !!existing;
+        attempts++;
+      }
+      user.referral_code = code;
+      logger.info(`Generated referral code for existing user ${user.email}: ${code}`);
+    }
+
     user.last_login = new Date();
     await user.save();
 
@@ -205,7 +233,11 @@ const login = async (req, res) => {
         fullName: `${user.first_name} ${user.last_name}`,
         email: user.email,
         requiresVerification,
-        onboardingComplete
+        onboardingComplete,
+        // Referral info
+        referralCode: user.referral_code,
+        referralLink: `https://www.rivenapp.com/signup?ref=${user.referral_code}`,
+        referralsCount: user.referrals_count
       }
     });
   } catch (error) {

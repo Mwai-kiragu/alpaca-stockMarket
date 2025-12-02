@@ -1,8 +1,18 @@
 const { DataTypes, Model } = require('sequelize');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const { sequelize } = require('../config/database');
 
 class User extends Model {
+  // Generate unique referral code
+  static generateReferralCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Exclude confusing chars (0,O,1,I)
+    let code = 'RIVEN';
+    for (let i = 0; i < 6; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+  }
   async comparePassword(candidatePassword) {
     if (!this.password) return false;
     return bcrypt.compare(candidatePassword, this.password);
@@ -233,6 +243,24 @@ User.init({
   is_onboarding_complete: {
     type: DataTypes.BOOLEAN,
     defaultValue: false
+  },
+  // Referral system fields
+  referral_code: {
+    type: DataTypes.STRING(20),
+    unique: true,
+    allowNull: true
+  },
+  referred_by: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: 'users',
+      key: 'id'
+    }
+  },
+  referrals_count: {
+    type: DataTypes.INTEGER,
+    defaultValue: 0
   }
 
 }, {
@@ -245,11 +273,32 @@ User.init({
         const salt = await bcrypt.genSalt(12);
         user.password = await bcrypt.hash(user.password, salt);
       }
+      // Generate referral code for new users
+      if (!user.referral_code) {
+        let code;
+        let exists = true;
+        let attempts = 0;
+        while (exists && attempts < 10) {
+          code = User.generateReferralCode();
+          const existing = await User.findOne({ where: { referral_code: code } });
+          exists = !!existing;
+          attempts++;
+        }
+        user.referral_code = code;
+      }
     },
     beforeUpdate: async (user) => {
       if (user.changed('password')) {
         const salt = await bcrypt.genSalt(12);
         user.password = await bcrypt.hash(user.password, salt);
+      }
+    },
+    afterCreate: async (user) => {
+      // If user was referred, increment referrer's count
+      if (user.referred_by) {
+        await User.increment('referrals_count', {
+          where: { id: user.referred_by }
+        });
       }
     }
   },
@@ -268,6 +317,21 @@ User.init({
           [sequelize.Sequelize.Op.ne]: null
         }
       }
+    },
+    {
+      fields: ['referral_code'],
+      unique: true,
+      where: {
+        referral_code: {
+          [sequelize.Sequelize.Op.ne]: null
+        }
+      }
+    },
+    {
+      fields: ['referred_by']
+    },
+    {
+      fields: ['referrals_count']
     }
   ]
 });

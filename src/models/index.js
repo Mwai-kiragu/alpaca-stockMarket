@@ -10,6 +10,9 @@ const PasswordResetToken = require('./PasswordResetToken');
 const BiometricAuth = require('./BiometricAuth');
 const NotificationPreferences = require('./NotificationPreferences');
 const Watchlist = require('./Watchlist');
+const WaitlistUser = require('./WaitlistUser');
+const Referral = require('./Referral');
+const UserReferral = require('./UserReferral');
 
 // Define associations
 User.hasOne(Wallet, { foreignKey: 'user_id', as: 'wallet' });
@@ -53,6 +56,25 @@ NotificationPreferences.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 User.hasOne(Watchlist, { foreignKey: 'user_id', as: 'watchlist' });
 Watchlist.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
+// WaitlistUser associations (self-referencing for referrals)
+WaitlistUser.belongsTo(WaitlistUser, { foreignKey: 'referred_by', as: 'referrer' });
+WaitlistUser.hasMany(WaitlistUser, { foreignKey: 'referred_by', as: 'referrals' });
+
+// Referral associations
+WaitlistUser.hasMany(Referral, { foreignKey: 'referrer_user_id', as: 'outgoingReferrals' });
+Referral.belongsTo(WaitlistUser, { foreignKey: 'referrer_user_id', as: 'referrer' });
+Referral.belongsTo(WaitlistUser, { foreignKey: 'referred_user_id', as: 'referred' });
+
+// User referral associations (self-referencing)
+User.belongsTo(User, { foreignKey: 'referred_by', as: 'referrer' });
+User.hasMany(User, { foreignKey: 'referred_by', as: 'referredUsers' });
+
+// UserReferral associations
+User.hasMany(UserReferral, { foreignKey: 'referrer_id', as: 'outgoingReferrals' });
+User.hasOne(UserReferral, { foreignKey: 'referred_id', as: 'incomingReferral' });
+UserReferral.belongsTo(User, { foreignKey: 'referrer_id', as: 'referrer' });
+UserReferral.belongsTo(User, { foreignKey: 'referred_id', as: 'referred' });
+
 module.exports = {
   sequelize,
   User,
@@ -67,5 +89,8 @@ module.exports = {
   PasswordResetToken,
   BiometricAuth,
   NotificationPreferences,
-  Watchlist
+  Watchlist,
+  WaitlistUser,
+  Referral,
+  UserReferral
 };

@@ -5,6 +5,36 @@ const logger = require('../utils/logger');
 
 const getPortfolio = async (req, res) => {
   try {
+    // Check if user has an Alpaca account
+    const user = await User.findByPk(req.user.id);
+    if (!user || !user.alpaca_account_id) {
+      const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+      return res.json({
+        success: true,
+        portfolio: {
+          summary: {
+            totalEquity: 0,
+            totalEquityKES: 0,
+            dayChange: 0,
+            dayChangeKES: 0,
+            dayChangePercent: 0,
+            buyingPower: 0,
+            buyingPowerKES: 0,
+            cash: 0,
+            cashKES: 0,
+            portfolioValue: 0,
+            portfolioValueKES: 0,
+            lastUpdated: new Date().toISOString()
+          },
+          positions: [],
+          positionsCount: 0,
+          exchangeRate,
+          account: null,
+          message: 'No trading account found. Complete onboarding to start trading.'
+        }
+      });
+    }
+
     // Get Alpaca account information
     const account = await alpacaService.getAccount();
 
@@ -97,6 +127,29 @@ const getPortfolio = async (req, res) => {
 const getPositions = async (req, res) => {
   try {
     const { market } = req.query;
+
+    // Check if user has an Alpaca account
+    const user = await User.findByPk(req.user.id);
+    if (!user || !user.alpaca_account_id) {
+      const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+      return res.json({
+        success: true,
+        positions: [],
+        summary: {
+          totalPositions: 0,
+          totalValue: 0,
+          totalValueKES: 0,
+          totalCostBasis: 0,
+          totalCostBasisKES: 0,
+          totalUnrealizedPL: 0,
+          totalUnrealizedPLKES: 0,
+          totalUnrealizedPLPercent: 0,
+          exchangeRate
+        },
+        message: 'No trading account found. Complete onboarding to start trading.'
+      });
+    }
+
     const positions = await alpacaService.getPositions();
     const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
@@ -506,13 +559,66 @@ const getAssetTrend = async (req, res) => {
   try {
     const { timeframe = '1Day', limit = 30 } = req.query;
 
+    // Check if user has an Alpaca account
+    const user = await User.findByPk(req.user.id);
+    if (!user || !user.alpaca_account_id) {
+      // Return empty portfolio for users without Alpaca account
+      return res.json({
+        success: true,
+        portfolio: {
+          invested: 0,
+          investedKES: 0,
+          currentValue: 0,
+          currentValueKES: 0,
+          profit: 0,
+          profitKES: 0,
+          profitPercent: 0,
+          totalStocks: 0
+        },
+        chartData: [],
+        summary: {
+          period: { from: null, to: null, days: 0 },
+          highest: 0,
+          lowest: 0,
+          bestDay: 0,
+          worstDay: 0,
+          average: 0
+        },
+        exchangeRate: await exchangeService.getExchangeRate('USD', 'KES'),
+        lastUpdated: new Date().toISOString(),
+        message: 'No trading account found. Complete onboarding to start trading.'
+      });
+    }
+
     // Get all user's positions
     const positions = await alpacaService.getPositions();
 
     if (!positions || positions.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'No positions found'
+      const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+      return res.json({
+        success: true,
+        portfolio: {
+          invested: 0,
+          investedKES: 0,
+          currentValue: 0,
+          currentValueKES: 0,
+          profit: 0,
+          profitKES: 0,
+          profitPercent: 0,
+          totalStocks: 0
+        },
+        chartData: [],
+        summary: {
+          period: { from: null, to: null, days: 0 },
+          highest: 0,
+          lowest: 0,
+          bestDay: 0,
+          worstDay: 0,
+          average: 0
+        },
+        exchangeRate,
+        lastUpdated: new Date().toISOString(),
+        message: 'No positions found. Buy stocks to see your portfolio trend.'
       });
     }
 
@@ -659,6 +765,30 @@ const getAssetTrend = async (req, res) => {
 // Get portfolio allocation for pie chart
 const getPortfolioAllocation = async (req, res) => {
   try {
+    // Check if user has an Alpaca account
+    const user = await User.findByPk(req.user.id);
+    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
+    if (!user || !user.alpaca_account_id) {
+      return res.json({
+        success: true,
+        allocation: {
+          byAssetClass: [],
+          bySector: [],
+          byStock: [],
+          byExchange: []
+        },
+        summary: {
+          totalValue: 0,
+          totalValueKES: 0,
+          totalPositions: 0,
+          exchangeRate
+        },
+        lastUpdated: new Date().toISOString(),
+        message: 'No trading account found. Complete onboarding to start trading.'
+      });
+    }
+
     // Get all user's positions
     const positions = await alpacaService.getPositions();
 
@@ -674,13 +804,13 @@ const getPortfolioAllocation = async (req, res) => {
         summary: {
           totalValue: 0,
           totalValueKES: 0,
-          totalPositions: 0
-        }
+          totalPositions: 0,
+          exchangeRate
+        },
+        lastUpdated: new Date().toISOString(),
+        message: 'No positions found. Buy stocks to see your portfolio allocation.'
       });
     }
-
-    // Get exchange rate for KES conversion
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     // Calculate total portfolio value
     const totalValue = positions.reduce((sum, pos) => sum + parseFloat(pos.market_value), 0);
