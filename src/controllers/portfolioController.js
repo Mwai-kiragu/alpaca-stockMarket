@@ -35,11 +35,11 @@ const getPortfolio = async (req, res) => {
       });
     }
 
-    // Get Alpaca account information
-    const account = await alpacaService.getAccount();
+    // Get Alpaca account information for this specific user
+    const account = await alpacaService.getAccount(user.alpaca_account_id);
 
-    // Get positions from Alpaca
-    const positions = await alpacaService.getPositions();
+    // Get positions from Alpaca for this specific user
+    const positions = await alpacaService.getPositions(user.alpaca_account_id);
 
     // Get user's order history for additional context
     const userOrders = await Order.findAll({
@@ -150,7 +150,8 @@ const getPositions = async (req, res) => {
       });
     }
 
-    const positions = await alpacaService.getPositions();
+    // Get positions for this specific user's Alpaca account
+    const positions = await alpacaService.getPositions(user.alpaca_account_id);
     const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     // Get all user orders to check for pending orders
@@ -255,8 +256,17 @@ const getPosition = async (req, res) => {
   try {
     const { symbol } = req.params;
 
-    // Get position from Alpaca
-    const positions = await alpacaService.getPositions();
+    // Check if user has an Alpaca account
+    const user = await User.findByPk(req.user.id);
+    if (!user || !user.alpaca_account_id) {
+      return res.status(404).json({
+        success: false,
+        message: 'No trading account found. Complete onboarding to start trading.'
+      });
+    }
+
+    // Get position from Alpaca for this specific user
+    const positions = await alpacaService.getPositions(user.alpaca_account_id);
     const position = positions.find(pos => pos.symbol.toUpperCase() === symbol.toUpperCase());
 
     if (!position) {
@@ -480,8 +490,17 @@ const closePosition = async (req, res) => {
     const { symbol } = req.params;
     const { quantity } = req.body;
 
-    // Get current position
-    const positions = await alpacaService.getPositions();
+    // Check if user has an Alpaca account
+    const user = await User.findByPk(req.user.id);
+    if (!user || !user.alpaca_account_id) {
+      return res.status(404).json({
+        success: false,
+        message: 'No trading account found. Complete onboarding to start trading.'
+      });
+    }
+
+    // Get current position for this specific user
+    const positions = await alpacaService.getPositions(user.alpaca_account_id);
     const position = positions.find(pos => pos.symbol.toUpperCase() === symbol.toUpperCase());
 
     if (!position) {
@@ -590,8 +609,8 @@ const getAssetTrend = async (req, res) => {
       });
     }
 
-    // Get all user's positions
-    const positions = await alpacaService.getPositions();
+    // Get all user's positions for this specific Alpaca account
+    const positions = await alpacaService.getPositions(user.alpaca_account_id);
 
     if (!positions || positions.length === 0) {
       const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
@@ -789,8 +808,8 @@ const getPortfolioAllocation = async (req, res) => {
       });
     }
 
-    // Get all user's positions
-    const positions = await alpacaService.getPositions();
+    // Get all user's positions for this specific Alpaca account
+    const positions = await alpacaService.getPositions(user.alpaca_account_id);
 
     if (!positions || positions.length === 0) {
       return res.json({

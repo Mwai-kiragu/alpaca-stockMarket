@@ -1,7 +1,7 @@
 const alpacaService = require('../services/alpacaService');
 const logger = require('../utils/logger');
 const { mapConditionCodes } = require('../utils/conditionCodes');
-const { Watchlist } = require('../models');
+const { Watchlist, User } = require('../models');
 const Order = require('../models/Order');
 const axios = require('axios');
 const { sequelize } = require('../config/database');
@@ -1797,10 +1797,14 @@ const getCompanyInfo = async (req, res) => {
     const userId = req.user?.id;
 
     try {
-      // Get all positions and account info from Alpaca
+      // Get user to check for Alpaca account
+      const user = userId ? await User.findByPk(userId) : null;
+      const alpacaAccountId = user?.alpaca_account_id;
+
+      // Get all positions and account info from Alpaca (user-specific if account exists)
       const [positions, account] = await Promise.all([
-        alpacaService.getPositions(),
-        alpacaService.getAccount()
+        alpacaAccountId ? alpacaService.getPositions(alpacaAccountId) : Promise.resolve([]),
+        alpacaAccountId ? alpacaService.getAccount(alpacaAccountId) : Promise.resolve({ equity: 0 })
       ]);
 
       // Find position for this specific symbol in Alpaca

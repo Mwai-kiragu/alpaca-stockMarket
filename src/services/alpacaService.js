@@ -526,15 +526,32 @@ class AlpacaService {
     }
   }
 
-  async getPositions() {
+  async getPositions(accountId = null) {
     try {
-      // Use Paper Trading API for positions
+      // If accountId is provided, use Broker API for user-specific positions
+      if (accountId) {
+        const response = await axios.get(
+          `${this.baseUrl}/v1/trading/accounts/${accountId}/positions`,
+          { headers: this.tradingHeaders }
+        );
+        logger.info(`Retrieved ${response.data.length} positions for account ${accountId}`);
+        return response.data;
+      }
+
+      // Fallback to Paper Trading API for shared positions (admin/testing)
       const response = await axios.get(`${this.paperUrl}/v2/positions`, {
         headers: this.paperHeaders
       });
       return response.data;
     } catch (error) {
       logger.error('Get positions error:', error.response?.data || error.message);
+
+      // Return empty array if no positions found (404)
+      if (error.response?.status === 404) {
+        logger.info(`No positions found for account ${accountId}`);
+        return [];
+      }
+
       throw new Error('Failed to get positions');
     }
   }
