@@ -1,6 +1,7 @@
 const WaitlistUser = require('../models/WaitlistUser');
 const Referral = require('../models/Referral');
 const logger = require('../utils/logger');
+const emailService = require('../services/emailService');
 const crypto = require('crypto');
 const { Op } = require('sequelize');
 
@@ -42,6 +43,7 @@ const joinWaitlist = async (req, res) => {
     if (existingUser) {
       const position = await getPosition(existingUser);
       const totalUsers = await WaitlistUser.count();
+      const peopleAhead = position - 1;
 
       return res.status(200).json(ApiResponse.Success({
         id: existingUser.id,
@@ -49,6 +51,7 @@ const joinWaitlist = async (req, res) => {
         referralCode: existingUser.referral_code,
         referralLink: `https://www.rivenapp.com/?ref=${existingUser.referral_code}`,
         position,
+        peopleAhead,
         totalUsers,
         referralsCount: existingUser.referrals_count,
         isExisting: true
@@ -102,15 +105,36 @@ const joinWaitlist = async (req, res) => {
 
     const position = await getPosition(newUser);
     const totalUsers = await WaitlistUser.count();
+    const peopleAhead = position - 1;
+    const referralLink = `https://www.rivenapp.com/?ref=${newUser.referral_code}`;
 
-    logger.info(`Waitlist signup: ${normalizedEmail}, Position: ${position}, Referrer: ${referrerInfo?.email || 'none'}`);
+    logger.info(`Waitlist signup: ${normalizedEmail}, Position: ${position}, People ahead: ${peopleAhead}, Referrer: ${referrerInfo?.email || 'none'}`);
+
+    // Send welcome email asynchronously (don't block the response)
+    emailService.sendWaitlistWelcomeEmail({
+      email: newUser.email,
+      referralCode: newUser.referral_code,
+      referralLink,
+      peopleAhead,
+      position,
+      totalUsers
+    }).then(result => {
+      if (result.success) {
+        logger.info(`Waitlist welcome email sent to ${normalizedEmail}`);
+      } else {
+        logger.warn(`Failed to send waitlist email to ${normalizedEmail}: ${result.error || result.message}`);
+      }
+    }).catch(err => {
+      logger.error(`Error sending waitlist email to ${normalizedEmail}:`, err);
+    });
 
     return res.status(201).json(ApiResponse.Success({
       id: newUser.id,
       email: newUser.email,
       referralCode: newUser.referral_code,
-      referralLink: `https://www.rivenapp.com/?ref=${newUser.referral_code}`,
+      referralLink,
       position,
+      peopleAhead,
       totalUsers,
       referralsCount: 0,
       referredBy: referrerInfo
@@ -150,6 +174,7 @@ const getPositionEndpoint = async (req, res) => {
 
     const position = await getPosition(user);
     const totalUsers = await WaitlistUser.count();
+    const peopleAhead = position - 1;
 
     // Get referral stats
     const referrals = await Referral.count({
@@ -162,6 +187,7 @@ const getPositionEndpoint = async (req, res) => {
       referralCode: user.referral_code,
       referralLink: `https://www.rivenapp.com/?ref=${user.referral_code}`,
       position,
+      peopleAhead,
       totalUsers,
       percentile: totalUsers > 0 ? Math.round((1 - (position / totalUsers)) * 100) : 100,
       referralsCount: user.referrals_count,

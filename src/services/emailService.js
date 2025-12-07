@@ -671,6 +671,114 @@ class EmailService {
     });
   }
 
+  async sendWaitlistWelcomeEmail(userData) {
+    const { email, referralCode, referralLink, peopleAhead, position, totalUsers } = userData;
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
+      <body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+        <div style="max-width: 450px; margin: 0 auto; padding: 40px 20px;">
+
+          <!-- Main Card -->
+          <div style="background: #ffffff; border-radius: 16px; padding: 40px 30px; text-align: center; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);">
+
+            <!-- Thank You Header -->
+            <h1 style="color: #1a1a1a; font-size: 28px; font-weight: 600; margin: 0 0 10px 0;">Thank you!</h1>
+            <p style="color: #666666; font-size: 16px; margin: 0 0 30px 0;">We have added your email to our waitlist</p>
+
+            <!-- Position Card -->
+            <div style="background: #f8f9fa; border-left: 4px solid #1a1a1a; border-radius: 8px; padding: 20px; margin: 0 0 30px 0;">
+              <p style="color: #1a1a1a; font-size: 22px; font-weight: 700; margin: 0 0 8px 0;">
+                ${peopleAhead.toLocaleString()} People are ahead of you
+              </p>
+              <p style="color: #888888; font-size: 14px; margin: 0;">
+                This reservation is held for ${email}.<br>
+                <a href="#" style="color: #666666;">Is this not you?</a>
+              </p>
+            </div>
+
+            <!-- Priority Access Section -->
+            <div style="margin: 30px 0;">
+              <h2 style="color: #1a1a1a; font-size: 18px; font-weight: 600; margin: 0 0 10px 0;">Interested in Priority access?</h2>
+              <p style="color: #666666; font-size: 14px; line-height: 1.6; margin: 0 0 25px 0;">
+                Get early access by referring your friend.<br>
+                The more friends that join, you move up<br>
+                the waitlist, the sooner you'll get access.
+              </p>
+            </div>
+
+            <!-- Invite Button -->
+            <a href="${referralLink}"
+               style="display: block; background: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 30px; border-radius: 8px; font-size: 16px; font-weight: 600; margin: 0 0 30px 0;">
+              Invite Friends
+            </a>
+
+            <!-- Referral Link Box -->
+            <div style="background: #f8f9fa; border-radius: 8px; padding: 15px; margin: 0 0 30px 0;">
+              <p style="color: #888888; font-size: 12px; margin: 0 0 8px 0;">Your referral link:</p>
+              <p style="color: #1a1a1a; font-size: 14px; font-weight: 500; margin: 0; word-break: break-all;">
+                ${referralLink}
+              </p>
+            </div>
+
+            <!-- Logo -->
+            <div style="margin-top: 20px;">
+              <img src="https://www.rivenapp.com/logo.png" alt="RIVEN" style="height: 40px; width: auto;" onerror="this.style.display='none'">
+              <p style="color: #1a1a1a; font-size: 20px; font-weight: 700; margin: 10px 0 0 0; letter-spacing: 2px;">RIVEN</p>
+            </div>
+
+          </div>
+
+          <!-- Footer -->
+          <div style="text-align: center; padding: 20px; color: #888888; font-size: 12px;">
+            <p style="margin: 0 0 10px 0;">You're receiving this because you signed up for the Riven waitlist.</p>
+            <p style="margin: 0;">© ${new Date().getFullYear()} Riven. All rights reserved.</p>
+          </div>
+
+        </div>
+      </body>
+      </html>
+    `;
+
+    const text = `
+Thank you!
+
+We have added your email to our waitlist.
+
+${peopleAhead.toLocaleString()} People are ahead of you
+
+This reservation is held for ${email}.
+
+---
+
+Interested in Priority access?
+
+Get early access by referring your friend.
+The more friends that join, you move up the waitlist, the sooner you'll get access.
+
+Your referral link: ${referralLink}
+
+Share this link with your friends to move up the waitlist!
+
+---
+
+RIVEN
+© ${new Date().getFullYear()} Riven. All rights reserved.
+    `;
+
+    return this.sendEmail({
+      to: email,
+      subject: `You're on the Riven waitlist! ${peopleAhead.toLocaleString()} people ahead`,
+      html,
+      text
+    });
+  }
+
   async sendSupportTicketEmail(user, ticketData) {
     let html, subject;
 

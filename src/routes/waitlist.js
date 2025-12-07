@@ -45,7 +45,7 @@ router.post('/join',
     body('email')
       .isEmail()
       .withMessage('Please provide a valid email')
-      .normalizeEmail(),
+      .normalizeEmail({ gmail_remove_subaddress: false }),
     body('phone').optional(),
     body('ref').optional().isString()
   ],
@@ -62,7 +62,7 @@ router.post('/verify-email',
 // Resend verification
 router.post('/resend-verification',
   generalLimiter,
-  [body('email').isEmail().normalizeEmail()],
+  [body('email').isEmail().normalizeEmail({ gmail_remove_subaddress: false })],
   resendVerification
 );
 
