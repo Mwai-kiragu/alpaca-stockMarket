@@ -5,6 +5,12 @@ const websocketService = require('../services/websocketService');
 const { publishPaymentEvent } = require('../utils/redisPayment');
 
 const handleKCBMpesaCallback = async (req, res) => {
+  // Log immediately - even before any processing
+  console.log('========== KCB CALLBACK RECEIVED ==========');
+  console.log('Headers:', JSON.stringify(req.headers, null, 2));
+  console.log('Body:', JSON.stringify(req.body, null, 2));
+  console.log('============================================');
+
   const dbTransaction = await sequelize.transaction();
 
   try {
@@ -35,15 +41,12 @@ const handleKCBMpesaCallback = async (req, res) => {
       merchantRequestId
     });
 
-    // Find the pending transaction - since we don't have a payment_method column,
-    // we search for the most recent pending deposit transaction
-    const pendingTransaction = await Transaction.findOne({
+    // Find the pending transaction by matching CheckoutRequestID in metadata
+    const pendingTransactions = await Transaction.findAll({
       where: {
         status: 'pending',
         type: 'deposit'
       },
-      order: [['created_at', 'DESC']],
-      limit: 1,
       transaction: dbTransaction,
       include: [{
         model: Wallet,
@@ -51,15 +54,31 @@ const handleKCBMpesaCallback = async (req, res) => {
       }]
     });
 
+    // Find the matching transaction by CheckoutRequestID in metadata
+    const pendingTransaction = pendingTransactions.find(txn => {
+      const kcbResponse = txn.metadata?.kcbResponse?.response;
+      return kcbResponse?.CheckoutRequestID === checkoutRequestId ||
+             kcbResponse?.MerchantRequestID === merchantRequestId;
+    });
+
     if (!pendingTransaction) {
-      logger.error('No pending KCB M-Pesa transaction found');
+      logger.error('No matching KCB M-Pesa transaction found for callback:', {
+        checkoutRequestId,
+        merchantRequestId
+      });
       await dbTransaction.rollback();
 
       return res.status(200).json({
         ResultCode: 0,
-        ResultDesc: 'Callback received'
+        ResultDesc: 'Callback received - no matching transaction'
       });
     }
+
+    logger.info('Found matching transaction:', {
+      transactionId: pendingTransaction.id,
+      reference: pendingTransaction.reference,
+      checkoutRequestId
+    });
 
     if (resultCode === 0) {
       logger.info('KCB M-Pesa payment successful');

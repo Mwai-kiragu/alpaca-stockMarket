@@ -295,28 +295,44 @@ const withdrawalValidation = [
   body('method')
     .isIn(['mpesa', 'bank_transfer', 'paypal'])
     .withMessage('Method must be mpesa, bank_transfer, or paypal'),
+  // For M-Pesa, phoneNumber can be provided directly
+  body('phoneNumber')
+    .optional()
+    .custom((value, { req }) => {
+      if (req.body.method === 'mpesa' && value) {
+        // Clean the phone number and validate
+        const cleanPhone = value.replace(/\D/g, '');
+        if (!/^(254|0)?[17]\d{8}$/.test(cleanPhone)) {
+          throw new Error('Invalid Kenyan phone number format');
+        }
+      }
+      return true;
+    }),
+  // accountDetails is optional for M-Pesa (can use phoneNumber directly)
   body('accountDetails')
-    .notEmpty()
-    .withMessage('Account details are required')
+    .optional()
     .custom((value, { req }) => {
       const method = req.body.method;
 
+      // For M-Pesa, check if phoneNumber is provided directly or in accountDetails
       if (method === 'mpesa') {
-        if (!value.phoneNumber) {
+        const phone = req.body.phoneNumber || value?.phoneNumber;
+        if (!phone) {
           throw new Error('Phone number is required for M-Pesa withdrawals');
         }
-        if (!/^(\+?254|0)[17]\d{8}$/.test(value.phoneNumber)) {
+        const cleanPhone = phone.replace(/\D/g, '');
+        if (!/^(254|0)?[17]\d{8}$/.test(cleanPhone)) {
           throw new Error('Invalid Kenyan phone number format');
         }
       } else if (method === 'bank_transfer') {
-        if (!value.accountNumber || !value.bankName || !value.accountName) {
+        if (!value || !value.accountNumber || !value.bankName || !value.accountName) {
           throw new Error('Account number, bank name, and account name are required for bank transfers');
         }
         if (req.body.currency === 'USD' && !value.swiftCode) {
           throw new Error('SWIFT code is required for USD bank transfers');
         }
       } else if (method === 'paypal') {
-        if (!value.email) {
+        if (!value || !value.email) {
           throw new Error('PayPal email is required');
         }
         const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
@@ -325,6 +341,26 @@ const withdrawalValidation = [
         }
       }
 
+      return true;
+    }),
+  // Custom validation to ensure required data is present
+  body()
+    .custom((value, { req }) => {
+      const { method, phoneNumber, accountDetails } = req.body;
+
+      if (method === 'mpesa') {
+        if (!phoneNumber && !accountDetails?.phoneNumber) {
+          throw new Error('Phone number is required for M-Pesa withdrawals');
+        }
+      } else if (method === 'bank_transfer') {
+        if (!accountDetails) {
+          throw new Error('Account details are required for bank transfers');
+        }
+      } else if (method === 'paypal') {
+        if (!accountDetails) {
+          throw new Error('Account details are required for PayPal withdrawals');
+        }
+      }
       return true;
     }),
   handleValidationErrors

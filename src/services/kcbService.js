@@ -300,6 +300,95 @@ class KCBService {
       };
     }
   }
+  /**
+   * Withdraw funds to M-Pesa phone number (B2C)
+   * Uses KCB Funds Transfer API with transactionType: MO and beneficiaryBankCode: MPESA
+   */
+  async withdrawToMpesa(withdrawalData) {
+    try {
+      const { phoneNumber, amount, beneficiaryName, reference } = withdrawalData;
+
+      if (!phoneNumber || !amount) {
+        throw new Error('Missing required fields: phoneNumber, amount');
+      }
+
+      const accessToken = await this.getAccessToken();
+      const transactionReference = reference || this.generateTransactionReference();
+
+      // Format phone number for M-Pesa (10 digits with leading 0)
+      let mpesaNumber = phoneNumber.replace(/\D/g, '');
+      if (mpesaNumber.startsWith('254')) {
+        mpesaNumber = '0' + mpesaNumber.substring(3); // 254xxx -> 0xxx
+      } else if (!mpesaNumber.startsWith('0') && mpesaNumber.length === 9) {
+        mpesaNumber = '0' + mpesaNumber; // 7xxx -> 07xxx
+      }
+
+      // Funds Transfer payload for M-Pesa B2C
+      const payload = {
+        companyCode: this.companyCode || process.env.KCB_COMPANY_CODE,
+        transactionType: 'MO', // Mobile Out
+        debitAccountNumber: this.debitAccount || process.env.KCB_DEBIT_ACCOUNT,
+        creditAccountNumber: mpesaNumber, // M-Pesa phone number (0712345678)
+        debitAmount: amount,
+        paymentDetails: 'Withdrawal',
+        transactionReference: transactionReference,
+        currency: 'KES',
+        beneficiaryDetails: beneficiaryName || 'Customer',
+        beneficiaryBankCode: 'MPESA'
+      };
+
+      logger.info('Initiating KCB M-Pesa B2C withdrawal:', {
+        transactionReference,
+        creditAccountNumber: mpesaNumber,
+        amount: payload.debitAmount,
+        beneficiary: payload.beneficiaryDetails
+      });
+
+      // KCB Funds Transfer endpoint for M-Pesa B2C
+      const response = await axios.post(
+        'https://uat.buni.kcbgroup.com/fundstransfer/1.0.0/api/v1/transfer',
+        payload,
+        {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          }
+        }
+      );
+
+      logger.info('KCB M-Pesa B2C successful:', {
+        transactionReference,
+        response: response.data
+      });
+
+      return {
+        success: true,
+        transactionReference,
+        retrievalRefNumber: response.data?.header?.retrievalRefNumber || response.data?.retrievalRefNumber || transactionReference,
+        phoneNumber: mpesaNumber,
+        amount,
+        beneficiaryName,
+        statusCode: response.data?.header?.statusCode || response.data?.statusCode,
+        statusDescription: response.data?.header?.statusDescription || response.data?.statusDescription,
+        data: response.data
+      };
+
+    } catch (error) {
+      logger.error('KCB M-Pesa B2C failed:', {
+        error: error.message,
+        response: error.response?.data,
+        phoneNumber: withdrawalData.phoneNumber
+      });
+
+      return {
+        success: false,
+        error: error.message,
+        errorData: error.response?.data
+      };
+    }
+  }
+
   async queryTransactionStatus(trxRequestId) {
     try {
       const accessToken = await this.getAccessToken();

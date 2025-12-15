@@ -1,7 +1,9 @@
 const { Wallet, Transaction } = require('../models/Wallet');
 const { User } = require('../models');
 const exchangeService = require('../services/exchangeService');
+const kcbService = require('../services/kcbService');
 const logger = require('../utils/logger');
+const { sequelize } = require('../config/database');
 
 const getWallet = async (req, res) => {
   try {
@@ -46,6 +48,65 @@ const getWallet = async (req, res) => {
     });
   } catch (error) {
     logger.error('Get wallet error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// Unfreeze stuck funds (when withdrawals fail mid-process)
+const unfreezeWallet = async (req, res) => {
+  try {
+    const wallet = await Wallet.findOne({
+      where: { user_id: req.user.id }
+    });
+
+    if (!wallet) {
+      return res.status(404).json({
+        success: false,
+        message: 'Wallet not found'
+      });
+    }
+
+    const frozenKes = parseFloat(wallet.frozen_kes) || 0;
+    const frozenUsd = parseFloat(wallet.frozen_usd) || 0;
+
+    if (frozenKes === 0 && frozenUsd === 0) {
+      return res.json({
+        success: true,
+        message: 'No frozen funds to release',
+        wallet: {
+          kesBalance: wallet.kes_balance,
+          usdBalance: wallet.usd_balance,
+          frozenKes: wallet.frozen_kes,
+          frozenUsd: wallet.frozen_usd
+        }
+      });
+    }
+
+    // Unfreeze all funds
+    wallet.frozen_kes = 0;
+    wallet.frozen_usd = 0;
+    await wallet.save();
+
+    logger.info(`Unfroze wallet for user ${req.user.id}: KES ${frozenKes}, USD ${frozenUsd}`);
+
+    res.json({
+      success: true,
+      message: `Released KES ${frozenKes.toFixed(2)} and USD ${frozenUsd.toFixed(2)} from frozen status`,
+      wallet: {
+        kesBalance: wallet.kes_balance,
+        usdBalance: wallet.usd_balance,
+        availableKes: wallet.kes_balance,
+        availableUsd: wallet.usd_balance,
+        frozenKes: wallet.frozen_kes,
+        frozenUsd: wallet.frozen_usd
+      }
+    });
+
+  } catch (error) {
+    logger.error('Unfreeze wallet error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error'
@@ -657,7 +718,7 @@ const convertCurrency = async (req, res) => {
 
 const initiateWithdrawal = async (req, res) => {
   try {
-    const { amount, currency, method, accountDetails } = req.body;
+    const { amount, currency, method, phoneNumber, accountDetails } = req.body;
 
     // Validation
     if (!['KES', 'USD'].includes(currency)) {
@@ -671,6 +732,22 @@ const initiateWithdrawal = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Invalid withdrawal method. Supported methods: mpesa, bank_transfer, paypal'
+      });
+    }
+
+    // For M-Pesa, phone number is required
+    if (method === 'mpesa' && !phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number is required for M-Pesa withdrawal'
+      });
+    }
+
+    // M-Pesa only supports KES
+    if (method === 'mpesa' && currency !== 'KES') {
+      return res.status(400).json({
+        success: false,
+        message: 'M-Pesa withdrawals only support KES currency'
       });
     }
 
@@ -695,12 +772,53 @@ const initiateWithdrawal = async (req, res) => {
       });
     }
 
-    const availableBalance = currency === 'KES' ? wallet.availableKes : wallet.availableUsd;
+    // Get user details for beneficiary name
+    const user = await User.findByPk(req.user.id);
+    const beneficiaryName = `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email;
+
+    const kesBalance = parseFloat(wallet.kes_balance) || 0;
+    const usdBalance = parseFloat(wallet.usd_balance) || 0;
+    const frozenKes = parseFloat(wallet.frozen_kes) || 0;
+    const frozenUsd = parseFloat(wallet.frozen_usd) || 0;
+    const availableBalance = currency === 'KES' ? (kesBalance - frozenKes) : (usdBalance - frozenUsd);
 
     if (availableBalance < amount) {
       return res.status(400).json({
         success: false,
-        message: `Insufficient ${currency} balance. Available: ${availableBalance}`
+        message: `Insufficient ${currency} balance. Available: ${availableBalance.toFixed(2)}`
+      });
+    }
+
+    // Check for pending/processing withdrawals (prevent concurrent withdrawals)
+    const { Op } = require('sequelize');
+    const pendingWithdrawal = await Transaction.findOne({
+      where: {
+        wallet_id: wallet.id,
+        type: 'withdrawal',
+        status: 'pending',
+        created_at: {
+          [Op.gte]: new Date(Date.now() - 5 * 60 * 1000) // Last 5 minutes
+        }
+      },
+      order: [['created_at', 'DESC']]
+    });
+
+    if (pendingWithdrawal) {
+      logger.warn(`Blocked concurrent withdrawal attempt for user ${req.user.id}`, {
+        pendingReference: pendingWithdrawal.reference,
+        pendingAmount: pendingWithdrawal.amount
+      });
+
+      return res.status(409).json({
+        success: false,
+        message: 'You have a pending withdrawal. Please wait for it to complete before initiating another.',
+        pendingWithdrawal: {
+          reference: pendingWithdrawal.reference,
+          amount: Math.abs(pendingWithdrawal.amount),
+          currency: pendingWithdrawal.currency,
+          status: pendingWithdrawal.status,
+          createdAt: pendingWithdrawal.created_at
+        }
       });
     }
 
@@ -715,9 +833,143 @@ const initiateWithdrawal = async (req, res) => {
       });
     }
 
-    const reference = `WTH_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const reference = kcbService.generateTransactionReference();
 
-    // SANDBOX MODE: Check if we're in development
+    // Handle M-Pesa withdrawal via KCB
+    if (method === 'mpesa') {
+      // Use database transaction for atomicity
+      const dbTransaction = await sequelize.transaction();
+
+      try {
+        logger.info(`Processing M-Pesa withdrawal for user ${req.user.id}:`, {
+          amount,
+          phoneNumber,
+          reference
+        });
+
+        // Freeze funds first (within transaction)
+        wallet.frozen_kes = (parseFloat(wallet.frozen_kes) || 0) + amount;
+        await wallet.save({ transaction: dbTransaction });
+
+        // Create pending transaction (within transaction)
+        const txnRecord = await Transaction.create({
+          wallet_id: wallet.id,
+          type: 'withdrawal',
+          amount: -amount,
+          currency: 'KES',
+          reference,
+          status: 'pending',
+          fees: { withdrawal: withdrawalFees },
+          description: `M-Pesa withdrawal to ${phoneNumber}`,
+          metadata: {
+            method: 'mpesa',
+            phoneNumber,
+            beneficiaryName,
+            netAmount,
+            withdrawalFees,
+            processingStatus: 'processing'
+          }
+        }, { transaction: dbTransaction });
+
+        // Commit the freeze and transaction creation
+        await dbTransaction.commit();
+
+        // Now call KCB API (outside db transaction - this is an external call)
+        const kcbResult = await kcbService.withdrawToMpesa({
+          phoneNumber,
+          amount: netAmount,
+          beneficiaryName,
+          reference
+        });
+
+        if (kcbResult.success) {
+          // Deduct from wallet and unfreeze
+          wallet.kes_balance = (parseFloat(wallet.kes_balance) || 0) - amount;
+          wallet.frozen_kes = (parseFloat(wallet.frozen_kes) || 0) - amount;
+          await wallet.save();
+
+          // Update transaction to completed
+          await txnRecord.update({
+            status: 'completed',
+            metadata: {
+              ...txnRecord.metadata,
+              processingStatus: 'completed',
+              processedAt: new Date().toISOString(),
+              kcbReference: kcbResult.retrievalRefNumber,
+              kcbStatusCode: kcbResult.statusCode
+            }
+          });
+
+          logger.info(`M-Pesa withdrawal completed for user ${req.user.id}:`, {
+            reference,
+            kcbReference: kcbResult.retrievalRefNumber,
+            amount: netAmount,
+            phoneNumber
+          });
+
+          return res.json({
+            success: true,
+            message: `KES ${netAmount.toFixed(2)} sent to M-Pesa ${phoneNumber} successfully!`,
+            withdrawal: {
+              reference,
+              kcbReference: kcbResult.retrievalRefNumber,
+              amount,
+              netAmount,
+              currency: 'KES',
+              method: 'mpesa',
+              phoneNumber,
+              withdrawalFees,
+              status: 'completed',
+              newBalance: wallet.kes_balance
+            }
+          });
+
+        } else {
+          // Unfreeze funds on KCB failure
+          wallet.frozen_kes = (parseFloat(wallet.frozen_kes) || 0) - amount;
+          await wallet.save();
+
+          // Update transaction to failed
+          await txnRecord.update({
+            status: 'failed',
+            metadata: {
+              ...txnRecord.metadata,
+              processingStatus: 'failed',
+              failureReason: kcbResult.error,
+              errorData: kcbResult.errorData
+            }
+          });
+
+          logger.error(`M-Pesa withdrawal failed for user ${req.user.id}:`, {
+            reference,
+            error: kcbResult.error
+          });
+
+          return res.status(400).json({
+            success: false,
+            message: 'M-Pesa withdrawal failed. Please try again.',
+            error: kcbResult.error,
+            reference
+          });
+        }
+
+      } catch (dbError) {
+        // Rollback on any error during freeze/transaction creation
+        await dbTransaction.rollback();
+        logger.error(`M-Pesa withdrawal db error for user ${req.user.id}:`, {
+          error: dbError.message,
+          reference
+        });
+
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to process withdrawal. Please try again.',
+          error: dbError.message
+        });
+      }
+    }
+
+    // SANDBOX MODE for other methods: Check if we're in development
     const isSandboxMode = process.env.NODE_ENV === 'development';
 
     if (isSandboxMode) {
@@ -772,8 +1024,13 @@ const initiateWithdrawal = async (req, res) => {
       });
     }
 
-    // PRODUCTION MODE: Freeze funds and await approval
-    await wallet.freezeFunds(amount, currency);
+    // PRODUCTION MODE for bank_transfer/paypal: Freeze funds and await approval
+    if (currency === 'KES') {
+      wallet.frozen_kes = (parseFloat(wallet.frozen_kes) || 0) + amount;
+    } else {
+      wallet.frozen_usd = (parseFloat(wallet.frozen_usd) || 0) + amount;
+    }
+    await wallet.save();
 
     const transaction = await Transaction.create({
       wallet_id: wallet.id,
@@ -1160,6 +1417,7 @@ const getAutoConvertPreference = async (req, res) => {
 
 module.exports = {
   getWallet,
+  unfreezeWallet,
   getTransactions,
   initiateDeposit,
   mpesaCallback,
