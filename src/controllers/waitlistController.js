@@ -229,22 +229,21 @@ const getStats = async (req, res) => {
   }
 };
 
-/**
- * Get Leaderboard - Top referrers
- */
 const getLeaderboard = async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+    const showFullEmail = req.query.full === 'true';
 
     const topUsers = await WaitlistUser.findAll({
       order: [['referrals_count', 'DESC'], ['created_at', 'ASC']],
       limit,
-      attributes: ['id', 'email', 'referrals_count', 'created_at']
+      attributes: ['id', 'email', 'referrals_count', 'referral_code', 'created_at']
     });
 
     const leaderboard = topUsers.map((user, index) => ({
       rank: index + 1,
-      email: maskEmail(user.email),
+      email: showFullEmail ? user.email : maskEmail(user.email),
+      referralCode: user.referral_code,
       referralsCount: user.referrals_count,
       joinedAt: user.created_at
     }));
