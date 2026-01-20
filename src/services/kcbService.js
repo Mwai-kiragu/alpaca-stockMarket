@@ -9,7 +9,8 @@ class KCBService {
     this.revokeUrl = process.env.KCB_REVOKE_URL;
     this.baseUrl = process.env.KCB_API_BASE_URL;
     this.companyCode = process.env.KCB_COMPANY_CODE;
-    this.debitAccount = process.env.KCB_DEBIT_ACCOUNT;
+    // KCB_CREDIT_ACCOUNT is the KCB bank account (receives deposits, sends withdrawals)
+    this.kcbBankAccount = process.env.KCB_CREDIT_ACCOUNT;
 
     // Cache for access token
     this.accessToken = null;
@@ -325,9 +326,9 @@ class KCBService {
 
       // Funds Transfer payload for M-Pesa B2C
       const payload = {
-        companyCode: this.companyCode || process.env.KCB_COMPANY_CODE,
+        companyCode: process.env.KCB_COMPANY_CODE || this.companyCode,
         transactionType: 'MO', // Mobile Out
-        debitAccountNumber: this.debitAccount || process.env.KCB_DEBIT_ACCOUNT,
+        debitAccountNumber: process.env.KCB_CREDIT_ACCOUNT || this.kcbBankAccount,
         creditAccountNumber: mpesaNumber, // M-Pesa phone number (0712345678)
         debitAmount: amount,
         paymentDetails: 'Withdrawal',
@@ -341,7 +342,9 @@ class KCBService {
         transactionReference,
         creditAccountNumber: mpesaNumber,
         amount: payload.debitAmount,
-        beneficiary: payload.beneficiaryDetails
+        beneficiary: payload.beneficiaryDetails,
+        fullPayload: JSON.stringify(payload),
+        tokenUsed: accessToken.substring(0, 50) + '...'
       });
 
       // KCB Funds Transfer endpoint for M-Pesa B2C

@@ -11,22 +11,212 @@ const handleKCBMpesaCallback = async (req, res) => {
   console.log('Body:', JSON.stringify(req.body, null, 2));
   console.log('============================================');
 
-  const dbTransaction = await sequelize.transaction();
-
   try {
-    logger.info('KCB M-Pesa callback received:', JSON.stringify(req.body, null, 2));
+    logger.info('KCB callback received:', JSON.stringify(req.body, null, 2));
 
     const callbackData = req.body;
 
-    if (!callbackData || !callbackData.Body || !callbackData.Body.stkCallback) {
-      logger.error('Invalid KCB M-Pesa callback structure');
+    // Detect callback type and route accordingly
+    if (callbackData?.Body?.stkCallback) {
+      // STK Push (Deposit) callback
+      return await handleSTKPushCallback(callbackData, res);
+    } else if (callbackData?.transactionReference || callbackData?.merchantID || callbackData?.retrievalRefNumber) {
+      // B2C (Withdrawal) callback
+      return await handleB2CCallback(callbackData, res);
+    } else {
+      logger.warn('Unknown KCB callback structure:', JSON.stringify(callbackData, null, 2));
+      return res.status(200).json({
+        ResultCode: 0,
+        ResultDesc: 'Callback received - unknown structure'
+      });
+    }
+  } catch (error) {
+    logger.error('KCB callback routing error:', {
+      error: error.message,
+      stack: error.stack,
+      body: req.body
+    });
+
+    return res.status(200).json({
+      ResultCode: 0,
+      ResultDesc: 'Callback received'
+    });
+  }
+};
+
+// Handle B2C (Withdrawal) callback
+const handleB2CCallback = async (callbackData, res) => {
+  const dbTransaction = await sequelize.transaction();
+
+  try {
+    const transactionReference = callbackData.transactionReference ||
+                                  callbackData.retrievalRefNumber ||
+                                  callbackData.TransactionID;
+    const statusCode = callbackData.statusCode || callbackData.ResultCode;
+    const statusMessage = callbackData.statusMessage || callbackData.ResultDesc;
+    const statusDescription = callbackData.statusDescription;
+    const merchantID = callbackData.merchantID;
+
+    logger.info('Processing B2C withdrawal callback:', {
+      transactionReference,
+      statusCode,
+      statusMessage,
+      merchantID
+    });
+
+    // Find the pending withdrawal transaction
+    const pendingTransaction = await Transaction.findOne({
+      where: {
+        reference: transactionReference,
+        type: 'withdrawal',
+        status: 'pending'
+      },
+      include: [{
+        model: Wallet,
+        as: 'wallet'
+      }],
+      transaction: dbTransaction
+    });
+
+    if (!pendingTransaction) {
+      logger.warn('No matching withdrawal transaction found:', { transactionReference });
       await dbTransaction.rollback();
+      return res.status(200).json({
+        ResultCode: 0,
+        ResultDesc: 'Callback received - no matching withdrawal'
+      });
+    }
+
+    const wallet = pendingTransaction.wallet;
+
+    // Check if successful (statusCode "0" means success for KCB)
+    if (statusCode === '0' || statusCode === 0) {
+      // SUCCESS - Mark withdrawal as completed
+      await pendingTransaction.update({
+        status: 'completed',
+        metadata: {
+          ...pendingTransaction.metadata,
+          b2cCallback: callbackData,
+          merchantID,
+          completedAt: new Date().toISOString()
+        }
+      }, { transaction: dbTransaction });
+
+      await dbTransaction.commit();
+
+      logger.info('B2C withdrawal completed successfully:', {
+        transactionReference,
+        userId: wallet?.user_id,
+        amount: pendingTransaction.amount
+      });
+
+      // Broadcast via WebSocket
+      try {
+        const paymentData = {
+          status: 'completed',
+          type: 'withdrawal',
+          amount: pendingTransaction.amount,
+          currency: 'KES',
+          reference: transactionReference,
+          timestamp: new Date().toISOString(),
+          message: 'Withdrawal completed successfully! Money sent to M-Pesa.',
+          wallet: wallet ? {
+            balance_kes: wallet.kes_balance,
+            balance_usd: wallet.usd_balance
+          } : null,
+          userId: wallet?.user_id
+        };
+
+        websocketService.broadcastPaymentUpdate(transactionReference, paymentData);
+        await publishPaymentEvent(transactionReference, paymentData);
+      } catch (wsError) {
+        logger.error('Failed to broadcast withdrawal success:', wsError);
+      }
 
       return res.status(200).json({
         ResultCode: 0,
-        ResultDesc: 'Callback received'
+        ResultDesc: 'Withdrawal callback processed successfully'
+      });
+
+    } else {
+      // FAILED - Refund the wallet and mark as failed
+      const refundAmount = parseFloat(pendingTransaction.amount);
+
+      await wallet.increment('kes_balance', {
+        by: refundAmount,
+        transaction: dbTransaction
+      });
+
+      await pendingTransaction.update({
+        status: 'failed',
+        metadata: {
+          ...pendingTransaction.metadata,
+          b2cCallback: callbackData,
+          failureReason: statusDescription || statusMessage,
+          refundedAmount: refundAmount,
+          failedAt: new Date().toISOString()
+        }
+      }, { transaction: dbTransaction });
+
+      await dbTransaction.commit();
+
+      logger.warn('B2C withdrawal failed, wallet refunded:', {
+        transactionReference,
+        userId: wallet?.user_id,
+        refundedAmount: refundAmount,
+        reason: statusDescription || statusMessage
+      });
+
+      // Broadcast failure via WebSocket
+      try {
+        await wallet.reload();
+        const paymentData = {
+          status: 'failed',
+          type: 'withdrawal',
+          amount: pendingTransaction.amount,
+          currency: 'KES',
+          reference: transactionReference,
+          timestamp: new Date().toISOString(),
+          message: `Withdrawal failed: ${statusDescription || statusMessage}. Amount refunded to wallet.`,
+          wallet: {
+            balance_kes: wallet.kes_balance,
+            balance_usd: wallet.usd_balance
+          },
+          userId: wallet?.user_id
+        };
+
+        websocketService.broadcastPaymentUpdate(transactionReference, paymentData);
+        await publishPaymentEvent(transactionReference, paymentData);
+      } catch (wsError) {
+        logger.error('Failed to broadcast withdrawal failure:', wsError);
+      }
+
+      return res.status(200).json({
+        ResultCode: 0,
+        ResultDesc: 'Withdrawal failure callback processed'
       });
     }
+
+  } catch (error) {
+    await dbTransaction.rollback();
+    logger.error('B2C callback processing error:', {
+      error: error.message,
+      stack: error.stack
+    });
+
+    return res.status(200).json({
+      ResultCode: 0,
+      ResultDesc: 'Callback received'
+    });
+  }
+};
+
+// Handle STK Push (Deposit) callback
+const handleSTKPushCallback = async (callbackData, res) => {
+  const dbTransaction = await sequelize.transaction();
+
+  try {
+    logger.info('Processing STK Push deposit callback');
 
     const stkCallback = callbackData.Body.stkCallback;
     const resultCode = parseInt(stkCallback.ResultCode);
@@ -304,10 +494,9 @@ const handleKCBMpesaCallback = async (req, res) => {
   } catch (error) {
     await dbTransaction.rollback();
 
-    logger.error('KCB M-Pesa callback processing error:', {
+    logger.error('STK Push callback processing error:', {
       error: error.message,
-      stack: error.stack,
-      body: req.body
+      stack: error.stack
     });
 
     // Always return 200 to prevent retries
