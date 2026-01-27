@@ -36,6 +36,7 @@ const supportRoutes = require('./routes/support');
 const adminRoutes = require('./routes/admin');
 const smsTestRoutes = require('./routes/smsTest');
 const callbackRoutes = require('./routes/callback');
+const productionCallbackRoutes = require('./routes/productionCallback');
 const waitlistRoutes = require('./routes/waitlist');
 const referralRoutes = require('./routes/referral');
 
@@ -104,6 +105,7 @@ app.use('/api/v1/onboarding', onboardingRoutes);
 
 // Payment callback endpoint (no auth required - called by external services)
 app.use('/api/v1/callback', callbackRoutes);
+app.use('/api/v1/production/callback', productionCallbackRoutes);
 
 // Waitlist endpoint (public + admin endpoints)
 app.use('/api/v1/waitlist', waitlistRoutes);
