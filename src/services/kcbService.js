@@ -240,33 +240,34 @@ class KCBService {
 
       const formattedPhone = this.formatPhoneNumber(stkData.phoneNumber);
       const messageId = this.generateMessageId();
+      const invoiceNumber = `${this.kcbBankAccount}-${stkData.invoiceNumber}`;
       const payload = {
         phoneNumber: formattedPhone,
         amount: stkData.amount.toString(),
-        invoiceNumber: stkData.invoiceNumber,
+        invoiceNumber: invoiceNumber,
         sharedShortCode: true,
-        orgShortCode: "",
-        orgPassKey: "",
-        callbackUrl: stkData.callbackUrl || process.env.KCB_STK_CALLBACK_URL || 'https://api.rivenapp.com/api/v1/callback',
-        transactionDescription: stkData.transactionDescription || 'Payment'
+        orgShortCode: '',
+        orgPassKey: '',
+        callbackUrl: stkData.callbackUrl || process.env.KCB_STK_CALLBACK_URL,
+        transactionDescription: 'Payment'
       };
 
-      logger.info('Initiating KCB M-Pesa STK Push:', {
+      const stkPushUrl = process.env.KCB_STK_PUSH_URL || `${this.baseUrl}/mm/api/request/1.0.0/stkpush`;
+
+      logger.info('KCB STK Push - Full Request:', {
+        url: stkPushUrl,
         messageId,
-        phoneNumber: formattedPhone,
-        amount: payload.amount,
-        invoiceNumber: payload.invoiceNumber
+        payload: JSON.stringify(payload)
       });
 
       const response = await axios.post(
-        'https://uat.buni.kcbgroup.com/mm/api/request/1.0.0/stkpush',
+        stkPushUrl,
         payload,
         {
           headers: {
             'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
             'Accept': 'application/json',
-            'Access-Control-Allow-Origin': '*',
             'routeCode': '207',
             'operation': 'STKPush',
             'messageId': messageId
@@ -338,18 +339,17 @@ class KCBService {
         beneficiaryBankCode: 'MPESA'
       };
 
-      logger.info('Initiating KCB M-Pesa B2C withdrawal:', {
+      const withdrawUrl = process.env.KCB_WITHDRAW_URL || `${this.baseUrl}/fundstransfer/1.0.0/api/v1/transfer`;
+
+      logger.info('KCB B2C Withdrawal - Full Request:', {
+        url: withdrawUrl,
         transactionReference,
-        creditAccountNumber: mpesaNumber,
-        amount: payload.debitAmount,
-        beneficiary: payload.beneficiaryDetails,
-        fullPayload: JSON.stringify(payload),
-        tokenUsed: accessToken.substring(0, 50) + '...'
+        payload: JSON.stringify(payload)
       });
 
       // KCB Funds Transfer endpoint for M-Pesa B2C
       const response = await axios.post(
-        'https://uat.buni.kcbgroup.com/fundstransfer/1.0.0/api/v1/transfer',
+        withdrawUrl,
         payload,
         {
           headers: {
@@ -432,7 +432,7 @@ class KCBService {
       });
 
       const response = await axios.post(
-        'https://uat.buni.kcbgroup.com/v1/core/t24/querytransaction/1.0.0/api/transactioninfo',
+        `${this.baseUrl}/v1/core/t24/querytransaction/1.0.0/api/transactioninfo`,
         payload,
         {
           headers: {

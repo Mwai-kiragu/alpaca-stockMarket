@@ -125,7 +125,7 @@ const onboardingController = {
     }
   },
 
-  // Submit personal details (matching Rivenapp pattern)
+  // Submit personal details (simplified format)
   submitPersonalDetails: async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -136,15 +136,9 @@ const onboardingController = {
       }
 
       const {
-        firstName,
-        lastName,
         dateOfBirth,
         gender,
-        address,
-        city,
-        county,
-        postalCode,
-        citizenship
+        country
       } = req.body;
 
       const user = await User.findByPk(req.user.id);
@@ -171,17 +165,15 @@ const onboardingController = {
       const employmentStepLevel = stepHierarchy['employment_info'];
       const nextStep = currentStepLevel <= employmentStepLevel ? 'employment_info' : user.registration_step;
 
+      // Store country in address field as JSON for compatibility
+      const addressData = { country };
+
       await user.update({
-        first_name: firstName,
-        last_name: lastName,
         date_of_birth: new Date(dateOfBirth),
         gender: gender.toLowerCase(),
-        address: JSON.stringify(address),
-        city,
-        county,
-        postal_code: postalCode,
-        citizenship,
-        registration_step: nextStep,  // Keep current step if already advanced
+        address: JSON.stringify(addressData),
+        citizenship: country,
+        registration_step: nextStep,
         registration_status: currentStepLevel <= employmentStepLevel ? 'email_verified' : user.registration_status
       });
 

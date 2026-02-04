@@ -66,7 +66,7 @@ class EmailService {
     const html = `
       <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
         <div style="text-align: center; margin-bottom: 30px;">
-          <h1 style="color: #2c5aa0;">Welcome to Trading Platform</h1>
+          <h1 style="color: #2c5aa0;">Welcome to Riven Trading</h1>
         </div>
 
         <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
@@ -105,7 +105,7 @@ class EmailService {
     `;
 
     const text = `
-      Welcome to Trading Platform!
+      Welcome to Riven Trading Platform!
 
       Hello ${user.first_name},
 
@@ -140,7 +140,7 @@ class EmailService {
     const html = `
       <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
         <div style="text-align: center; margin-bottom: 30px;">
-          <h1 style="color: #2c5aa0;">Welcome to Trading Platform</h1>
+          <h1 style="color: #2c5aa0;">Welcome to Riven Trading</h1>
         </div>
 
         <div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
@@ -174,7 +174,7 @@ class EmailService {
     `;
 
     const text = `
-      Welcome to Trading Platform!
+      Welcome to Riven Trading!
 
       Hello ${user.first_name},
 
@@ -191,7 +191,7 @@ class EmailService {
 
     return this.sendEmail({
       to: user.email,
-      subject: 'Welcome to Trading Platform - Verify Your Email',
+      subject: 'Welcome to Riven Trading - Verify Your Email',
       html,
       text
     });
@@ -341,6 +341,153 @@ class EmailService {
     return this.sendEmail({
       to: user.email,
       subject: '✅ Password Reset Successful - Trading Platform',
+      html,
+      text
+    });
+  }
+
+  async sendRegistrationWelcomeEmail(user) {
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      </head>
+      <body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+
+          <!-- Main Card -->
+          <div style="background: #ffffff; border-radius: 16px; padding: 40px 30px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);">
+
+            <!-- Header -->
+            <div style="text-align: center; margin-bottom: 30px;">
+              <h1 style="color: #1a1a1a; font-size: 28px; font-weight: 700; margin: 0 0 10px 0;">Welcome to Riven!</h1>
+              <p style="color: #666666; font-size: 16px; margin: 0;">Your journey to US stock trading starts here</p>
+            </div>
+
+            <!-- Welcome Message -->
+            <div style="background: linear-gradient(135deg, #1a1a1a 0%, #333333 100%); border-radius: 12px; padding: 25px; margin-bottom: 25px; color: white;">
+              <h2 style="margin: 0 0 10px 0; font-size: 20px;">Hello ${user.first_name}!</h2>
+              <p style="margin: 0; line-height: 1.6; opacity: 0.9;">
+                Thank you for joining Riven. We're excited to have you on board. You're now one step closer to investing in the world's largest stock market.
+              </p>
+            </div>
+
+            <!-- What's Next Section -->
+            <div style="margin-bottom: 25px;">
+              <h3 style="color: #1a1a1a; font-size: 18px; margin: 0 0 15px 0;">Getting Started</h3>
+
+              <div style="display: flex; align-items: flex-start; margin-bottom: 15px;">
+                <div style="background: #e8f5e9; color: #2e7d32; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0;">1</div>
+                <div>
+                  <p style="margin: 0; color: #1a1a1a; font-weight: 600;">Verify Your Email</p>
+                  <p style="margin: 5px 0 0 0; color: #666666; font-size: 14px;">Check your inbox for the verification code</p>
+                </div>
+              </div>
+
+              <div style="display: flex; align-items: flex-start; margin-bottom: 15px;">
+                <div style="background: #e3f2fd; color: #1976d2; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0;">2</div>
+                <div>
+                  <p style="margin: 0; color: #1a1a1a; font-weight: 600;">Complete Your Profile</p>
+                  <p style="margin: 5px 0 0 0; color: #666666; font-size: 14px;">Add your personal details and verify your phone</p>
+                </div>
+              </div>
+
+              <div style="display: flex; align-items: flex-start; margin-bottom: 15px;">
+                <div style="background: #fff3e0; color: #f57c00; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0;">3</div>
+                <div>
+                  <p style="margin: 0; color: #1a1a1a; font-weight: 600;">Complete KYC Verification</p>
+                  <p style="margin: 5px 0 0 0; color: #666666; font-size: 14px;">Upload your ID for secure trading access</p>
+                </div>
+              </div>
+
+              <div style="display: flex; align-items: flex-start;">
+                <div style="background: #f3e5f5; color: #7b1fa2; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0;">4</div>
+                <div>
+                  <p style="margin: 0; color: #1a1a1a; font-weight: 600;">Fund & Start Trading</p>
+                  <p style="margin: 5px 0 0 0; color: #666666; font-size: 14px;">Deposit via M-Pesa and invest in US stocks</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Features Highlight -->
+            <div style="background: #f8f9fa; border-radius: 12px; padding: 20px; margin-bottom: 25px;">
+              <h3 style="color: #1a1a1a; font-size: 16px; margin: 0 0 15px 0;">Why Trade with Riven?</h3>
+              <ul style="margin: 0; padding: 0 0 0 20px; color: #666666; line-height: 1.8;">
+                <li>Access to 5,000+ US stocks & ETFs</li>
+                <li>Easy M-Pesa deposits & withdrawals</li>
+                <li>Real-time market data</li>
+                <li>Fractional shares starting from $1</li>
+                <li>Secure & regulated platform</li>
+              </ul>
+            </div>
+
+            <!-- CTA Button -->
+            <div style="text-align: center; margin-bottom: 25px;">
+              <a href="${process.env.CLIENT_URL || 'https://app.rivenapp.com'}"
+                 style="display: inline-block; background: #1a1a1a; color: #ffffff; text-decoration: none; padding: 16px 40px; border-radius: 8px; font-size: 16px; font-weight: 600;">
+                Open Riven App
+              </a>
+            </div>
+
+            <!-- Support -->
+            <div style="text-align: center; padding: 20px 0; border-top: 1px solid #eee;">
+              <p style="color: #888888; font-size: 14px; margin: 0 0 10px 0;">Need help getting started?</p>
+              <a href="mailto:support@rivenapp.com" style="color: #1a1a1a; font-weight: 600; text-decoration: none;">Contact Support</a>
+            </div>
+
+          </div>
+
+          <!-- Footer -->
+          <div style="text-align: center; padding: 30px 20px; color: #888888; font-size: 12px;">
+            <p style="margin: 0 0 5px 0; font-size: 18px; font-weight: 700; color: #1a1a1a; letter-spacing: 2px;">RIVEN</p>
+            <p style="margin: 0 0 15px 0;">Invest in the future, today.</p>
+            <p style="margin: 0;">© ${new Date().getFullYear()} Riven. All rights reserved.</p>
+          </div>
+
+        </div>
+      </body>
+      </html>
+    `;
+
+    const text = `
+Welcome to Riven!
+
+Hello ${user.first_name},
+
+Thank you for joining Riven. We're excited to have you on board. You're now one step closer to investing in the world's largest stock market.
+
+GETTING STARTED:
+
+1. Verify Your Email
+   Check your inbox for the verification code
+
+2. Complete Your Profile
+   Add your personal details and verify your phone
+
+3. Complete KYC Verification
+   Upload your ID for secure trading access
+
+4. Fund & Start Trading
+   Deposit via M-Pesa and invest in US stocks
+
+WHY TRADE WITH RIVEN?
+- Access to 5,000+ US stocks & ETFs
+- Easy M-Pesa deposits & withdrawals
+- Real-time market data
+- Fractional shares starting from $1
+- Secure & regulated platform
+
+Need help? Contact us at support@rivenapp.com
+
+RIVEN - Invest in the future, today.
+© ${new Date().getFullYear()} Riven. All rights reserved.
+    `;
+
+    return this.sendEmail({
+      to: user.email,
+      subject: `Welcome to Riven, ${user.first_name}!`,
       html,
       text
     });

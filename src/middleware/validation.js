@@ -259,7 +259,7 @@ const supportTicketValidation = [
   handleValidationErrors
 ];
 
-// Personal details validation with international address support
+// Personal details validation - simplified format
 const personalDetailsValidation = [
   body('dateOfBirth')
     .isISO8601()
@@ -267,9 +267,10 @@ const personalDetailsValidation = [
   body('gender')
     .isIn(['Male', 'Female', 'Other', 'male', 'female', 'other'])
     .withMessage('Gender must be Male, Female, or Other'),
-  body('address')
-    .custom(validateInternationalAddress)
-    .withMessage('Valid address is required'),
+  body('country')
+    .trim()
+    .notEmpty()
+    .withMessage('Country is required'),
   handleValidationErrors
 ];
 
