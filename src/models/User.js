@@ -123,8 +123,8 @@ User.init({
     allowNull: true
   },
   citizenship: {
-    type: DataTypes.STRING(3),
-    defaultValue: 'KE'
+    type: DataTypes.STRING(100),
+    defaultValue: 'Kenya'
   },
   occupation: {
     type: DataTypes.STRING(100),

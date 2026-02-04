@@ -5,7 +5,7 @@ const { auth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Validation rules
+// Validation rules - simplified personal details
 const personalDetailsValidation = [
   body('dateOfBirth')
     .isISO8601()
@@ -22,21 +22,10 @@ const personalDetailsValidation = [
   body('gender')
     .isIn(['Male', 'Female', 'Other'])
     .withMessage('Gender must be Male, Female, or Other'),
-  body('address.street')
+  body('country')
+    .trim()
     .notEmpty()
-    .withMessage('Street address is required'),
-  body('address.city')
-    .notEmpty()
-    .withMessage('City is required'),
-  body('address.state')
-    .notEmpty()
-    .withMessage('State is required'),
-  body('address.country')
-    .notEmpty()
-    .withMessage('Country is required'),
-  body('address.zipCode')
-    .notEmpty()
-    .withMessage('Zip code is required')
+    .withMessage('Country is required')
 ];
 
 const employmentDetailsValidation = [
