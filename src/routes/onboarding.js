@@ -49,35 +49,14 @@ const kycValidation = [
     .withMessage('ID type must be passport, nationalId, or drivingLicense'),
   body('idNumber')
     .notEmpty()
-    .withMessage('ID number is required')
-    .isLength({ min: 5, max: 50 })
-    .withMessage('ID number must be between 5 and 50 characters'),
+    .withMessage('ID number is required'),
   body('idExpiryDate')
+    .optional()
     .isISO8601()
-    .withMessage('ID expiry date must be a valid date')
-    .custom((value) => {
-      const expiryDate = new Date(value);
-      const now = new Date();
-      if (expiryDate <= now) {
-        throw new Error('ID expiry date must be in the future');
-      }
-      return true;
-    }),
+    .withMessage('ID expiry date must be a valid date'),
   body('nationality')
     .notEmpty()
-    .withMessage('Nationality is required'),
-  body('placeOfBirth')
-    .notEmpty()
-    .withMessage('Place of birth is required'),
-  body('purposeOfAccount')
-    .isIn(['Personal Banking', 'Business', 'Investment'])
-    .withMessage('Purpose of account must be Personal Banking, Business, or Investment'),
-  body('sourceOfFunds')
-    .isIn(['Salary', 'Business Income', 'Investment', 'Inheritance', 'Other'])
-    .withMessage('Source of funds must be one of the specified options'),
-  body('expectedTransactionVolume')
-    .isIn(['Low', 'Medium', 'High'])
-    .withMessage('Expected transaction volume must be Low, Medium, or High')
+    .withMessage('Nationality is required')
 ];
 
 const trustedContactValidation = [

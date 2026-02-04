@@ -243,7 +243,7 @@ const onboardingController = {
     }
   },
 
-  // Submit KYC information (matching Rivenapp pattern)
+  // Submit KYC information (simplified format)
   submitKycInfo: async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -257,15 +257,7 @@ const onboardingController = {
         idType,
         idNumber,
         idExpiryDate,
-        nationality,
-        placeOfBirth,
-        purposeOfAccount,
-        sourceOfFunds,
-        expectedTransactionVolume,
-        investmentExperience,
-        riskTolerance,
-        publiclyTradedCompany,
-        politicallyExposedPerson
+        nationality
       } = req.body;
 
       const user = await User.findByPk(req.user.id);
@@ -276,16 +268,8 @@ const onboardingController = {
       const kycData = {
         idType,
         idNumber,
-        idExpiryDate,
+        idExpiryDate: idExpiryDate || null,
         nationality,
-        placeOfBirth,
-        purposeOfAccount,
-        sourceOfFunds,
-        expectedTransactionVolume,
-        investmentExperience,
-        riskTolerance,
-        publiclyTradedCompany: publiclyTradedCompany || false,
-        politicallyExposedPerson: politicallyExposedPerson || false,
         updatedAt: new Date()
       };
 
@@ -298,11 +282,11 @@ const onboardingController = {
       await user.update({
         kyc_data: updatedKycData,
         kyc_status: 'pending',
-        registration_step: 'documents_id_front'  // Step 4: ID FRONT (trustedContact step removed)
+        registration_step: 'documents_id_front'  // Step 4: ID FRONT
       });
 
       return res.status(200).json(
-        ApiResponse.SuccessNoData('Alpaca specific kyc info submitted successfully')
+        ApiResponse.SuccessNoData('KYC info submitted successfully')
       );
 
     } catch (error) {
