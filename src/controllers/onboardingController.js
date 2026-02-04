@@ -189,7 +189,7 @@ const onboardingController = {
     }
   },
 
-  // Submit employment information (matching Rivenapp pattern)
+  // Submit employment information (simplified format)
   submitEmploymentInfo: async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -203,10 +203,7 @@ const onboardingController = {
         employmentStatus,
         employerName,
         jobTitle,
-        monthlyIncome,
-        workAddress,
-        yearsAtCurrentJob,
-        industryType
+        country
       } = req.body;
 
       const user = await User.findByPk(req.user.id);
@@ -216,12 +213,9 @@ const onboardingController = {
 
       const employmentData = {
         status: employmentStatus,
-        employerName,
-        jobTitle,
-        monthlyIncome,
-        workAddress,
-        yearsAtCurrentJob,
-        industryType,
+        employerName: employerName || null,
+        jobTitle: jobTitle || null,
+        country: country || null,
         updatedAt: new Date()
       };
 
@@ -232,7 +226,7 @@ const onboardingController = {
       };
 
       await user.update({
-        occupation: jobTitle,
+        occupation: jobTitle || null,
         kyc_data: updatedKycData,
         registration_step: 'kyc_verification'  // Step 3: KYC
       });

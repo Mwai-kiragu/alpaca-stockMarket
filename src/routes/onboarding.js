@@ -32,13 +32,15 @@ const employmentDetailsValidation = [
   body('employmentStatus')
     .isIn(['Employed', 'Self-Employed', 'Unemployed', 'Retired', 'Student'])
     .withMessage('Employment status must be one of: Employed, Self-Employed, Unemployed, Retired, Student'),
-  body('monthlyIncome')
-    .isFloat({ min: 0 })
-    .withMessage('Monthly income must be a positive number'),
-  body('yearsAtCurrentJob')
+  body('employerName')
     .optional()
-    .isInt({ min: 0 })
-    .withMessage('Years at current job must be a positive integer')
+    .trim(),
+  body('jobTitle')
+    .optional()
+    .trim(),
+  body('country')
+    .optional()
+    .trim()
 ];
 
 const kycValidation = [
