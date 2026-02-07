@@ -80,9 +80,7 @@ const register = async (req, res) => {
       referred_by: referrerId
     });
 
-    // TEMPORARILY COMMENTED OUT: Generate verification token
-    // Will re-enable once we have a reliable email service
-    /*
+    // Generate verification token
     const verificationCode = generateVerificationCode();
     const verificationToken = EmailVerificationToken.generateToken();
 
@@ -90,45 +88,34 @@ const register = async (req, res) => {
       user_id: user.id,
       token: verificationToken,
       verification_code: verificationCode,
-      expires_at: new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
+      expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
     });
-    */
 
-    // TEMPORARY: Generate verification code for logging only
-    const verificationCode = generateVerificationCode();
-
-    // TEMPORARILY COMMENTED OUT: Send verification email with code (with timeout)
-    // Will re-enable once we have a reliable email service
-    /*
-    try {
-      const emailPromise = emailService.sendVerificationCodeEmail(user, verificationCode);
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Email timeout')), 5000)
-      );
-
-      const emailResult = await Promise.race([emailPromise, timeoutPromise]);
-
-      if (!emailResult.success) {
-        logger.error(`Failed to send verification email to ${email}:`, emailResult.error);
+    // Send verification email asynchronously (don't block the response)
+    emailService.sendVerificationCodeEmail(user, verificationCode)
+      .then(emailResult => {
+        if (emailResult.success) {
+          logger.info(`Verification email sent successfully to ${email}`);
+        } else {
+          logger.warn(`Failed to send verification email to ${email}: ${emailResult.error || emailResult.message}`);
+          logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
+        }
+      })
+      .catch(emailError => {
+        logger.error(`Email service error for ${email}:`, emailError.message);
         logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
-      } else {
-        logger.info(`Verification email sent successfully to ${email}`);
-      }
-    } catch (emailError) {
-      logger.error(`Email service error for ${email}:`, emailError.message);
-      logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
-    }
-    */
+      });
 
-    // TEMPORARY: Log verification code for testing (will remove when email service is ready)
+    // Also log verification code as backup
     logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
 
-    // Send welcome notification
-    try {
-      await notificationService.sendRegistrationWelcome(user.id, user.first_name);
-    } catch (notificationError) {
-      logger.error('Failed to send welcome notification:', notificationError);
-    }
+    notificationService.sendRegistrationWelcome(user.id, user.first_name)
+      .then(() => {
+        logger.info(`Welcome notification sent to ${user.first_name}`);
+      })
+      .catch(notificationError => {
+        logger.error('Failed to send welcome notification:', notificationError);
+      });
 
     logger.info(`New user registered: ${email}`);
 
@@ -284,33 +271,27 @@ const requestVerification = async (req, res) => {
         user_id: user.id,
         token: verificationToken,
         verification_code: verificationCode,
-        expires_at: new Date(Date.now() + 15 * 60 * 1000) // 15 minutes
+        expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
       });
 
-      // Send verification email
-      try {
-        const emailResult = await emailService.sendVerificationCodeEmail(user, verificationCode);
-
-        if (emailResult.success) {
-          logger.info(`Verification code sent to ${user.email}`);
-          res.status(200).json({
-            success: true,
-            message: 'Verification code sent successfully.'
-          });
-        } else {
-          logger.error(`Failed to send verification email to ${user.email}`);
-          res.status(500).json({
-            success: false,
-            message: 'Failed to send verification code. Please try again.'
-          });
-        }
-      } catch (emailError) {
-        logger.error(`Email service error for ${user.email}:`, emailError);
-        res.status(500).json({
-          success: false,
-          message: 'Failed to send verification code. Please try again.'
+      // Send verification email asynchronously (don't block the response)
+      emailService.sendVerificationCodeEmail(user, verificationCode)
+        .then(emailResult => {
+          if (emailResult.success) {
+            logger.info(`Verification code sent to ${user.email}`);
+          } else {
+            logger.warn(`Failed to send verification email to ${user.email}: ${emailResult.error || emailResult.message}`);
+          }
+        })
+        .catch(emailError => {
+          logger.error(`Email service error for ${user.email}:`, emailError);
         });
-      }
+
+      // Respond immediately
+      res.status(200).json({
+        success: true,
+        message: 'Verification code sent successfully.'
+      });
     } else if (verificationType === 'phone') {
       if (user.is_phone_verified) {
         return res.status(400).json({
@@ -387,9 +368,7 @@ const verifyCode = async (req, res) => {
       });
     }
 
-    // TEMPORARILY COMMENTED OUT: Email verification with database tokens
-    // Will re-enable once we have a reliable email service
-    /*
+    // Email verification with database tokens
     const emailToken = await EmailVerificationToken.findOne({
       where: {
         user_id: user.id,
@@ -400,7 +379,8 @@ const verifyCode = async (req, res) => {
 
     if (emailToken && !emailToken.isExpired()) {
       await user.update({
-        is_email_verified: true
+        is_email_verified: true,
+        registration_step: 'personal_info' // Move to first onboarding step
       });
       await emailToken.update({ used: true });
 
@@ -409,24 +389,16 @@ const verifyCode = async (req, res) => {
         message: 'Account verified successfully.'
       });
     }
-    */
 
-    // TEMPORARY: Accept ANY verification code and mark both email and phone as verified
-    if (verificationCode && verificationCode.trim().length > 0) {
-      await user.update({
-        is_email_verified: true,
-        is_phone_verified: true, // Also mark phone as verified for simplicity
-        registration_step: 'personal_info' // Move to first onboarding step
-      });
-
-      return res.status(200).json({
-        success: true,
-        message: 'Account verified successfully.'
+    // Check if token exists but is expired
+    if (emailToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification code has expired. Please request a new one.'
       });
     }
 
-    // TEMPORARILY COMMENTED OUT: Phone verification with database tokens
-    /*
+    // Phone verification with database tokens
     const phoneToken = await PhoneVerificationToken.findOne({
       where: {
         user_id: user.id,
@@ -443,14 +415,14 @@ const verifyCode = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: 'Account verified successfully.'
+        message: 'Phone verified successfully.'
       });
     }
-    */
 
+    // Invalid or already used code
     res.status(400).json({
       success: false,
-      message: 'Please enter the verification code that was sent to you.'
+      message: 'Invalid or expired verification code. Please check the code or request a new one.'
     });
 
   } catch (error) {
