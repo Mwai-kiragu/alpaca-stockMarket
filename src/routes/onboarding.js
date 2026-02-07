@@ -5,7 +5,6 @@ const { auth } = require('../middleware/auth');
 
 const router = express.Router();
 
-// Validation rules - simplified personal details
 const personalDetailsValidation = [
   body('dateOfBirth')
     .isISO8601()
@@ -105,6 +104,7 @@ router.get('/current-user/personal-details', auth, onboardingController.getCurre
 // Submit onboarding steps (matching Rivenapp pattern)
 router.post('/personal-details', auth, personalDetailsValidation, onboardingController.submitPersonalDetails);
 router.post('/employment-info', auth, employmentDetailsValidation, onboardingController.submitEmploymentInfo);
+router.post('/tax-info', auth, onboardingController.uploadTaxDocumentMiddleware, onboardingController.uploadTaxDocument);
 router.post('/kyc-info', auth, kycValidation, onboardingController.submitKycInfo);
 router.post('/trusted-contact', auth, trustedContactValidation, onboardingController.submitTrustedContact);
 

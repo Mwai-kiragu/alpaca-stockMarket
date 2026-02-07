@@ -243,6 +243,64 @@ const onboardingController = {
     }
   },
 
+  // Upload tax document with tax ID
+  uploadTaxDocumentMiddleware: upload.any(),
+  uploadTaxDocument: async (req, res) => {
+    try {
+      const { taxId, taxIdType } = req.body;
+      const file = req.files && req.files.length > 0 ? req.files[0] : null;
+
+      if (!taxId || !taxIdType) {
+        return res.status(400).json(ApiResponse.Error('Tax ID and Tax ID Type are required', 400));
+      }
+
+      if (!file) {
+        return res.status(400).json(ApiResponse.Error('Tax document is required', 400));
+      }
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const documentId = `${user.id}_tax_doc_${Date.now()}`;
+
+      const currentKycData = user.kyc_data || {};
+      const updatedKycData = {
+        ...currentKycData,
+        taxInfo: {
+          taxId,
+          taxIdType,
+          document: {
+            documentId,
+            fileName: file.filename,
+            originalName: file.originalname,
+            path: file.path,
+            uploadedAt: new Date(),
+            status: 'uploaded',
+            verificationStatus: 'pending'
+          },
+          updatedAt: new Date()
+        }
+      };
+
+      await user.update({
+        kyc_data: updatedKycData,
+        registration_step: 'tax_info'  // Move to Step 3: Tax Info
+      });
+
+      return res.status(200).json(
+        ApiResponse.SuccessWithData(documentId, 'Tax document uploaded successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error uploading tax document:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while uploading tax document', 500)
+      );
+    }
+  },
+
   // Submit KYC information (simplified format)
   submitKycInfo: async (req, res) => {
     try {
@@ -700,6 +758,7 @@ const onboardingController = {
       const steps = {
         personalDetails: !!(user.date_of_birth && user.gender && user.address),
         employment: !!kycData.employment,
+        taxInfo: !!kycData.taxInfo,
         kyc: !!kycData.kyc,
         idFront: !!kycData.documents?.idFront,
         idBack: !!kycData.documents?.idBack,
@@ -712,11 +771,12 @@ const onboardingController = {
       const totalSteps = Object.keys(steps).length;
       const progressPercentage = Math.round((completedSteps / totalSteps) * 100);
 
-      // Map registration steps to step numbers (8-step flow - trustedContact removed)
+      // Map registration steps to step numbers (9-step flow with tax info)
       const stepMapping = {
         'email_verification': 0,      // Email verification is pre-onboarding (handled at login)
         'personal_info': 1,           // Step 1: Personal Details
         'employment_info': 2,         // Step 2: Employment
+        'tax_info': 2.5,              // Step 2.5: Tax Info (between employment and kyc)
         'kyc_verification': 3,        // Step 3: KYC
         'documents': 4,               // Step 4: ID FRONT (legacy)
         'documents_id_front': 4,      // Step 4: ID FRONT
@@ -811,41 +871,48 @@ const onboardingController = {
           },
           {
             stepNumber: 3,
+            stepName: 'Tax Information',
+            endpoint: '/api/v1/onboarding/tax-info',
+            completed: !!kycData.taxInfo,
+            data: kycData.taxInfo || null
+          },
+          {
+            stepNumber: 4,
             stepName: 'KYC',
             endpoint: '/api/v1/onboarding/kyc-info',
             completed: !!kycData.kyc,
             data: kycData.kyc || null
           },
           {
-            stepNumber: 4,
+            stepNumber: 5,
             stepName: 'ID FRONT',
             endpoint: '/api/v1/onboarding/upload-id-front',
             completed: !!kycData.documents?.idFront,
             data: kycData.documents?.idFront || null
           },
           {
-            stepNumber: 5,
+            stepNumber: 6,
             stepName: 'ID BACK',
             endpoint: '/api/v1/onboarding/upload-id-back',
             completed: !!kycData.documents?.idBack,
             data: kycData.documents?.idBack || null
           },
           {
-            stepNumber: 6,
+            stepNumber: 7,
             stepName: 'PROOF OF ADDRESS',
             endpoint: '/api/v1/onboarding/upload-proof-of-address',
             completed: !!kycData.documents?.proofOfAddress,
             data: kycData.documents?.proofOfAddress || null
           },
           {
-            stepNumber: 7,
+            stepNumber: 8,
             stepName: 'Accept Terms and Conditions',
             endpoint: '/api/v1/onboarding/agreements',
             completed: !!(user.terms_accepted && user.privacy_accepted),
             data: kycData.agreements || null
           },
           {
-            stepNumber: 8,
+            stepNumber: 9,
             stepName: 'Completion',
             endpoint: '/api/v1/onboarding/complete',
             completed: user.registration_status === 'completed',
@@ -858,6 +925,7 @@ const onboardingController = {
           completedSteps: kycData ? Object.values({
             personalDetails: !!(user.date_of_birth && user.gender && user.address),
             employment: !!kycData.employment,
+            taxInfo: !!kycData.taxInfo,
             kyc: !!kycData.kyc,
             idFront: !!kycData.documents?.idFront,
             idBack: !!kycData.documents?.idBack,
@@ -865,7 +933,7 @@ const onboardingController = {
             agreements: !!(user.terms_accepted && user.privacy_accepted),
             completion: user.registration_status === 'completed'
           }).filter(Boolean).length : 0,
-          totalSteps: 8,
+          totalSteps: 9,
           isComplete: user.registration_status === 'completed',
           kycStatus: user.kyc_status,
           accountStatus: user.account_status
