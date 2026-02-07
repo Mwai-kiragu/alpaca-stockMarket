@@ -228,7 +228,7 @@ const onboardingController = {
       await user.update({
         occupation: jobTitle || null,
         kyc_data: updatedKycData,
-        registration_step: 'kyc_verification'  // Step 3: KYC
+        registration_step: 'tax_info'  // Step 3: Tax Info
       });
 
       return res.status(200).json(
@@ -286,7 +286,7 @@ const onboardingController = {
 
       await user.update({
         kyc_data: updatedKycData,
-        registration_step: 'tax_info'  // Move to Step 3: Tax Info
+        registration_step: 'kyc_verification'  // Move to Step 4: KYC
       });
 
       return res.status(200).json(
@@ -776,17 +776,17 @@ const onboardingController = {
         'email_verification': 0,      // Email verification is pre-onboarding (handled at login)
         'personal_info': 1,           // Step 1: Personal Details
         'employment_info': 2,         // Step 2: Employment
-        'tax_info': 2.5,              // Step 2.5: Tax Info (between employment and kyc)
-        'kyc_verification': 3,        // Step 3: KYC
-        'documents': 4,               // Step 4: ID FRONT (legacy)
-        'documents_id_front': 4,      // Step 4: ID FRONT
-        'documents_id_back': 5,       // Step 5: ID BACK
-        'documents_proof_address': 6, // Step 6: PROOF OF ADDRESS
-        'agreements': 7,              // Step 7: Accept Terms and Conditions
-        'kyc_pending': 8,             // Step 8: Completion
-        'kyc_under_review': 8,        // Step 8: Under Review
-        'completed': 8,               // Step 8: Completed
-        'initial_completed': 8        // Step 8: Initial Completed
+        'tax_info': 3,                // Step 3: Tax Info
+        'kyc_verification': 4,        // Step 4: KYC
+        'documents': 5,               // Step 5: ID FRONT (legacy)
+        'documents_id_front': 5,      // Step 5: ID FRONT
+        'documents_id_back': 6,       // Step 6: ID BACK
+        'documents_proof_address': 7, // Step 7: PROOF OF ADDRESS
+        'agreements': 8,              // Step 8: Accept Terms and Conditions
+        'kyc_pending': 9,             // Step 9: Completion
+        'kyc_under_review': 9,        // Step 9: Under Review
+        'completed': 9,               // Step 9: Completed
+        'initial_completed': 9        // Step 9: Initial Completed
       };
 
       let currentStepCount = stepMapping[user.registration_step];

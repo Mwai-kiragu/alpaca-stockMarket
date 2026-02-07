@@ -379,7 +379,7 @@ class EmailService {
               <h3 style="color: #1a1a1a; font-size: 18px; margin: 0 0 15px 0;">Getting Started</h3>
 
               <div style="display: flex; align-items: flex-start; margin-bottom: 15px;">
-                <div style="background: #e8f5e9; color: #2e7d32; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0;">1</div>
+                <div style="background: #e8f5e9; color: #2e7d32; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0; line-height: 28px; text-align: center; font-size: 14px;">1</div>
                 <div>
                   <p style="margin: 0; color: #1a1a1a; font-weight: 600;">Verify Your Email</p>
                   <p style="margin: 5px 0 0 0; color: #666666; font-size: 14px;">Check your inbox for the verification code</p>
@@ -387,7 +387,7 @@ class EmailService {
               </div>
 
               <div style="display: flex; align-items: flex-start; margin-bottom: 15px;">
-                <div style="background: #e3f2fd; color: #1976d2; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0;">2</div>
+                <div style="background: #e3f2fd; color: #1976d2; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0; line-height: 28px; text-align: center; font-size: 14px;">2</div>
                 <div>
                   <p style="margin: 0; color: #1a1a1a; font-weight: 600;">Complete Your Profile</p>
                   <p style="margin: 5px 0 0 0; color: #666666; font-size: 14px;">Add your personal details and verify your phone</p>
@@ -395,7 +395,7 @@ class EmailService {
               </div>
 
               <div style="display: flex; align-items: flex-start; margin-bottom: 15px;">
-                <div style="background: #fff3e0; color: #f57c00; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0;">3</div>
+                <div style="background: #fff3e0; color: #f57c00; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0; line-height: 28px; text-align: center; font-size: 14px;">3</div>
                 <div>
                   <p style="margin: 0; color: #1a1a1a; font-weight: 600;">Complete KYC Verification</p>
                   <p style="margin: 5px 0 0 0; color: #666666; font-size: 14px;">Upload your ID for secure trading access</p>
@@ -403,7 +403,7 @@ class EmailService {
               </div>
 
               <div style="display: flex; align-items: flex-start;">
-                <div style="background: #f3e5f5; color: #7b1fa2; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0;">4</div>
+                <div style="background: #f3e5f5; color: #7b1fa2; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; margin-right: 12px; flex-shrink: 0; line-height: 28px; text-align: center; font-size: 14px;">4</div>
                 <div>
                   <p style="margin: 0; color: #1a1a1a; font-weight: 600;">Fund & Start Trading</p>
                   <p style="margin: 5px 0 0 0; color: #666666; font-size: 14px;">Deposit via M-Pesa and invest in US stocks</p>

@@ -91,37 +91,27 @@ const register = async (req, res) => {
       expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
     });
 
-    // Send verification email asynchronously (don't block the response)
-    emailService.sendVerificationCodeEmail(user, verificationCode)
+    // Log verification code (user will request it via /resend-verification endpoint)
+    logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
+
+    // Send welcome email asynchronously (separate from verification email)
+    emailService.sendRegistrationWelcomeEmail(user)
       .then(emailResult => {
         if (emailResult.success) {
-          logger.info(`Verification email sent successfully to ${email}`);
+          logger.info(`Welcome email sent successfully to ${email}`);
         } else {
-          logger.warn(`Failed to send verification email to ${email}: ${emailResult.error || emailResult.message}`);
-          logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
+          logger.warn(`Failed to send welcome email to ${email}: ${emailResult.error || emailResult.message}`);
         }
       })
       .catch(emailError => {
-        logger.error(`Email service error for ${email}:`, emailError.message);
-        logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
-      });
-
-    // Also log verification code as backup
-    logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
-
-    notificationService.sendRegistrationWelcome(user.id, user.first_name)
-      .then(() => {
-        logger.info(`Welcome notification sent to ${user.first_name}`);
-      })
-      .catch(notificationError => {
-        logger.error('Failed to send welcome notification:', notificationError);
+        logger.error(`Welcome email service error for ${email}:`, emailError.message);
       });
 
     logger.info(`New user registered: ${email}`);
 
     res.status(201).json({
       success: true,
-      message: 'Registration successful. Please check your email to verify your account.'
+      message: 'Registration successful. Welcome to Riven! Please request a verification code to verify your account.'
     });
   } catch (error) {
     logger.error('Registration error:', error);
