@@ -134,6 +134,9 @@ router.get('/settings', auth, onboardingController.getUserSettings);
 router.put('/settings', auth, onboardingController.updateUserSettings);
 router.patch('/settings', auth, onboardingController.updateUserSettings);
 
+// Document retrieval endpoint
+router.get('/documents/:filename', auth, onboardingController.getDocument);
+
 // SANDBOX/TEST ENDPOINTS - Only available in development/test environments
 router.post('/sandbox/approve-kyc/:userId?', auth, onboardingController.sandboxApproveKyc);
 router.post('/sandbox/approve-all-kyc', auth, onboardingController.sandboxApproveAllKyc);

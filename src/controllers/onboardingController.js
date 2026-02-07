@@ -1482,6 +1482,69 @@ const onboardingController = {
         ApiResponse.Error('An error occurred while updating user settings', 500)
       );
     }
+  },
+
+  getDocument: async (req, res) => {
+    try {
+      const { filename } = req.params;
+      const userId = req.user.id;
+
+      if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+        return res.status(400).json(
+          ApiResponse.Error('Invalid filename', 400)
+        );
+      }
+
+      
+      if (!filename.startsWith(`${userId}-`)) {
+        return res.status(403).json(
+          ApiResponse.Error('Access denied. You can only access your own documents.', 403)
+        );
+      }
+
+      // Construct the file path
+      const filePath = path.join(__dirname, '../../uploads/kyc', filename);
+
+      // Check if file exists
+      try {
+        await fs.access(filePath);
+      } catch (error) {
+        return res.status(404).json(
+          ApiResponse.Error('Document not found', 404)
+        );
+      }
+
+      // Determine content type based on file extension
+      const ext = path.extname(filename).toLowerCase();
+      const contentTypeMap = {
+        '.pdf': 'application/pdf',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.bmp': 'image/bmp',
+        '.tiff': 'image/tiff',
+        '.tif': 'image/tiff',
+        '.svg': 'image/svg+xml',
+        '.heic': 'image/heic',
+        '.heif': 'image/heif'
+      };
+
+      const contentType = contentTypeMap[ext] || 'application/octet-stream';
+
+      // Set content type and send file
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+
+      return res.sendFile(filePath);
+
+    } catch (error) {
+      logger.error('Error serving document:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while retrieving the document', 500)
+      );
+    }
   }
 };
 
