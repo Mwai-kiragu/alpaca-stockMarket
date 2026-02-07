@@ -206,8 +206,8 @@ const login = async (req, res) => {
 
     const token = generateToken(user.id);
 
-    // Determine onboarding status
-    const requiresVerification = !user.is_email_verified || !user.is_phone_verified;
+    // Determine onboarding status (only check email verification)
+    const requiresVerification = !user.is_email_verified;
     const onboardingComplete = user.registration_status === 'completed';
 
     logger.info(`User logged in: ${email}`);
