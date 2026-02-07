@@ -511,7 +511,6 @@ RIVEN - Invest in the future, today.
         <div style="text-align: center; margin: 30px 0;">
           <a href="${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/dashboard"
              style="background: #28a745; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px;">
-            Go to Dashboard
           </a>
         </div>
       </div>
@@ -765,7 +764,6 @@ RIVEN - Invest in the future, today.
         <div style="text-align: center; margin: 30px 0;">
           <a href="${process.env.CLIENT_URL || 'https://api.rivenapp.com'}/dashboard"
              style="background: #28a745; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
-            Go to Dashboard
           </a>
         </div>
 
