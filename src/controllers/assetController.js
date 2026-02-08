@@ -95,6 +95,14 @@ const getAssets = async (req, res) => {
       // Filter to show only tradable assets by default for better UX
       assets = assets.filter(asset => asset.tradable === true && asset.status === 'active');
 
+      // When asset_class is us_equity, exclude ETFs (which have class 'us_etf' or 'etf')
+      if (assetClass === 'us_equity') {
+        assets = assets.filter(asset => {
+          const assetClassLower = (asset.class || asset.asset_class || '').toLowerCase();
+          return !assetClassLower.includes('etf');
+        });
+      }
+
       // Sort assets to prioritize major exchanges and exclude problematic asset types
       assets = assets.sort((a, b) => {
         // Prioritize major exchanges

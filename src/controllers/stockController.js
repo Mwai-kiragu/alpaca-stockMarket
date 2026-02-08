@@ -149,6 +149,45 @@ const getBars = async (req, res) => {
       tradeCount: bar.n || null
     }));
 
+    // Check if user owns this asset
+    let ownership = null;
+    try {
+      // Get user to find their Alpaca account ID
+      const { User } = require('../models');
+      const user = await User.findByPk(req.user.id);
+
+      if (user && user.alpaca_account_id) {
+        const positions = await alpacaService.getPositions(user.alpaca_account_id);
+        const position = positions.find(pos => pos.symbol.toUpperCase() === symbol.toUpperCase());
+
+        if (position) {
+          ownership = {
+            hasPosition: true,
+            quantity: parseFloat(position.qty),
+            marketValue: parseFloat(position.market_value),
+            costBasis: parseFloat(position.cost_basis),
+            unrealizedPL: parseFloat(position.unrealized_pl),
+            unrealizedPLPercent: parseFloat(position.unrealized_plpc) * 100,
+            averageEntryPrice: parseFloat(position.avg_entry_price),
+            side: position.side
+          };
+        } else {
+          ownership = {
+            hasPosition: false
+          };
+        }
+      } else {
+        ownership = {
+          hasPosition: false
+        };
+      }
+    } catch (ownershipError) {
+      logger.warn(`Could not check ownership for ${symbol}:`, ownershipError.message);
+      ownership = {
+        hasPosition: false
+      };
+    }
+
     res.json({
       success: true,
       symbol: symbol.toUpperCase(),
@@ -156,7 +195,8 @@ const getBars = async (req, res) => {
       logo: alpacaService.getCompanyLogo(symbol.toUpperCase(), assetName),
       timeframe,
       bars: formattedBars,
-      count: formattedBars.length
+      count: formattedBars.length,
+      ownership
     });
   } catch (error) {
     logger.error(`Get bars error for ${symbol}:`, error);

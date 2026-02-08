@@ -460,6 +460,7 @@ class AlpacaService {
       const response = await axios.get(endpoint, {
         headers: headers
       });
+
       return response.data;
     } catch (error) {
       logger.error('Get Alpaca account error:', error.response?.data || error.message);

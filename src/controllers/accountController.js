@@ -5,7 +5,17 @@ const logger = require('../utils/logger');
 
 const getAccountInfo = async (req, res) => {
   try {
-    const account = await alpacaService.getAccount();
+    // Get user to find their Alpaca account ID
+    const user = await User.findByPk(req.user.id);
+    if (!user || !user.alpaca_account_id) {
+      return res.status(404).json({
+        success: false,
+        message: 'No trading account found. Complete onboarding to start trading.'
+      });
+    }
+
+    // Get account information for this specific user
+    const account = await alpacaService.getAccount(user.alpaca_account_id);
     const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     const equity = parseFloat(account.equity || 0);
@@ -16,6 +26,24 @@ const getAccountInfo = async (req, res) => {
     const longValue = parseFloat(account.long_market_value || 0);
     const shortValue = parseFloat(account.short_market_value || 0);
 
+    // Check if account is closed
+    const isClosed = account.status === 'ACCOUNT_CLOSED' || account.status === 'CLOSED';
+    const isActive = account.status === 'ACTIVE';
+
+    // Alpaca doesn't provide closure reasons via API
+    let closureReason = null;
+    if (isClosed) {
+      closureReason = 'Your account has been closed. Please contact support for more information.';
+
+      logger.warn('Account closure detected:', {
+        userId: req.user.id,
+        accountId: account.id,
+        accountNumber: account.account_number,
+        status: account.status,
+        closedAt: account.created_at  // Account creation date, closure date not provided
+      });
+    }
+
     res.json({
       success: true,
       account: {
@@ -23,6 +51,8 @@ const getAccountInfo = async (req, res) => {
           id: account.id,
           accountNumber: account.account_number,
           status: account.status,
+          statusDescription: account.status_description || null,
+          closedReason: closureReason,
           currency: account.currency,
           lastEquityClose: parseFloat(account.last_equity_close || 0),
           equity,
@@ -44,9 +74,9 @@ const getAccountInfo = async (req, res) => {
           maintenanceMargin: parseFloat(account.maintenance_margin || 0),
           dayTradeCount: account.daytrade_count || 0,
           createdAt: account.created_at,
-          tradingBlocked: account.trading_blocked,
-          transfersBlocked: account.transfers_blocked,
-          accountBlocked: account.account_blocked,
+          tradingBlocked: account.trading_blocked || isClosed,
+          transfersBlocked: account.transfers_blocked || isClosed,
+          accountBlocked: account.account_blocked || isClosed,
           patternDayTrader: account.pattern_day_trader,
           dayTradingBuyingPower: parseFloat(account.daytrading_buying_power || 0),
           regTBuyingPower: parseFloat(account.regt_buying_power || 0),
@@ -59,8 +89,8 @@ const getAccountInfo = async (req, res) => {
           pendingTransferIn: parseFloat(account.pending_transfer_in || 0)
         },
         tradingInfo: {
-          canTrade: !account.trading_blocked && !account.account_blocked,
-          canTransfer: !account.transfers_blocked,
+          canTrade: isActive && !account.trading_blocked && !account.account_blocked,
+          canTransfer: isActive && !account.transfers_blocked,
           dayTradesRemaining: Math.max(0, 3 - (account.daytrade_count || 0)),
           patternDayTrader: account.pattern_day_trader,
           maxPositions: account.multiplier >= 4 ? 500 : 100,
