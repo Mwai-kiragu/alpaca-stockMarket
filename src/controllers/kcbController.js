@@ -118,15 +118,15 @@ const depositFromBank = async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 5000));
 
         try {
-          const statusResult = await kcbService.getTransactionStatus(transactionReference);
+          const statusResult = await kcbService.queryTransactionStatus(transactionReference);
 
-          if (statusResult.success) {
-            const kcbStatusCode = statusResult.data?.header?.statusCode || statusResult.data?.statusCode;
-
-            if (kcbStatusCode === '0' || kcbStatusCode === 0) {
+          if (statusResult.success && statusResult.transactionStatus) {
+            // Check if transaction succeeded
+            // Transaction status can be: 'COMPLETED', 'PENDING', 'FAILED', etc.
+            if (statusResult.transactionStatus === 'COMPLETED' || statusResult.transactionStatus === 'SUCCESS') {
               logger.info('Deposit succeeded despite timeout!', {
                 transactionReference,
-                statusCode: kcbStatusCode
+                transactionStatus: statusResult.transactionStatus
               });
 
               const currencyField = currency.toUpperCase() === 'KES' ? 'kes_balance' : 'usd_balance';
@@ -147,7 +147,7 @@ const depositFromBank = async (req, res) => {
                   paymentMethod: 'kcb_bank',
                   kcbAccountNumber,
                   accountHolderName: transferData.beneficiaryDetails,
-                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
+                  transactionStatus: statusResult.transactionStatus,
                   kcbResponse: statusResult.data,
                   recoveredFromTimeout: true
                 }
@@ -171,7 +171,6 @@ const depositFromBank = async (req, res) => {
                   amount: txnRecord.amount,
                   currency: txnRecord.currency,
                   reference: txnRecord.reference,
-                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
                   status: txnRecord.status,
                   createdAt: txnRecord.created_at
                 },
@@ -451,13 +450,12 @@ const withdrawToBank = async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 5000));
 
         try {
-          const statusResult = await kcbService.getTransactionStatus(transactionReference);
+          const statusResult = await kcbService.queryTransactionStatus(transactionReference);
 
-          if (statusResult.success) {
-            const kcbStatusCode = statusResult.data?.header?.statusCode || statusResult.data?.statusCode;
-
-            // If transaction actually succeeded despite timeout
-            if (kcbStatusCode === '0' || kcbStatusCode === 0) {
+          if (statusResult.success && statusResult.transactionStatus) {
+            // Check if transaction succeeded
+            // Transaction status can be: 'COMPLETED', 'PENDING', 'FAILED', etc.
+            if (statusResult.transactionStatus === 'COMPLETED' || statusResult.transactionStatus === 'SUCCESS') {
               logger.info('Bank transfer succeeded despite timeout!', {
                 transactionReference,
                 statusCode: kcbStatusCode
@@ -479,7 +477,7 @@ const withdrawToBank = async (req, res) => {
                   paymentMethod: 'kcb_bank',
                   kcbAccountNumber,
                   accountHolderName: transferData.beneficiaryDetails,
-                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
+                  transactionStatus: statusResult.transactionStatus,
                   kcbResponse: statusResult.data,
                   recoveredFromTimeout: true
                 }
@@ -503,7 +501,6 @@ const withdrawToBank = async (req, res) => {
                   amount: txnRecord.amount,
                   currency: txnRecord.currency,
                   reference: txnRecord.reference,
-                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
                   status: txnRecord.status,
                   createdAt: txnRecord.created_at
                 },
@@ -1097,13 +1094,12 @@ const withdrawFromWallet = async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 5000));
 
         try {
-          const statusResult = await kcbService.getTransactionStatus(transactionReference);
+          const statusResult = await kcbService.queryTransactionStatus(transactionReference);
 
-          if (statusResult.success) {
-            const kcbStatusCode = statusResult.data?.header?.statusCode || statusResult.data?.statusCode;
-
-            // If transaction actually succeeded despite timeout
-            if (kcbStatusCode === '0' || kcbStatusCode === 0) {
+          if (statusResult.success && statusResult.transactionStatus) {
+            // Check if transaction succeeded
+            // Transaction status can be: 'COMPLETED', 'PENDING', 'FAILED', etc.
+            if (statusResult.transactionStatus === 'COMPLETED' || statusResult.transactionStatus === 'SUCCESS') {
               logger.info('Transaction succeeded despite timeout!', {
                 transactionReference,
                 statusCode: kcbStatusCode
@@ -1132,7 +1128,7 @@ const withdrawFromWallet = async (req, res) => {
                   phoneNumber: withdrawalMethod === 'mpesa' ? destinationAccount : undefined,
                   kcbAccountNumber: withdrawalMethod === 'bank' ? destinationAccount : undefined,
                   accountHolderName: transferData.beneficiaryDetails,
-                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
+                  transactionStatus: statusResult.transactionStatus,
                   kcbResponse: statusResult.data,
                   recoveredFromTimeout: true
                 }
@@ -1158,7 +1154,6 @@ const withdrawFromWallet = async (req, res) => {
                   amount: txnRecord.amount,
                   currency: txnRecord.currency,
                   reference: txnRecord.reference,
-                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
                   status: txnRecord.status,
                   method: withdrawalMethod,
                   destination: destinationAccount,
