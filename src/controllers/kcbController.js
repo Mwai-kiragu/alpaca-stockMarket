@@ -108,10 +108,18 @@ const depositFromBank = async (req, res) => {
 
     if (!transferResult.success) {
       await transaction.rollback();
-      return res.status(400).json({
+
+      // Provide better error message for timeout
+      const isTimeout = transferResult.isTimeout || transferResult.statusCode === 504;
+      const statusCode = isTimeout ? 504 : 400;
+
+      return res.status(statusCode).json({
         success: false,
-        message: 'Bank transfer failed',
+        message: isTimeout
+          ? 'Deposit request timed out - bank service is currently slow. Please try again in a few minutes.'
+          : 'Bank transfer failed',
         error: transferResult.error,
+        isTimeout: isTimeout,
         transactionReference
       });
     }
@@ -320,10 +328,18 @@ const withdrawToBank = async (req, res) => {
       // Unfreeze funds on error
       await wallet.unfreezeFunds(amount, currency.toUpperCase());
       await transaction.rollback();
-      return res.status(400).json({
+
+      // Provide better error message for timeout
+      const isTimeout = transferResult.isTimeout || transferResult.statusCode === 504;
+      const statusCode = isTimeout ? 504 : 400;
+
+      return res.status(statusCode).json({
         success: false,
-        message: 'Bank transfer failed',
+        message: isTimeout
+          ? 'Bank transfer request timed out - bank service is currently slow. Please try again in a few minutes.'
+          : 'Bank transfer failed',
         error: transferResult.error,
+        isTimeout: isTimeout,
         transactionReference
       });
     }
@@ -851,10 +867,17 @@ const withdrawFromWallet = async (req, res) => {
 
       await transaction.rollback();
 
-      return res.status(400).json({
+      // Provide better error message for timeout
+      const isTimeout = transferResult.isTimeout || transferResult.statusCode === 504;
+      const statusCode = isTimeout ? 504 : 400;
+
+      return res.status(statusCode).json({
         success: false,
-        message: 'Withdrawal failed',
+        message: isTimeout
+          ? 'Withdrawal request timed out - bank service is currently slow. Please try again in a few minutes.'
+          : 'Withdrawal failed',
         error: transferResult.error,
+        isTimeout: isTimeout,
         transactionReference
       });
     }

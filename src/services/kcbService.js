@@ -35,7 +35,8 @@ class KCBService {
           headers: {
             'Authorization': `Basic ${credentials}`,
             'Content-Type': 'application/x-www-form-urlencoded'
-          }
+          },
+          timeout: 10000 // 10 seconds for token request
         }
       );
 
@@ -127,7 +128,8 @@ class KCBService {
             'Authorization': `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
             'Accept': 'application/json'
-          }
+          },
+          timeout: 25000 // 25 seconds timeout (less than Cloudflare's 30s)
         }
       );
 
@@ -155,15 +157,27 @@ class KCBService {
       };
 
     } catch (error) {
+      // Check if it's a timeout error
+      const isTimeout = error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT';
+      const is504 = error.response?.status === 504;
+
       logger.error('KCB transfer failed:', {
         error: error.message,
+        errorCode: error.code,
+        statusCode: error.response?.status,
+        isTimeout: isTimeout || is504,
         response: error.response?.data,
         transactionReference: transferData.transactionReference
       });
 
       return {
         success: false,
-        error: error.message,
+        error: isTimeout || is504
+          ? 'Request timeout - KCB API is currently slow or unresponsive. Please try again in a few minutes.'
+          : error.message,
+        errorCode: error.code,
+        statusCode: error.response?.status,
+        isTimeout: isTimeout || is504,
         errorData: error.response?.data,
         transactionReference: transferData.transactionReference
       };
@@ -179,7 +193,8 @@ class KCBService {
           headers: {
             'Authorization': `Bearer ${accessToken}`,
             'Accept': 'application/json'
-          }
+          },
+          timeout: 15000 // 15 seconds for status check
         }
       );
 
