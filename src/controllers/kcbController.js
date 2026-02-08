@@ -107,19 +107,132 @@ const depositFromBank = async (req, res) => {
     const transferResult = await kcbService.transferFunds(transferData);
 
     if (!transferResult.success) {
+      const isTimeout = transferResult.isTimeout || transferResult.statusCode === 504;
+
+      if (isTimeout) {
+        logger.info('Deposit timed out, checking transaction status...', {
+          transactionReference,
+          userId
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        try {
+          const statusResult = await kcbService.getTransactionStatus(transactionReference);
+
+          if (statusResult.success) {
+            const kcbStatusCode = statusResult.data?.header?.statusCode || statusResult.data?.statusCode;
+
+            if (kcbStatusCode === '0' || kcbStatusCode === 0) {
+              logger.info('Deposit succeeded despite timeout!', {
+                transactionReference,
+                statusCode: kcbStatusCode
+              });
+
+              const currencyField = currency.toUpperCase() === 'KES' ? 'kes_balance' : 'usd_balance';
+              await wallet.increment(currencyField, {
+                by: amount,
+                transaction
+              });
+
+              const txnRecord = await Transaction.create({
+                wallet_id: wallet.id,
+                type: 'deposit',
+                amount: amount,
+                currency: currency.toUpperCase(),
+                status: 'completed',
+                reference: transactionReference,
+                description: `Bank deposit from KCB account ${kcbAccountNumber}`,
+                metadata: {
+                  paymentMethod: 'kcb_bank',
+                  kcbAccountNumber,
+                  accountHolderName: transferData.beneficiaryDetails,
+                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
+                  kcbResponse: statusResult.data,
+                  recoveredFromTimeout: true
+                }
+              }, { transaction });
+
+              await transaction.commit();
+
+              logger.info('Bank deposit completed (recovered from timeout):', {
+                userId,
+                transactionId: txnRecord.id,
+                amount,
+                currency,
+                transactionReference
+              });
+
+              return res.status(200).json({
+                success: true,
+                message: 'Deposit successful',
+                transaction: {
+                  id: txnRecord.id,
+                  amount: txnRecord.amount,
+                  currency: txnRecord.currency,
+                  reference: txnRecord.reference,
+                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
+                  status: txnRecord.status,
+                  createdAt: txnRecord.created_at
+                },
+                wallet: {
+                  balance_kes: wallet.kes_balance,
+                  balance_usd: wallet.usd_balance
+                }
+              });
+            }
+          }
+        } catch (statusError) {
+          logger.warn('Could not verify deposit status after timeout:', {
+            transactionReference,
+            error: statusError.message
+          });
+        }
+      }
+
+      // For timeout: Create pending transaction to track status
+      if (isTimeout) {
+        // Create pending transaction record
+        const txnRecord = await Transaction.create({
+          wallet_id: wallet.id,
+          type: 'deposit',
+          amount: amount,
+          currency: currency.toUpperCase(),
+          status: 'pending',
+          reference: transactionReference,
+          description: `Bank deposit from KCB account ${kcbAccountNumber} (pending)`,
+          metadata: {
+            paymentMethod: 'kcb_bank',
+            kcbAccountNumber,
+            accountHolderName: transferData.beneficiaryDetails,
+            timedOut: true,
+            requiresStatusCheck: true
+          }
+        }, { transaction });
+
+        await transaction.commit();
+
+        logger.warn('Deposit timed out - created pending transaction:', {
+          userId,
+          transactionId: txnRecord.id,
+          transactionReference
+        });
+
+        return res.status(202).json({
+          success: false,
+          message: 'Your deposit is being processed by the bank. Please check your transaction history in a few minutes. Do not retry this request.',
+          status: 'processing',
+          transactionReference,
+          transactionId: txnRecord.id
+        });
+      }
+
+      // For non-timeout errors: Rollback
       await transaction.rollback();
 
-      // Provide better error message for timeout
-      const isTimeout = transferResult.isTimeout || transferResult.statusCode === 504;
-      const statusCode = isTimeout ? 504 : 400;
-
-      return res.status(statusCode).json({
+      return res.status(400).json({
         success: false,
-        message: isTimeout
-          ? 'Deposit request timed out - bank service is currently slow. Please try again in a few minutes.'
-          : 'Bank transfer failed',
-        error: transferResult.error,
-        isTimeout: isTimeout,
+        message: 'Bank transfer failed',
         transactionReference
       });
     }
@@ -325,21 +438,134 @@ const withdrawToBank = async (req, res) => {
     const transferResult = await kcbService.transferFunds(transferData);
 
     if (!transferResult.success) {
-      // Unfreeze funds on error
+      const isTimeout = transferResult.isTimeout || transferResult.statusCode === 504;
+
+      // If timeout, check transaction status before giving up
+      if (isTimeout) {
+        logger.info('Bank transfer timed out, checking transaction status...', {
+          transactionReference,
+          userId
+        });
+
+        // Wait 5 seconds to give KCB time to process
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        try {
+          const statusResult = await kcbService.getTransactionStatus(transactionReference);
+
+          if (statusResult.success) {
+            const kcbStatusCode = statusResult.data?.header?.statusCode || statusResult.data?.statusCode;
+
+            // If transaction actually succeeded despite timeout
+            if (kcbStatusCode === '0' || kcbStatusCode === 0) {
+              logger.info('Bank transfer succeeded despite timeout!', {
+                transactionReference,
+                statusCode: kcbStatusCode
+              });
+
+              // Deduct from wallet (this also unfreezes)
+              await wallet.deductFunds(amount, currency.toUpperCase());
+
+              // Create transaction record
+              const txnRecord = await Transaction.create({
+                wallet_id: wallet.id,
+                type: 'withdrawal',
+                amount: amount,
+                currency: currency.toUpperCase(),
+                status: 'completed',
+                reference: transactionReference,
+                description: `Bank withdrawal to KCB account ${kcbAccountNumber}`,
+                metadata: {
+                  paymentMethod: 'kcb_bank',
+                  kcbAccountNumber,
+                  accountHolderName: transferData.beneficiaryDetails,
+                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
+                  kcbResponse: statusResult.data,
+                  recoveredFromTimeout: true
+                }
+              }, { transaction });
+
+              await transaction.commit();
+
+              logger.info('Bank withdrawal completed (recovered from timeout):', {
+                userId,
+                transactionId: txnRecord.id,
+                amount,
+                currency,
+                transactionReference
+              });
+
+              return res.status(200).json({
+                success: true,
+                message: 'Withdrawal successful',
+                transaction: {
+                  id: txnRecord.id,
+                  amount: txnRecord.amount,
+                  currency: txnRecord.currency,
+                  reference: txnRecord.reference,
+                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
+                  status: txnRecord.status,
+                  createdAt: txnRecord.created_at
+                },
+                wallet: {
+                  balance_kes: wallet.kes_balance,
+                  balance_usd: wallet.usd_balance
+                }
+              });
+            }
+          }
+        } catch (statusError) {
+          logger.warn('Could not verify bank transfer status after timeout:', {
+            transactionReference,
+            error: statusError.message
+          });
+        }
+      }
+
+      // For timeout: Keep funds frozen and create pending transaction
+      if (isTimeout) {
+        // Create pending transaction record to prevent duplicate attempts
+        const txnRecord = await Transaction.create({
+          wallet_id: wallet.id,
+          type: 'withdrawal',
+          amount: amount,
+          currency: currency.toUpperCase(),
+          status: 'pending',
+          reference: transactionReference,
+          description: `Bank withdrawal to KCB account ${kcbAccountNumber} (pending)`,
+          metadata: {
+            paymentMethod: 'kcb_bank',
+            kcbAccountNumber,
+            accountHolderName: transferData.beneficiaryDetails,
+            timedOut: true,
+            requiresStatusCheck: true
+          }
+        }, { transaction });
+
+        await transaction.commit();
+
+        logger.warn('Bank withdrawal timed out - created pending transaction:', {
+          userId,
+          transactionId: txnRecord.id,
+          transactionReference
+        });
+
+        return res.status(202).json({
+          success: false,
+          message: 'Your withdrawal is being processed by the bank. Please check your transaction history in a few minutes. Do not retry this request.',
+          status: 'processing',
+          transactionReference,
+          transactionId: txnRecord.id
+        });
+      }
+
+      // For non-timeout errors: Unfreeze funds and rollback
       await wallet.unfreezeFunds(amount, currency.toUpperCase());
       await transaction.rollback();
 
-      // Provide better error message for timeout
-      const isTimeout = transferResult.isTimeout || transferResult.statusCode === 504;
-      const statusCode = isTimeout ? 504 : 400;
-
-      return res.status(statusCode).json({
+      return res.status(400).json({
         success: false,
-        message: isTimeout
-          ? 'Bank transfer request timed out - bank service is currently slow. Please try again in a few minutes.'
-          : 'Bank transfer failed',
-        error: transferResult.error,
-        isTimeout: isTimeout,
+        message: 'Bank transfer failed',
         transactionReference
       });
     }
@@ -858,8 +1084,144 @@ const withdrawFromWallet = async (req, res) => {
     const transferResult = await kcbService.transferFunds(transferData);
 
     if (!transferResult.success) {
-      // Unfreeze funds on error - restore balance
-      // Now wallet has updated values, so we can correctly unfreeze
+      const isTimeout = transferResult.isTimeout || transferResult.statusCode === 504;
+
+      // If timeout, check transaction status before giving up
+      if (isTimeout) {
+        logger.info('Transfer timed out, checking transaction status...', {
+          transactionReference,
+          userId
+        });
+
+        // Wait 5 seconds to give KCB time to process
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        try {
+          const statusResult = await kcbService.getTransactionStatus(transactionReference);
+
+          if (statusResult.success) {
+            const kcbStatusCode = statusResult.data?.header?.statusCode || statusResult.data?.statusCode;
+
+            // If transaction actually succeeded despite timeout
+            if (kcbStatusCode === '0' || kcbStatusCode === 0) {
+              logger.info('Transaction succeeded despite timeout!', {
+                transactionReference,
+                statusCode: kcbStatusCode
+              });
+
+              // Complete the withdrawal - deduct frozen, complete transaction
+              await wallet.update({
+                [frozenField]: Math.max(0, wallet[frozenField] - amount)
+              }, { transaction });
+
+              // Create transaction record
+              const txnRecord = await Transaction.create({
+                wallet_id: wallet.id,
+                type: 'withdrawal',
+                amount: amount,
+                currency: currency.toUpperCase(),
+                status: 'completed',
+                reference: transactionReference,
+                description: withdrawalMethod === 'mpesa'
+                  ? `Wallet withdrawal to M-Pesa ${destinationAccount}`
+                  : `Wallet withdrawal to KCB account ${destinationAccount}`,
+                metadata: {
+                  paymentMethod: withdrawalMethod === 'mpesa' ? 'kcb_mpesa' : 'kcb_bank',
+                  withdrawalMethod,
+                  destinationAccount,
+                  phoneNumber: withdrawalMethod === 'mpesa' ? destinationAccount : undefined,
+                  kcbAccountNumber: withdrawalMethod === 'bank' ? destinationAccount : undefined,
+                  accountHolderName: transferData.beneficiaryDetails,
+                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
+                  kcbResponse: statusResult.data,
+                  recoveredFromTimeout: true
+                }
+              }, { transaction });
+
+              await transaction.commit();
+
+              logger.info('Withdrawal completed (recovered from timeout):', {
+                userId,
+                transactionId: txnRecord.id,
+                amount,
+                currency,
+                transactionReference
+              });
+
+              return res.status(200).json({
+                success: true,
+                message: withdrawalMethod === 'mpesa'
+                  ? 'Withdrawal to M-Pesa successful'
+                  : 'Withdrawal to bank successful',
+                withdrawal: {
+                  id: txnRecord.id,
+                  amount: txnRecord.amount,
+                  currency: txnRecord.currency,
+                  reference: txnRecord.reference,
+                  retrievalRefNumber: statusResult.data?.header?.retrievalRefNumber || statusResult.data?.retrievalRefNumber,
+                  status: txnRecord.status,
+                  method: withdrawalMethod,
+                  destination: destinationAccount,
+                  createdAt: txnRecord.created_at
+                },
+                wallet: {
+                  balance_kes: wallet.kes_balance,
+                  balance_usd: wallet.usd_balance
+                }
+              });
+            }
+          }
+        } catch (statusError) {
+          logger.warn('Could not verify transaction status after timeout:', {
+            transactionReference,
+            error: statusError.message
+          });
+        }
+      }
+
+      // For timeout: Keep funds frozen and create pending transaction
+      if (isTimeout) {
+        // Create pending transaction record to prevent duplicate attempts
+        const txnRecord = await Transaction.create({
+          wallet_id: wallet.id,
+          type: 'withdrawal',
+          amount: amount,
+          currency: currency.toUpperCase(),
+          status: 'pending',
+          reference: transactionReference,
+          description: withdrawalMethod === 'mpesa'
+            ? `Wallet withdrawal to M-Pesa ${destinationAccount} (pending)`
+            : `Wallet withdrawal to KCB account ${destinationAccount} (pending)`,
+          metadata: {
+            paymentMethod: withdrawalMethod === 'mpesa' ? 'kcb_mpesa' : 'kcb_bank',
+            withdrawalMethod,
+            destinationAccount,
+            phoneNumber: withdrawalMethod === 'mpesa' ? destinationAccount : undefined,
+            kcbAccountNumber: withdrawalMethod === 'bank' ? destinationAccount : undefined,
+            accountHolderName: transferData.beneficiaryDetails,
+            timedOut: true,
+            requiresStatusCheck: true
+          }
+        }, { transaction });
+
+        await transaction.commit();
+
+        logger.warn('Withdrawal timed out - created pending transaction:', {
+          userId,
+          transactionId: txnRecord.id,
+          transactionReference
+        });
+
+        return res.status(202).json({
+          success: false,
+          message: 'Your withdrawal is being processed by the bank. Please check your transaction history in a few minutes. Do not retry this request.',
+          status: 'processing',
+          transactionReference,
+          transactionId: txnRecord.id
+        });
+      }
+
+      // For non-timeout errors: Unfreeze funds and rollback
       await wallet.update({
         [currencyField]: wallet[currencyField] + amount,
         [frozenField]: Math.max(0, wallet[frozenField] - amount)
@@ -867,17 +1229,9 @@ const withdrawFromWallet = async (req, res) => {
 
       await transaction.rollback();
 
-      // Provide better error message for timeout
-      const isTimeout = transferResult.isTimeout || transferResult.statusCode === 504;
-      const statusCode = isTimeout ? 504 : 400;
-
-      return res.status(statusCode).json({
+      return res.status(400).json({
         success: false,
-        message: isTimeout
-          ? 'Withdrawal request timed out - bank service is currently slow. Please try again in a few minutes.'
-          : 'Withdrawal failed',
-        error: transferResult.error,
-        isTimeout: isTimeout,
+        message: 'Withdrawal failed',
         transactionReference
       });
     }
