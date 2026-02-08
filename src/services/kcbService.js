@@ -110,7 +110,8 @@ class KCBService {
         paymentDetails: transferData.paymentDetails || 'Funds transfer',
         transactionReference: transferData.transactionReference,
         transactionType: transferData.transactionType || 'IF',
-        beneficiaryBankCode: transferData.beneficiaryBankCode || '01'
+        beneficiaryBankCode: transferData.beneficiaryBankCode || '01',
+        callbackUrl: transferData.callbackUrl || process.env.KCB_TRANSFER_CALLBACK_URL || process.env.KCB_CALLBACK_URL || 'https://api.rivenapp.com/api/v1/callback/b2c'
       };
 
       logger.info('Initiating KCB funds transfer:', {
@@ -351,7 +352,8 @@ class KCBService {
         transactionReference: transactionReference,
         currency: 'KES',
         beneficiaryDetails: beneficiaryName || 'Customer',
-        beneficiaryBankCode: 'MPESA'
+        beneficiaryBankCode: 'MPESA',
+        callbackUrl: withdrawalData.callbackUrl || process.env.KCB_TRANSFER_CALLBACK_URL || process.env.KCB_CALLBACK_URL || 'https://api.rivenapp.com/api/v1/callback/b2c'
       };
 
       const withdrawUrl = process.env.KCB_WITHDRAW_URL || `${this.baseUrl}/fundstransfer/1.0.0/api/v1/transfer`;
