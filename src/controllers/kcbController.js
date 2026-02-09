@@ -911,11 +911,19 @@ const withdrawFromWallet = async (req, res) => {
     const shortReference = transactionReference.substring(0, 15); // Shorten for description
 
     if (withdrawalMethod === 'mpesa') {
+      // Format phone number for M-Pesa (must start with 0, not 254)
+      let mpesaNumber = destinationAccount.replace(/\D/g, '');
+      if (mpesaNumber.startsWith('254')) {
+        mpesaNumber = '0' + mpesaNumber.substring(3); // 254xxx -> 0xxx
+      } else if (!mpesaNumber.startsWith('0') && mpesaNumber.length === 9) {
+        mpesaNumber = '0' + mpesaNumber; // 7xxx -> 07xxx
+      }
+
       // M-Pesa withdrawal (Mobile Money)
       transferData = {
         transactionType: 'MO', // Mobile Money
         debitAccountNumber: process.env.KCB_DEBIT_ACCOUNT, // Platform's KCB account
-        creditAccountNumber: destinationAccount, // User's M-Pesa phone number
+        creditAccountNumber: mpesaNumber, // User's M-Pesa phone number (format: 07xxxxxxxx)
         amount: amount, // Service expects 'amount', not 'debitAmount'
         paymentDetails: `Withdrawal ${shortReference}`, // Max 35 chars
         transactionReference: transactionReference,
@@ -923,6 +931,11 @@ const withdrawFromWallet = async (req, res) => {
         beneficiaryDetails: accountHolderName || `${user.first_name} ${user.last_name}`,
         beneficiaryBankCode: 'MPESA'
       };
+
+      logger.info('M-Pesa withdrawal - formatted phone number:', {
+        original: destinationAccount,
+        formatted: mpesaNumber
+      });
     } else {
       // Bank transfer (Internal Funds Transfer)
       transferData = {

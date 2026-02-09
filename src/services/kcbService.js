@@ -114,15 +114,20 @@ class KCBService {
         callbackUrl: transferData.callbackUrl || process.env.KCB_TRANSFER_CALLBACK_URL || process.env.KCB_CALLBACK_URL || 'https://api.rivenapp.com/api/v1/callback/b2c'
       };
 
+      const transferUrl = process.env.KCB_TRANSFER_URL || `${this.baseUrl}/fundstransfer/1.0.0/api/v1/transfer`;
+
       logger.info('Initiating KCB funds transfer:', {
+        url: transferUrl,
         transactionReference: payload.transactionReference,
         amount: payload.debitAmount,
         currency: payload.currency,
-        creditAccount: payload.creditAccountNumber
+        creditAccount: payload.creditAccountNumber,
+        transactionType: payload.transactionType,
+        beneficiaryBankCode: payload.beneficiaryBankCode
       });
 
       const response = await axios.post(
-        `${this.baseUrl}/api/v1/transfer`,
+        transferUrl,
         payload,
         {
           headers: {
