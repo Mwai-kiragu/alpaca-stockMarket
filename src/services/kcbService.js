@@ -101,17 +101,16 @@ class KCBService {
       }
 
       const payload = {
-        beneficiaryDetails: transferData.beneficiaryDetails,
         companyCode: this.companyCode,
+        transactionType: transferData.transactionType || 'IF',
+        debitAccountNumber: transferData.debitAccountNumber || this.kcbBankAccount,
         creditAccountNumber: transferData.creditAccountNumber,
-        currency: transferData.currency.toUpperCase(),
-        debitAccountNumber: transferData.debitAccountNumber || this.debitAccount,
         debitAmount: transferData.amount,
         paymentDetails: transferData.paymentDetails || 'Funds transfer',
         transactionReference: transferData.transactionReference,
-        transactionType: transferData.transactionType || 'IF',
-        beneficiaryBankCode: transferData.beneficiaryBankCode || '01',
-        callbackUrl: transferData.callbackUrl || process.env.KCB_TRANSFER_CALLBACK_URL || process.env.KCB_CALLBACK_URL || 'https://api.rivenapp.com/api/v1/callback/b2c'
+        currency: transferData.currency.toUpperCase(),
+        beneficiaryDetails: transferData.beneficiaryDetails,
+        beneficiaryBankCode: transferData.beneficiaryBankCode || '01'
       };
 
       const transferUrl = process.env.KCB_TRANSFER_URL || `${this.baseUrl}/fundstransfer/1.0.0/api/v1/transfer`;

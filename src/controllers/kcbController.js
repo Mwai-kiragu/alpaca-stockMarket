@@ -92,7 +92,7 @@ const depositFromBank = async (req, res) => {
     // NOTE: paymentDetails must be MAX 35 characters per KCB requirements
     const shortReference = transactionReference.substring(0, 15);
     const transferData = {
-      creditAccountNumber: process.env.KCB_DEBIT_ACCOUNT, // Platform's KCB account
+      creditAccountNumber: process.env.KCB_CREDIT_ACCOUNT, // Platform's KCB account
       debitAccountNumber: kcbAccountNumber, // User's KCB account
       amount: amount,
       currency: currency.toUpperCase(),
@@ -353,7 +353,7 @@ const withdrawToBank = async (req, res) => {
     const shortReference = transactionReference.substring(0, 15);
     const transferData = {
       creditAccountNumber: kcbAccountNumber, // User's KCB account
-      debitAccountNumber: process.env.KCB_DEBIT_ACCOUNT, // Platform's KCB account
+      debitAccountNumber: process.env.KCB_CREDIT_ACCOUNT, // Platform's KCB account
       amount: amount,
       currency: currency.toUpperCase(),
       beneficiaryDetails: accountHolderName || `${user.first_name} ${user.last_name}`,
@@ -922,7 +922,7 @@ const withdrawFromWallet = async (req, res) => {
       // M-Pesa withdrawal (Mobile Money)
       transferData = {
         transactionType: 'MO', // Mobile Money
-        debitAccountNumber: process.env.KCB_DEBIT_ACCOUNT, // Platform's KCB account
+        debitAccountNumber: process.env.KCB_CREDIT_ACCOUNT, // Platform's KCB account
         creditAccountNumber: mpesaNumber, // User's M-Pesa phone number (format: 07xxxxxxxx)
         amount: amount, // Service expects 'amount', not 'debitAmount'
         paymentDetails: `Withdrawal ${shortReference}`, // Max 35 chars
@@ -940,7 +940,7 @@ const withdrawFromWallet = async (req, res) => {
       // Bank transfer (Internal Funds Transfer)
       transferData = {
         transactionType: 'IF', // Internal Funds Transfer
-        debitAccountNumber: process.env.KCB_DEBIT_ACCOUNT, // Platform's KCB account
+        debitAccountNumber: process.env.KCB_CREDIT_ACCOUNT, // Platform's KCB account
         creditAccountNumber: destinationAccount, // User's KCB bank account
         amount: amount, // Service expects 'amount', not 'debitAmount'
         paymentDetails: `Bank withdrawal ${shortReference}`, // Max 35 chars
