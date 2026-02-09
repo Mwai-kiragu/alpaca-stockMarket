@@ -3,32 +3,62 @@ const logger = require('../utils/logger');
 
 class AlpacaService {
   constructor() {
+    // Trading mode: 'paper' or 'live'
+    this.tradingMode = process.env.ALPACA_TRADING_MODE || 'paper';
+    this.isLiveMode = this.tradingMode === 'live';
+
+    // Broker API credentials (for account management)
     this.brokerApiKey = process.env.ALPACA_BROKER_API_KEY;
     this.brokerSecretKey = process.env.ALPACA_BROKER_SECRET_KEY;
     this.brokerUrl = process.env.ALPACA_BROKER_API_URL || 'https://broker-api.sandbox.alpaca.markets';
 
+    // Paper Trading API credentials
     this.paperApiKey = process.env.ALPACA_PAPER_API_KEY;
     this.paperSecretKey = process.env.ALPACA_PAPER_SECRET_KEY;
     this.paperUrl = process.env.ALPACA_PAPER_API_URL || 'https://paper-api.alpaca.markets';
 
+    // Live Trading API credentials
+    this.liveApiKey = process.env.ALPACA_LIVE_API_KEY;
+    this.liveSecretKey = process.env.ALPACA_LIVE_SECRET_KEY;
+    this.liveUrl = process.env.ALPACA_LIVE_API_URL || 'https://api.alpaca.markets';
+
     this.apiKey = this.brokerApiKey;
     this.secretKey = this.brokerSecretKey;
 
-    this.tradingUrl = this.paperUrl || 'https://paper-api.alpaca.markets';
+    // Set trading URL based on mode
+    this.tradingUrl = this.isLiveMode ? this.liveUrl : this.paperUrl;
     this.baseUrl = this.brokerUrl;
     this.dataBaseUrl = 'https://data.alpaca.markets';
 
+    // Broker API headers (for account management)
     this.tradingHeaders = {
       'APCA-API-KEY-ID': this.brokerApiKey,
       'APCA-API-SECRET-KEY': this.brokerSecretKey,
       'Content-Type': 'application/json'
     };
 
+    // Paper Trading headers
     this.paperHeaders = {
       'APCA-API-KEY-ID': this.paperApiKey,
       'APCA-API-SECRET-KEY': this.paperSecretKey,
       'Content-Type': 'application/json'
     };
+
+    // Live Trading headers
+    this.liveHeaders = {
+      'APCA-API-KEY-ID': this.liveApiKey,
+      'APCA-API-SECRET-KEY': this.liveSecretKey,
+      'Content-Type': 'application/json'
+    };
+
+    // Active trading headers (based on mode)
+    this.activeTradingHeaders = this.isLiveMode ? this.liveHeaders : this.paperHeaders;
+
+    logger.info(`Alpaca Service initialized in ${this.tradingMode.toUpperCase()} mode`, {
+      tradingUrl: this.tradingUrl,
+      brokerUrl: this.brokerUrl,
+      isLiveMode: this.isLiveMode
+    });
   }
 
   mapToUSState(state) {
@@ -450,12 +480,12 @@ class AlpacaService {
 
   async getAccount(accountId = null) {
     try {
-      // If accountId is provided, use Broker API, otherwise use Paper Trading API for trading account
+      // If accountId is provided, use Broker API, otherwise use Trading API for trading account
       const endpoint = accountId
         ? `${this.baseUrl}/v1/accounts/${accountId}`  // Broker API for specific account
-        : `${this.paperUrl}/v2/account`;  // Paper Trading API for trading account
+        : `${this.tradingUrl}/v2/account`;  // Trading API (paper or live based on mode)
 
-      const headers = accountId ? this.tradingHeaders : this.paperHeaders;
+      const headers = accountId ? this.tradingHeaders : this.activeTradingHeaders;
 
       const response = await axios.get(endpoint, {
         headers: headers
@@ -539,9 +569,9 @@ class AlpacaService {
         return response.data;
       }
 
-      // Fallback to Paper Trading API for shared positions (admin/testing)
-      const response = await axios.get(`${this.paperUrl}/v2/positions`, {
-        headers: this.paperHeaders
+      // Fallback to Trading API for shared positions (admin/testing)
+      const response = await axios.get(`${this.tradingUrl}/v2/positions`, {
+        headers: this.activeTradingHeaders
       });
       return response.data;
     } catch (error) {
@@ -580,16 +610,17 @@ class AlpacaService {
         alpacaOrder.extended_hours = true;
       }
 
-      // Use Paper Trading API for orders
-      const response = await axios.post(`${this.paperUrl}/v2/orders`, alpacaOrder, {
-        headers: this.paperHeaders
+      // Use Trading API (paper or live based on ALPACA_TRADING_MODE)
+      const response = await axios.post(`${this.tradingUrl}/v2/orders`, alpacaOrder, {
+        headers: this.activeTradingHeaders
       });
 
       logger.info('Alpaca order created:', {
         symbol: orderData.symbol,
         side: orderData.side,
         quantity: orderData.quantity,
-        orderId: response.data.id
+        orderId: response.data.id,
+        mode: this.tradingMode
       });
 
       return response.data;
@@ -601,9 +632,9 @@ class AlpacaService {
 
   async getOrder(orderId) {
     try {
-      // Use Paper Trading API for orders
-      const response = await axios.get(`${this.paperUrl}/v2/orders/${orderId}`, {
-        headers: this.paperHeaders
+      // Use Trading API (paper or live based on ALPACA_TRADING_MODE)
+      const response = await axios.get(`${this.tradingUrl}/v2/orders/${orderId}`, {
+        headers: this.activeTradingHeaders
       });
       return response.data;
     } catch (error) {
@@ -614,12 +645,12 @@ class AlpacaService {
 
   async cancelOrder(orderId) {
     try {
-      // Use Paper Trading API for orders
-      await axios.delete(`${this.paperUrl}/v2/orders/${orderId}`, {
-        headers: this.paperHeaders
+      // Use Trading API (paper or live based on ALPACA_TRADING_MODE)
+      await axios.delete(`${this.tradingUrl}/v2/orders/${orderId}`, {
+        headers: this.activeTradingHeaders
       });
 
-      logger.info('Order cancelled:', { orderId });
+      logger.info('Order cancelled:', { orderId, mode: this.tradingMode });
       return true;
     } catch (error) {
       logger.error('Cancel order error:', error.response?.data || error.message);
@@ -629,9 +660,9 @@ class AlpacaService {
 
   async getOrders(status = 'all', limit = 50) {
     try {
-      // Use Paper Trading API for orders
-      const response = await axios.get(`${this.paperUrl}/v2/orders`, {
-        headers: this.paperHeaders,
+      // Use Trading API (paper or live based on ALPACA_TRADING_MODE)
+      const response = await axios.get(`${this.tradingUrl}/v2/orders`, {
+        headers: this.activeTradingHeaders,
         params: { status, limit }
       });
       return response.data;
