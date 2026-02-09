@@ -101,9 +101,9 @@ class KCBService {
       }
 
       const payload = {
-        companyCode: this.companyCode,
+        companyCode: process.env.KCB_COMPANY_CODE || this.companyCode,
         transactionType: transferData.transactionType || 'IF',
-        debitAccountNumber: transferData.debitAccountNumber || this.kcbBankAccount,
+        debitAccountNumber: transferData.debitAccountNumber || process.env.KCB_CREDIT_ACCOUNT || this.kcbBankAccount,
         creditAccountNumber: transferData.creditAccountNumber,
         debitAmount: transferData.amount,
         paymentDetails: transferData.paymentDetails || 'Funds transfer',
@@ -118,6 +118,8 @@ class KCBService {
       logger.info('Initiating KCB funds transfer:', {
         url: transferUrl,
         transactionReference: payload.transactionReference,
+        companyCode: payload.companyCode,
+        debitAccount: payload.debitAccountNumber,
         amount: payload.debitAmount,
         currency: payload.currency,
         creditAccount: payload.creditAccountNumber,
