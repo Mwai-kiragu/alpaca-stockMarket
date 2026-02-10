@@ -1,4 +1,4 @@
-const { User } = require('../models');
+const { User, Wallet } = require('../models');
 const alpacaService = require('../services/alpacaService');
 const exchangeService = require('../services/exchangeService');
 const logger = require('../utils/logger');
@@ -7,6 +7,21 @@ const getAccountInfo = async (req, res) => {
   try {
     // Get user to find their Alpaca account ID
     const user = await User.findByPk(req.user.id);
+
+    // Get local wallet balance
+    let wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
+    if (!wallet) {
+      wallet = { kes_balance: 0, usd_balance: 0, frozen_kes: 0, frozen_usd: 0 };
+    }
+    const localKesBalance = parseFloat(wallet.kes_balance) || 0;
+    const localUsdBalance = parseFloat(wallet.usd_balance) || 0;
+
+    // Get exchange rate early
+    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
+    // Convert local wallet to USD
+    const localCashUsd = localUsdBalance + (localKesBalance / exchangeRate);
+
     if (!user || !user.alpaca_account_id) {
       return res.status(404).json({
         success: false,
@@ -16,15 +31,20 @@ const getAccountInfo = async (req, res) => {
 
     // Get account information for this specific user
     const account = await alpacaService.getAccount(user.alpaca_account_id);
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
-    const equity = parseFloat(account.equity || 0);
+    // Alpaca values
+    const alpacaEquity = parseFloat(account.equity || 0);
     const dayChange = parseFloat(account.unrealized_pl || 0);
-    const dayChangePercent = equity > 0 ? (dayChange / (equity - dayChange)) * 100 : 0;
-    const buyingPower = parseFloat(account.buying_power || 0);
-    const cash = parseFloat(account.cash || 0);
+    const alpacaBuyingPower = parseFloat(account.buying_power || 0);
+    const alpacaCash = parseFloat(account.cash || 0);
     const longValue = parseFloat(account.long_market_value || 0);
     const shortValue = parseFloat(account.short_market_value || 0);
+
+    // Combined totals = Alpaca + Local Wallet
+    const totalEquity = alpacaEquity + localCashUsd;
+    const totalCash = alpacaCash + localCashUsd;
+    const totalBuyingPower = alpacaBuyingPower + localCashUsd;
+    const dayChangePercent = totalEquity > 0 ? (dayChange / (totalEquity - dayChange)) * 100 : 0;
 
     // Check if account is closed
     const isClosed = account.status === 'ACCOUNT_CLOSED' || account.status === 'CLOSED';
@@ -55,14 +75,14 @@ const getAccountInfo = async (req, res) => {
           closedReason: closureReason,
           currency: account.currency,
           lastEquityClose: parseFloat(account.last_equity_close || 0),
-          equity,
-          equityKES: equity * exchangeRate,
-          cash,
-          cashKES: cash * exchangeRate,
-          portfolioValue: equity,
-          portfolioValueKES: equity * exchangeRate,
-          buyingPower,
-          buyingPowerKES: buyingPower * exchangeRate,
+          equity: totalEquity,
+          equityKES: totalEquity * exchangeRate,
+          cash: totalCash,
+          cashKES: totalCash * exchangeRate,
+          portfolioValue: totalEquity,
+          portfolioValueKES: totalEquity * exchangeRate,
+          buyingPower: totalBuyingPower,
+          buyingPowerKES: totalBuyingPower * exchangeRate,
           dayChange,
           dayChangeKES: dayChange * exchangeRate,
           dayChangePercent: parseFloat(dayChangePercent.toFixed(2)),
@@ -88,6 +108,11 @@ const getAccountInfo = async (req, res) => {
           pendingTransferOut: parseFloat(account.pending_transfer_out || 0),
           pendingTransferIn: parseFloat(account.pending_transfer_in || 0)
         },
+        localWallet: {
+          kesBalance: localKesBalance,
+          usdBalance: localUsdBalance,
+          totalUsd: localCashUsd
+        },
         tradingInfo: {
           canTrade: isActive && !account.trading_blocked && !account.account_blocked,
           canTransfer: isActive && !account.transfers_blocked,
@@ -103,7 +128,7 @@ const getAccountInfo = async (req, res) => {
           regTBuyingPower: parseFloat(account.regt_buying_power || 0),
           maxBuyingPower: parseFloat(account.max_buying_power || 0),
           maxDayTradingBuyingPower: parseFloat(account.max_daytrading_buying_power || 0),
-          withdrawalLimit: parseFloat(account.cash || 0) - parseFloat(account.pending_transfer_out || 0)
+          withdrawalLimit: totalCash - parseFloat(account.pending_transfer_out || 0)
         },
         exchangeRate,
         lastUpdated: new Date().toISOString()
