@@ -185,8 +185,8 @@ const orderValidation = [
     .isIn(['market', 'limit', 'stop', 'stop_limit'])
     .withMessage('Invalid order type'),
   body('qty')
-    .isFloat({ min: 0.01 })
-    .withMessage('Quantity must be greater than 0'),
+    .isFloat({ min: 0.0001 })
+    .withMessage('Quantity must be at least 0.0001'),
   body('time_in_force')
     .isIn(['day', 'gtc', 'ioc', 'fok'])
     .withMessage('Invalid time_in_force. Must be day, gtc, ioc, or fok'),
