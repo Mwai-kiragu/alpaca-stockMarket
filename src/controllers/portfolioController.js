@@ -819,51 +819,25 @@ const getPortfolioAllocation = async (req, res) => {
     const user = await User.findByPk(req.user.id);
     const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
-    if (!user || !user.alpaca_account_id) {
-      return res.json({
-        success: true,
-        allocation: {
-          byAssetClass: [],
-          bySector: [],
-          byStock: [],
-          byExchange: []
-        },
-        summary: {
-          portfolioValue: 0,
-          portfolioValueKES: 0,
-          cash: 0,
-          cashKES: 0,
-          marketValue: 0,
-          marketValueKES: 0,
-          totalPositions: 0,
-          exchangeRate
-        },
-        lastUpdated: new Date().toISOString(),
-        message: 'No trading account found. Complete onboarding to start trading.'
-      });
+    // Get local wallet balance
+    let wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
+    if (!wallet) {
+      wallet = { kes_balance: 0, usd_balance: 0, frozen_kes: 0, frozen_usd: 0 };
     }
+    const localKesBalance = parseFloat(wallet.kes_balance) || 0;
+    const localUsdBalance = parseFloat(wallet.usd_balance) || 0;
+    const localCashUsd = localUsdBalance + (localKesBalance / exchangeRate);
 
-    // Get account info to get cash balance
-    const account = await alpacaService.getAccount(user.alpaca_account_id);
-    const cash = parseFloat(account.cash || 0);
-
-    // Get all user's positions for this specific Alpaca account
-    const positions = await alpacaService.getPositions(user.alpaca_account_id);
-
-    // Calculate market value of positions
-    const marketValue = positions.reduce((sum, pos) => sum + parseFloat(pos.market_value), 0);
-
-    // Portfolio value = cash + market value of investments
-    const portfolioValue = cash + marketValue;
-
-    if (!positions || positions.length === 0) {
+    if (!user || !user.alpaca_account_id) {
+      // Return local wallet as cash allocation
+      const portfolioValue = localCashUsd;
       return res.json({
         success: true,
         allocation: {
-          byAssetClass: cash > 0 ? [{
+          byAssetClass: localCashUsd > 0 ? [{
             name: 'Cash',
-            value: parseFloat(cash.toFixed(2)),
-            valueKES: parseFloat((cash * exchangeRate).toFixed(2)),
+            value: parseFloat(localCashUsd.toFixed(2)),
+            valueKES: parseFloat((localCashUsd * exchangeRate).toFixed(2)),
             percentage: 100,
             count: 0,
             stocks: []
@@ -875,12 +849,69 @@ const getPortfolioAllocation = async (req, res) => {
         summary: {
           portfolioValue: parseFloat(portfolioValue.toFixed(2)),
           portfolioValueKES: parseFloat((portfolioValue * exchangeRate).toFixed(2)),
-          cash: parseFloat(cash.toFixed(2)),
-          cashKES: parseFloat((cash * exchangeRate).toFixed(2)),
+          cash: parseFloat(localCashUsd.toFixed(2)),
+          cashKES: parseFloat((localCashUsd * exchangeRate).toFixed(2)),
           marketValue: 0,
           marketValueKES: 0,
           totalPositions: 0,
           exchangeRate
+        },
+        localWallet: {
+          kesBalance: localKesBalance,
+          usdBalance: localUsdBalance,
+          totalUsd: localCashUsd
+        },
+        lastUpdated: new Date().toISOString(),
+        message: user ? 'No trading account found. Complete onboarding to start trading.' : null
+      });
+    }
+
+    // Get account info to get cash balance
+    const account = await alpacaService.getAccount(user.alpaca_account_id);
+    const alpacaCash = parseFloat(account.cash || 0);
+
+    // Get all user's positions for this specific Alpaca account
+    const positions = await alpacaService.getPositions(user.alpaca_account_id);
+
+    // Calculate market value of positions
+    const marketValue = positions.reduce((sum, pos) => sum + parseFloat(pos.market_value), 0);
+
+    // Combined cash = Alpaca cash + Local wallet
+    const totalCash = alpacaCash + localCashUsd;
+
+    // Portfolio value = total cash + market value of investments
+    const portfolioValue = totalCash + marketValue;
+
+    if (!positions || positions.length === 0) {
+      return res.json({
+        success: true,
+        allocation: {
+          byAssetClass: totalCash > 0 ? [{
+            name: 'Cash',
+            value: parseFloat(totalCash.toFixed(2)),
+            valueKES: parseFloat((totalCash * exchangeRate).toFixed(2)),
+            percentage: 100,
+            count: 0,
+            stocks: []
+          }] : [],
+          bySector: [],
+          byStock: [],
+          byExchange: []
+        },
+        summary: {
+          portfolioValue: parseFloat(portfolioValue.toFixed(2)),
+          portfolioValueKES: parseFloat((portfolioValue * exchangeRate).toFixed(2)),
+          cash: parseFloat(totalCash.toFixed(2)),
+          cashKES: parseFloat((totalCash * exchangeRate).toFixed(2)),
+          marketValue: 0,
+          marketValueKES: 0,
+          totalPositions: 0,
+          exchangeRate
+        },
+        localWallet: {
+          kesBalance: localKesBalance,
+          usdBalance: localUsdBalance,
+          totalUsd: localCashUsd
         },
         lastUpdated: new Date().toISOString(),
         message: 'No positions found. Buy stocks to see your portfolio allocation.'
@@ -963,11 +994,11 @@ const getPortfolioAllocation = async (req, res) => {
     });
 
     // Add Cash as an asset class if there's cash in the account
-    if (cash > 0) {
+    if (totalCash > 0) {
       assetClassGroups['Cash'] = {
         name: 'Cash',
-        value: cash,
-        valueKES: cash * exchangeRate,
+        value: totalCash,
+        valueKES: totalCash * exchangeRate,
         percentage: 0,
         count: 0,
         stocks: []
@@ -1062,12 +1093,17 @@ const getPortfolioAllocation = async (req, res) => {
       summary: {
         portfolioValue: parseFloat(portfolioValue.toFixed(2)),
         portfolioValueKES: parseFloat((portfolioValue * exchangeRate).toFixed(2)),
-        cash: parseFloat(cash.toFixed(2)),
-        cashKES: parseFloat((cash * exchangeRate).toFixed(2)),
+        cash: parseFloat(totalCash.toFixed(2)),
+        cashKES: parseFloat((totalCash * exchangeRate).toFixed(2)),
         marketValue: parseFloat(marketValue.toFixed(2)),
         marketValueKES: parseFloat((marketValue * exchangeRate).toFixed(2)),
         totalPositions: positions.length,
         exchangeRate
+      },
+      localWallet: {
+        kesBalance: localKesBalance,
+        usdBalance: localUsdBalance,
+        totalUsd: localCashUsd
       },
       lastUpdated: new Date().toISOString()
     });
