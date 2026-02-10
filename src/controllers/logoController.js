@@ -1,113 +1,232 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
 
-const symbolToDomain = {
-  'AAPL': 'apple.com',
-  'GOOGL': 'google.com',
-  'GOOG': 'google.com',
-  'MSFT': 'microsoft.com',
-  'AMZN': 'amazon.com',
-  'TSLA': 'tesla.com',
-  'META': 'meta.com',
-  'NVDA': 'nvidia.com',
-  'NFLX': 'netflix.com',
-  'V': 'visa.com',
-  'JPM': 'jpmorgan.com',
-  'WMT': 'walmart.com',
-  'DIS': 'disney.com',
-  'PYPL': 'paypal.com',
-  'INTC': 'intel.com',
-  'CMCSA': 'comcast.com',
-  'PFE': 'pfizer.com',
-  'KO': 'coca-cola.com',
-  'NKE': 'nike.com',
-  'ORCL': 'oracle.com',
-  'ADBE': 'adobe.com',
-  'CRM': 'salesforce.com',
-  'T': 'att.com',
-  'VZ': 'verizon.com',
-  'IBM': 'ibm.com',
-  'BA': 'boeing.com',
-  'GE': 'ge.com',
-  'AMD': 'amd.com',
-  'UBER': 'uber.com',
-  'SHOP': 'shopify.com',
-  'SPOT': 'spotify.com',
-  'SNAP': 'snap.com',
-  'TWTR': 'twitter.com',
-  'SQ': 'squareup.com',
-  'ROKU': 'roku.com',
-  'ZM': 'zoom.us',
-  'DDOG': 'datadoghq.com',
-  'SNOW': 'snowflake.com',
-  'CRWD': 'crowdstrike.com'
+// Alpaca API credentials
+const ALPACA_API_KEY = process.env.ALPACA_PAPER_API_KEY;
+const ALPACA_SECRET_KEY = process.env.ALPACA_PAPER_SECRET_KEY;
+
+// In-memory cache for logos (1 hour TTL)
+const logoCache = new Map();
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+// Generate SVG placeholder with company initials
+const generatePlaceholderSvg = (symbol) => {
+  const colors = ['#3B82F6', '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#EC4899', '#06B6D4', '#84CC16'];
+  const colorIndex = symbol.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % colors.length;
+  const bgColor = colors[colorIndex];
+  const initials = symbol.substring(0, 2).toUpperCase();
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+    <rect width="128" height="128" rx="16" fill="${bgColor}"/>
+    <text x="64" y="76" font-family="Arial, sans-serif" font-size="48" font-weight="bold" fill="white" text-anchor="middle">${initials}</text>
+  </svg>`;
+};
+
+// Try to fetch logo from various symbol-based APIs (no hardcoding needed)
+const fetchLogoFromSources = async (symbol) => {
+  const symbolUpper = symbol.toUpperCase();
+
+  // Check cache first
+  const cached = logoCache.get(symbolUpper);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+
+  // Source 1: Alpaca Logo API (best source - has all tradable assets)
+  if (ALPACA_API_KEY && ALPACA_SECRET_KEY) {
+    try {
+      const alpacaUrl = `https://data.alpaca.markets/v1beta1/logos/${symbolUpper}`;
+      const response = await axios.get(alpacaUrl, {
+        responseType: 'arraybuffer',
+        timeout: 5000,
+        headers: {
+          'APCA-API-KEY-ID': ALPACA_API_KEY,
+          'APCA-API-SECRET-KEY': ALPACA_SECRET_KEY
+        },
+        validateStatus: (status) => status < 500
+      });
+
+      if (response.status === 200 && response.data.length > 100) {
+        const result = {
+          data: response.data,
+          contentType: response.headers['content-type'] || 'image/png',
+          source: 'alpaca'
+        };
+        logoCache.set(symbolUpper, { data: result, timestamp: Date.now() });
+        logger.debug(`Logo fetched from Alpaca for ${symbolUpper}`);
+        return result;
+      }
+    } catch (error) {
+      logger.debug(`Alpaca logo failed for ${symbol}: ${error.message}`);
+    }
+  }
+
+  // Source 2: TradingView (works with any symbol)
+  try {
+    const tradingViewUrl = `https://s3-symbol-logo.tradingview.com/${symbolUpper}--big.svg`;
+    const response = await axios.get(tradingViewUrl, {
+      responseType: 'arraybuffer',
+      timeout: 3000,
+      validateStatus: (status) => status < 500
+    });
+
+    if (response.status === 200 && response.data.length > 100) {
+      const result = {
+        data: response.data,
+        contentType: 'image/svg+xml',
+        source: 'tradingview'
+      };
+      logoCache.set(symbolUpper, { data: result, timestamp: Date.now() });
+      return result;
+    }
+  } catch (error) {
+    logger.debug(`TradingView failed for ${symbol}: ${error.message}`);
+  }
+
+  // Source 3: Logo.dev ticker API (works with stock symbols directly)
+  try {
+    const logoDevUrl = `https://img.logo.dev/ticker/${symbolUpper}?token=pk_X-1ZWK13RWiUoFmZdMwBnQ&size=128&format=png`;
+    const response = await axios.get(logoDevUrl, {
+      responseType: 'arraybuffer',
+      timeout: 3000,
+      validateStatus: (status) => status < 500
+    });
+
+    if (response.status === 200 && response.data.length > 500) {
+      const result = {
+        data: response.data,
+        contentType: response.headers['content-type'] || 'image/png',
+        source: 'logodev'
+      };
+      logoCache.set(symbolUpper, { data: result, timestamp: Date.now() });
+      return result;
+    }
+  } catch (error) {
+    logger.debug(`Logo.dev failed for ${symbol}: ${error.message}`);
+  }
+
+  // Source 4: Twelve Data (works with stock symbols)
+  try {
+    const twelveDataUrl = `https://api.twelvedata.com/logo?symbol=${symbolUpper}`;
+    const response = await axios.get(twelveDataUrl, {
+      timeout: 3000,
+      validateStatus: (status) => status < 500
+    });
+
+    if (response.status === 200 && response.data?.url) {
+      // Fetch the actual logo from the URL provided
+      const logoResponse = await axios.get(response.data.url, {
+        responseType: 'arraybuffer',
+        timeout: 3000
+      });
+
+      if (logoResponse.status === 200) {
+        const result = {
+          data: logoResponse.data,
+          contentType: logoResponse.headers['content-type'] || 'image/png',
+          source: 'twelvedata'
+        };
+        logoCache.set(symbolUpper, { data: result, timestamp: Date.now() });
+        return result;
+      }
+    }
+  } catch (error) {
+    logger.debug(`Twelve Data failed for ${symbol}: ${error.message}`);
+  }
+
+  // Source 5: Financial Modeling Prep (free tier)
+  try {
+    const fmpUrl = `https://financialmodelingprep.com/image-stock/${symbolUpper}.png`;
+    const response = await axios.get(fmpUrl, {
+      responseType: 'arraybuffer',
+      timeout: 3000,
+      validateStatus: (status) => status < 500
+    });
+
+    if (response.status === 200 && response.data.length > 500) {
+      const result = {
+        data: response.data,
+        contentType: 'image/png',
+        source: 'fmp'
+      };
+      logoCache.set(symbolUpper, { data: result, timestamp: Date.now() });
+      return result;
+    }
+  } catch (error) {
+    logger.debug(`FMP failed for ${symbol}: ${error.message}`);
+  }
+
+  // Source 6: EODHD (free, uses symbol directly)
+  try {
+    const eodhdUrl = `https://eodhistoricaldata.com/img/logos/US/${symbolUpper}.png`;
+    const response = await axios.get(eodhdUrl, {
+      responseType: 'arraybuffer',
+      timeout: 3000,
+      validateStatus: (status) => status < 500
+    });
+
+    if (response.status === 200 && response.data.length > 500) {
+      const result = {
+        data: response.data,
+        contentType: 'image/png',
+        source: 'eodhd'
+      };
+      logoCache.set(symbolUpper, { data: result, timestamp: Date.now() });
+      return result;
+    }
+  } catch (error) {
+    logger.debug(`EODHD failed for ${symbol}: ${error.message}`);
+  }
+
+  // Fallback: Generate SVG placeholder with symbol initials
+  const svgPlaceholder = generatePlaceholderSvg(symbolUpper);
+  const result = {
+    data: Buffer.from(svgPlaceholder),
+    contentType: 'image/svg+xml',
+    source: 'placeholder'
+  };
+  logoCache.set(symbolUpper, { data: result, timestamp: Date.now() });
+  return result;
 };
 
 const getCompanyLogo = async (req, res) => {
   try {
     const { symbol } = req.params;
 
-    if (!symbol || !/^[A-Z]{1,5}$/i.test(symbol)) {
+    // Allow letters, numbers, dots, and hyphens (e.g., BRK.A, BRK-B)
+    if (!symbol || !/^[A-Z0-9.-]{1,10}$/i.test(symbol)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid stock symbol'
       });
     }
 
-    const symbolUpper = symbol.toUpperCase();
+    const logoResult = await fetchLogoFromSources(symbol);
 
-    // Get domain for the symbol
-    const domain = symbolToDomain[symbolUpper];
-
-    if (!domain) {
-      // Return 404 if we don't have a domain mapping
-      logger.warn(`No domain mapping for symbol: ${symbolUpper}`);
-      return res.status(404).json({
-        success: false,
-        message: 'Logo not available for this symbol'
-      });
-    }
-
-    // Fetch logo from Clearbit (free service, no auth required)
-    const clearbitUrl = `https://logo.clearbit.com/${domain}`;
-
-    const response = await axios.get(clearbitUrl, {
-      responseType: 'arraybuffer',
-      timeout: 5000,
-      validateStatus: (status) => status < 500 // Don't throw on 404
-    });
-
-    if (response.status === 404) {
-      return res.status(404).json({
-        success: false,
-        message: 'Logo not found'
-      });
-    }
-
-    // Get content type from response
-    const contentType = response.headers['content-type'] || 'image/png';
-
-    // Set cache headers for browser caching (logos don't change often)
+    // Set cache headers for browser caching
     res.set({
-      'Content-Type': contentType,
-      'Cache-Control': 'public, max-age=2592000', // Cache for 30 days
-      'Access-Control-Allow-Origin': '*' // Allow CORS
+      'Content-Type': logoResult.contentType,
+      'Cache-Control': 'public, max-age=86400', // Cache for 24 hours
+      'Access-Control-Allow-Origin': '*',
+      'X-Logo-Source': logoResult.source // Header to indicate source (for debugging)
     });
 
-    // Send the image
-    res.send(response.data);
+    res.send(logoResult.data);
 
   } catch (error) {
     logger.error('Get company logo error:', {
       message: error.message,
-      status: error.response?.status,
       symbol: req.params.symbol
     });
 
-    res.status(404).json({
-      success: false,
-      message: 'Logo not found'
+    // Return placeholder on any error
+    const svgPlaceholder = generatePlaceholderSvg(req.params.symbol || 'XX');
+    res.set({
+      'Content-Type': 'image/svg+xml',
+      'Cache-Control': 'public, max-age=3600',
+      'Access-Control-Allow-Origin': '*'
     });
+    res.send(Buffer.from(svgPlaceholder));
   }
 };
 

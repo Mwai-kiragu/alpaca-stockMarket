@@ -798,8 +798,12 @@ const getPortfolioAllocation = async (req, res) => {
           byExchange: []
         },
         summary: {
-          totalValue: 0,
-          totalValueKES: 0,
+          portfolioValue: 0,
+          portfolioValueKES: 0,
+          cash: 0,
+          cashKES: 0,
+          marketValue: 0,
+          marketValueKES: 0,
           totalPositions: 0,
           exchangeRate
         },
@@ -808,21 +812,42 @@ const getPortfolioAllocation = async (req, res) => {
       });
     }
 
+    // Get account info to get cash balance
+    const account = await alpacaService.getAccount(user.alpaca_account_id);
+    const cash = parseFloat(account.cash || 0);
+
     // Get all user's positions for this specific Alpaca account
     const positions = await alpacaService.getPositions(user.alpaca_account_id);
+
+    // Calculate market value of positions
+    const marketValue = positions.reduce((sum, pos) => sum + parseFloat(pos.market_value), 0);
+
+    // Portfolio value = cash + market value of investments
+    const portfolioValue = cash + marketValue;
 
     if (!positions || positions.length === 0) {
       return res.json({
         success: true,
         allocation: {
-          byAssetClass: [],
+          byAssetClass: cash > 0 ? [{
+            name: 'Cash',
+            value: parseFloat(cash.toFixed(2)),
+            valueKES: parseFloat((cash * exchangeRate).toFixed(2)),
+            percentage: 100,
+            count: 0,
+            stocks: []
+          }] : [],
           bySector: [],
           byStock: [],
           byExchange: []
         },
         summary: {
-          totalValue: 0,
-          totalValueKES: 0,
+          portfolioValue: parseFloat(portfolioValue.toFixed(2)),
+          portfolioValueKES: parseFloat((portfolioValue * exchangeRate).toFixed(2)),
+          cash: parseFloat(cash.toFixed(2)),
+          cashKES: parseFloat((cash * exchangeRate).toFixed(2)),
+          marketValue: 0,
+          marketValueKES: 0,
           totalPositions: 0,
           exchangeRate
         },
@@ -831,8 +856,8 @@ const getPortfolioAllocation = async (req, res) => {
       });
     }
 
-    // Calculate total portfolio value
-    const totalValue = positions.reduce((sum, pos) => sum + parseFloat(pos.market_value), 0);
+    // Total value for percentage calculations (includes cash)
+    const totalValue = portfolioValue;
 
     // Fetch additional data for each position (sector, industry)
     const positionDetails = await Promise.all(
@@ -905,6 +930,18 @@ const getPortfolioAllocation = async (req, res) => {
       assetClassGroups[key].count += 1;
       assetClassGroups[key].stocks.push(pos.symbol);
     });
+
+    // Add Cash as an asset class if there's cash in the account
+    if (cash > 0) {
+      assetClassGroups['Cash'] = {
+        name: 'Cash',
+        value: cash,
+        valueKES: cash * exchangeRate,
+        percentage: 0,
+        count: 0,
+        stocks: []
+      };
+    }
 
     // Calculate percentages for asset classes
     const byAssetClass = Object.values(assetClassGroups).map(group => ({
@@ -992,8 +1029,12 @@ const getPortfolioAllocation = async (req, res) => {
         byStock
       },
       summary: {
-        totalValue: parseFloat(totalValue.toFixed(2)),
-        totalValueKES: parseFloat((totalValue * exchangeRate).toFixed(2)),
+        portfolioValue: parseFloat(portfolioValue.toFixed(2)),
+        portfolioValueKES: parseFloat((portfolioValue * exchangeRate).toFixed(2)),
+        cash: parseFloat(cash.toFixed(2)),
+        cashKES: parseFloat((cash * exchangeRate).toFixed(2)),
+        marketValue: parseFloat(marketValue.toFixed(2)),
+        marketValueKES: parseFloat((marketValue * exchangeRate).toFixed(2)),
         totalPositions: positions.length,
         exchangeRate
       },

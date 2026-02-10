@@ -8,16 +8,19 @@ const createOrder = async (req, res) => {
   try {
     const { symbol, side, type: orderType, qty: quantity, limit_price: limitPrice, stop_price: stopPrice, time_in_force: timeInForce, currency = 'USD' } = req.body;
 
-    // Get user and wallet
+    // Get user
     const user = await User.findByPk(req.user.id);
-    const wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
 
-    if (!wallet) {
+    if (!user || !user.alpaca_account_id) {
       return res.status(404).json({
         success: false,
-        message: 'Wallet not found'
+        message: 'No trading account found. Complete onboarding to start trading.'
       });
     }
+
+    // Get Alpaca account to check available cash (this is the actual trading balance)
+    const alpacaAccount = await alpacaService.getAccount(user.alpaca_account_id);
+    const alpacaCash = parseFloat(alpacaAccount.cash || 0);
 
     // Get current stock price for order value calculation
     const quote = await alpacaService.getLatestQuote(symbol);
@@ -71,88 +74,60 @@ const createOrder = async (req, res) => {
       });
     }
 
+    // Calculate commission (1% of order value in USD)
     const COMMISSION_RATE = 0.01;
     const commissionUsd = orderValue * COMMISSION_RATE;
     const totalCostUsd = orderValue + commissionUsd;
 
-    let finalOrderValue = orderValue;
-    let exchangeRate = 1;
-    let requiredBalance;
-    let walletCurrency;
+    // Get exchange rate for display purposes
+    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
-    let commissionInUserCurrency = commissionUsd;
-    let totalCostInUserCurrency = totalCostUsd;
+    // Calculate values in KES for display
+    const orderValueKes = orderValue * exchangeRate;
+    const commissionKes = commissionUsd * exchangeRate;
+    const totalCostKes = totalCostUsd * exchangeRate;
 
-    // Handle currency conversion if needed
-    if (currency === 'KES') {
-      // Convert USD to KES for user display/charging
-      const conversion = await exchangeService.convertKEStoUSD(orderValue);
-      finalOrderValue = conversion.finalAmount;
-      exchangeRate = conversion.rate;
-
-      const orderValueKes = orderValue * exchangeRate;
-      commissionInUserCurrency = commissionUsd * exchangeRate;
-      totalCostInUserCurrency = orderValueKes + commissionInUserCurrency;
-
-      requiredBalance = totalCostInUserCurrency;
-      walletCurrency = 'KES';
-
-      if (side === 'buy' && wallet.availableKes < requiredBalance) {
-        const shortfall = requiredBalance - wallet.availableKes;
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient KES balance to place this order`,
-          error: {
-            type: 'insufficient_funds',
-            currency: 'KES',
-            required: `KES ${requiredBalance.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            available: `KES ${wallet.availableKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            shortfall: `KES ${shortfall.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            breakdown: {
-              stockValue: `KES ${orderValueKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-              commission: `KES ${commissionInUserCurrency.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`,
-              total: `KES ${requiredBalance.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    // Check Alpaca buying power (all orders execute in USD on Alpaca)
+    if (side === 'buy' && alpacaCash < totalCostUsd) {
+      const shortfall = totalCostUsd - alpacaCash;
+      return res.status(400).json({
+        success: false,
+        message: 'Insufficient funds to place this order',
+        error: {
+          type: 'insufficient_funds',
+          required: {
+            usd: `$${totalCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            kes: `KES ${totalCostKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          },
+          available: {
+            usd: `$${alpacaCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            kes: `KES ${(alpacaCash * exchangeRate).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          },
+          shortfall: {
+            usd: `$${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            kes: `KES ${(shortfall * exchangeRate).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+          },
+          breakdown: {
+            stockValue: {
+              usd: `$${orderValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              kes: `KES ${orderValueKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
             },
-            suggestions: [
-              'Deposit more funds to your KES wallet',
-              'Reduce the order quantity',
-              'Convert USD to KES if you have USD balance',
-              'Use a limit order instead of market order for better price control'
-            ]
-          }
-        });
-      }
-    } else {
-      // USD order
-      requiredBalance = totalCostUsd; // Total including commission
-      walletCurrency = 'USD';
-
-      // Check USD balance (now includes commission)
-      if (side === 'buy' && wallet.availableUsd < requiredBalance) {
-        const shortfall = requiredBalance - wallet.availableUsd;
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient USD balance to place this order`,
-          error: {
-            type: 'insufficient_funds',
-            currency: 'USD',
-            required: `$${requiredBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            available: `$${wallet.availableUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            shortfall: `$${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            breakdown: {
-              stockValue: `$${orderValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-              commission: `$${commissionUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`,
-              total: `$${requiredBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            commission: {
+              usd: `$${commissionUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`,
+              kes: `KES ${commissionKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`
             },
-            suggestions: [
-              'Deposit more funds to your USD wallet',
-              'Reduce the order quantity',
-              'Convert KES to USD if you have KES balance',
-              'Use a limit order instead of market order for better price control'
-            ]
-          }
-        });
-      }
+            total: {
+              usd: `$${totalCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              kes: `KES ${totalCostKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            }
+          },
+          suggestions: [
+            'Deposit more funds to your trading account',
+            'Reduce the order quantity',
+            'Use a limit order for better price control'
+          ]
+        }
+      });
     }
 
     // Create order in database first
@@ -166,7 +141,7 @@ const createOrder = async (req, res) => {
       stop_price: stopPrice ? parseFloat(stopPrice) : null,
       time_in_force: timeInForce || 'day',
       order_value: orderValue,
-      currency,
+      currency: 'USD', // All orders execute in USD on Alpaca
       exchange_rate: exchangeRate,
       status: 'pending',
       fees: {
@@ -174,24 +149,21 @@ const createOrder = async (req, res) => {
           rate: COMMISSION_RATE,
           percentage: '1%',
           amountUsd: commissionUsd,
-          amountInUserCurrency: commissionInUserCurrency,
-          currency: walletCurrency
+          amountKes: commissionKes
         },
-        totalCost: totalCostInUserCurrency,
-        stockValue: currency === 'KES' ? orderValue * exchangeRate : orderValue
+        totalCostUsd: totalCostUsd,
+        totalCostKes: totalCostKes,
+        stockValueUsd: orderValue,
+        stockValueKes: orderValueKes
       },
       metadata: {
-        client_order_id: `ORDER_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        client_order_id: `ORDER_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
         estimated_price: estimatedPrice,
-        wallet_currency: walletCurrency
+        display_currency: currency // What currency user selected for display
       }
     });
 
     try {
-      // Freeze funds for buy orders
-      if (side === 'buy') {
-        await wallet.freezeFunds(requiredBalance, walletCurrency);
-      }
 
       // Prepare Alpaca order
       const alpacaOrderData = {
@@ -252,20 +224,23 @@ const createOrder = async (req, res) => {
           createdAt: order.createdAt
         },
         costBreakdown: {
-          stockValue: order.fees.stockValue,
-          commission: order.fees.commission.amountInUserCurrency,
-          commissionRate: order.fees.commission.percentage,
-          totalCost: order.fees.totalCost,
-          currency: order.currency
+          stockValue: {
+            usd: order.fees.stockValueUsd,
+            kes: order.fees.stockValueKes
+          },
+          commission: {
+            usd: order.fees.commission.amountUsd,
+            kes: order.fees.commission.amountKes,
+            rate: order.fees.commission.percentage
+          },
+          totalCost: {
+            usd: order.fees.totalCostUsd,
+            kes: order.fees.totalCostKes
+          }
         }
       });
 
     } catch (alpacaError) {
-      // Unfreeze funds if Alpaca order failed
-      if (side === 'buy') {
-        await wallet.unfreezeFunds(requiredBalance, walletCurrency);
-      }
-
       // Update order status to failed
       await order.update({
         status: 'rejected',
@@ -523,95 +498,74 @@ const syncOrdersWithAlpaca = async (req, res) => {
 };
 
 // Helper function to handle order fills
+// Note: Balance is managed by Alpaca directly, we just track transactions for records
 const handleOrderFill = async (order) => {
   try {
-    const wallet = await Wallet.findOne({ where: { user_id: order.user_id } });
     const user = await User.findByPk(order.user_id);
+    const wallet = await Wallet.findOne({ where: { user_id: order.user_id } });
 
-    // Get commission from order fees
-    const commission = order.fees?.commission?.amountInUserCurrency || 0;
+    // Get commission from order fees (in USD)
+    const commissionUsd = order.fees?.commission?.amountUsd || 0;
+    const actualStockCost = order.filled_quantity * order.average_price;
 
-    if (order.side === 'buy') {
-      // Unfreeze any remaining funds (includes commission that was frozen)
-      const totalFrozen = order.fees?.totalCost || order.order_value;
-      const actualStockCost = order.filled_quantity * order.average_price;
-      const remainingFrozen = totalFrozen - actualStockCost - commission;
-
-      if (remainingFrozen > 0) {
-        await wallet.unfreezeFunds(remainingFrozen, order.currency);
-      }
-
-      // Deduct the actual filled amount (stock cost)
-      await wallet.updateBalance(actualStockCost, order.currency, 'subtract');
-
-      // Deduct the commission (platform fee)
-      if (commission > 0) {
-        await wallet.updateBalance(commission, order.currency, 'subtract');
-      }
-
-    } else if (order.side === 'sell') {
-      // Credit the sale proceeds (minus commission)
-      const saleProceeds = order.filled_quantity * order.average_price;
-      const netProceeds = saleProceeds - commission;
-      await wallet.updateBalance(netProceeds, order.currency, 'add');
-    }
-
-    // Create transaction record for the trade
-    await Transaction.create({
-      wallet_id: wallet.id,
-      type: order.side === 'buy' ? 'trade_buy' : 'trade_sell',
-      amount: order.side === 'buy' ? -order.filled_quantity * order.average_price : order.filled_quantity * order.average_price,
-      currency: order.currency,
-      status: 'completed',
-      reference: `ORDER_${order.id}`,
-      alpaca_order_id: order.alpaca_order_id,
-      exchange_rate: order.exchange_rate,
-      description: `${order.side.toUpperCase()} ${order.filled_quantity} ${order.symbol} @ ${order.average_price}`,
-      metadata: {
-        symbol: order.symbol,
-        quantity: order.filled_quantity,
-        price: order.average_price,
-        order_id: order.id
-      }
-    });
-
-    // Create separate transaction record for commission (platform revenue)
-    if (commission > 0) {
+    // Create transaction record for the trade (for tracking purposes)
+    if (wallet) {
       await Transaction.create({
         wallet_id: wallet.id,
-        type: 'fee', // Using 'fee' type for platform commission
-        amount: -commission, // Negative because it's deducted from user
-        currency: order.currency,
+        type: order.side === 'buy' ? 'trade_buy' : 'trade_sell',
+        amount: order.side === 'buy' ? -actualStockCost : actualStockCost,
+        currency: 'USD',
         status: 'completed',
-        reference: `FEE_${order.id}`,
+        reference: `ORDER_${order.id}`,
+        alpaca_order_id: order.alpaca_order_id,
         exchange_rate: order.exchange_rate,
-        description: `Platform commission (1%) for ${order.side.toUpperCase()} ${order.symbol}`,
+        description: `${order.side.toUpperCase()} ${order.filled_quantity} ${order.symbol} @ $${order.average_price}`,
         metadata: {
-          order_id: order.id,
           symbol: order.symbol,
-          fee_type: 'commission',
-          commission_rate: '1%',
-          stock_value: order.filled_quantity * order.average_price,
-          commission_amount: commission
+          quantity: order.filled_quantity,
+          price: order.average_price,
+          order_id: order.id
         }
       });
 
-      logger.info(`Commission collected for order ${order.id}: ${order.currency} ${commission.toFixed(2)}`);
+      // Create separate transaction record for commission (platform revenue)
+      if (commissionUsd > 0) {
+        await Transaction.create({
+          wallet_id: wallet.id,
+          type: 'fee',
+          amount: -commissionUsd,
+          currency: 'USD',
+          status: 'completed',
+          reference: `FEE_${order.id}`,
+          exchange_rate: order.exchange_rate,
+          description: `Platform commission (1%) for ${order.side.toUpperCase()} ${order.symbol}`,
+          metadata: {
+            order_id: order.id,
+            symbol: order.symbol,
+            fee_type: 'commission',
+            commission_rate: '1%',
+            stock_value: actualStockCost,
+            commission_amount_usd: commissionUsd
+          }
+        });
+
+        logger.info(`Commission collected for order ${order.id}: $${commissionUsd.toFixed(2)}`);
+      }
     }
 
     // Send notification email
     try {
       await emailService.sendTransactionEmail(user, {
         type: 'order_filled',
-        amount: order.filled_quantity * order.average_price,
-        currency: order.currency,
+        amount: actualStockCost,
+        currency: 'USD',
         status: 'completed',
         reference: order.id,
         metadata: {
           symbol: order.symbol,
           quantity: order.filled_quantity,
           price: order.average_price,
-          commission: commission
+          commission: commissionUsd
         }
       });
     } catch (emailError) {
