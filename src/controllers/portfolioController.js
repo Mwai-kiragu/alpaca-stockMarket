@@ -17,8 +17,10 @@ const getPortfolio = async (req, res) => {
     const localKesBalance = parseFloat(wallet.kes_balance) || 0;
     const localUsdBalance = parseFloat(wallet.usd_balance) || 0;
 
+    // Get exchange rate early - needed for both cases
+    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
     if (!user || !user.alpaca_account_id) {
-      const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
       // Calculate portfolio value from local wallet only
       const localCashUsd = localUsdBalance + (localKesBalance / exchangeRate);
@@ -108,9 +110,6 @@ const getPortfolio = async (req, res) => {
         status: hasPendingOrders ? 'pending' : 'open'
       };
     });
-
-    // Get current exchange rate for KES users
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     res.json({
       success: true,
