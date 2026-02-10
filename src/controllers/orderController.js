@@ -18,9 +18,24 @@ const createOrder = async (req, res) => {
       });
     }
 
-    // Get Alpaca account to check available cash (this is the actual trading balance)
+    // Get Alpaca account to check available cash
     const alpacaAccount = await alpacaService.getAccount(user.alpaca_account_id);
-    const alpacaCash = parseFloat(alpacaAccount.cash || 0);
+    const alpacaCashOnly = parseFloat(alpacaAccount.cash || 0);
+
+    // Get local wallet balance to combine with Alpaca cash
+    let wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
+    if (!wallet) {
+      wallet = { kes_balance: 0, usd_balance: 0, frozen_kes: 0, frozen_usd: 0 };
+    }
+    const localUsdBalance = parseFloat(wallet.usd_balance) || 0;
+    const localKesBalance = parseFloat(wallet.kes_balance) || 0;
+
+    // Get exchange rate for KES to USD conversion
+    const kesExchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+    const localCashUsd = localUsdBalance + (localKesBalance / kesExchangeRate);
+
+    // Combined available cash = Alpaca cash + Local wallet (matching portfolio calculation)
+    const alpacaCash = alpacaCashOnly + localCashUsd;
 
     // Get current stock price for order value calculation
     const quote = await alpacaService.getLatestQuote(symbol);
@@ -79,8 +94,8 @@ const createOrder = async (req, res) => {
     const commissionUsd = orderValue * COMMISSION_RATE;
     const totalCostUsd = orderValue + commissionUsd;
 
-    // Get exchange rate for display purposes
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+    // Reuse exchange rate from above (kesExchangeRate)
+    const exchangeRate = kesExchangeRate;
 
     // Calculate values in KES for display
     const orderValueKes = orderValue * exchangeRate;
@@ -95,38 +110,50 @@ const createOrder = async (req, res) => {
         message: 'Insufficient funds to place this order',
         error: {
           type: 'insufficient_funds',
-          required: {
-            usd: `$${totalCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            kes: `KES ${totalCostKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-          },
-          available: {
-            usd: `$${alpacaCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            kes: `KES ${(alpacaCash * exchangeRate).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-          },
-          shortfall: {
-            usd: `$${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            kes: `KES ${(shortfall * exchangeRate).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-          },
-          breakdown: {
-            stockValue: {
-              usd: `$${orderValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-              kes: `KES ${orderValueKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-            },
-            commission: {
-              usd: `$${commissionUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`,
-              kes: `KES ${commissionKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`
-            },
-            total: {
-              usd: `$${totalCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-              kes: `KES ${totalCostKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-            }
-          },
+          currency: 'USD',
+          required: `$${totalCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          available: `$${alpacaCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          shortfall: `$${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
           suggestions: [
-            'Deposit more funds to your trading account',
-            'Reduce the order quantity',
-            'Use a limit order for better price control'
+            `Deposit at least $${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} to complete this order`,
+            'Try a smaller order amount'
           ]
         }
+        // Old detailed response format (commented out):
+        // error: {
+        //   type: 'insufficient_funds',
+        //   required: {
+        //     usd: `$${totalCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        //     kes: `KES ${totalCostKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        //   },
+        //   available: {
+        //     usd: `$${alpacaCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        //     kes: `KES ${(alpacaCash * exchangeRate).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        //   },
+        //   shortfall: {
+        //     usd: `$${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        //     kes: `KES ${(shortfall * exchangeRate).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        //   },
+        //   breakdown: {
+        //     stockValue: {
+        //       usd: `$${orderValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        //       kes: `KES ${orderValueKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        //     },
+        //     commission: {
+        //       usd: `$${commissionUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`,
+        //       kes: `KES ${commissionKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`
+        //     },
+        //     total: {
+        //       usd: `$${totalCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        //       kes: `KES ${totalCostKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        //     }
+        //   },
+        //   suggestions: [
+        //     'Deposit more funds to your trading account',
+        //     'Reduce the order quantity',
+        //     'Use a limit order for better price control'
+        //   ]
+        // }
       });
     }
 
