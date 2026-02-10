@@ -52,6 +52,25 @@ const createOrder = async (req, res) => {
 
     const orderValue = parsedQuantity * estimatedPrice;
 
+    // Broker limitation: minimum order value is $1
+    const MIN_ORDER_VALUE_USD = 1;
+    if (orderValue < MIN_ORDER_VALUE_USD) {
+      const minQuantity = Math.ceil((MIN_ORDER_VALUE_USD / estimatedPrice) * 10000) / 10000;
+      return res.status(400).json({
+        success: false,
+        message: 'Order value is below the minimum required',
+        error: {
+          type: 'minimum_order_value',
+          orderValue: `$${orderValue.toFixed(4)}`,
+          minimumRequired: `$${MIN_ORDER_VALUE_USD}`,
+          currentPrice: `$${estimatedPrice.toFixed(2)}`,
+          currentQuantity: parsedQuantity,
+          minimumQuantity: minQuantity,
+          suggestion: `Increase quantity to at least ${minQuantity} shares to meet the $${MIN_ORDER_VALUE_USD} minimum order value`
+        }
+      });
+    }
+
     let finalOrderValue = orderValue;
     let exchangeRate = 1;
     let requiredBalance;
