@@ -138,7 +138,11 @@ const onboardingController = {
       const {
         dateOfBirth,
         gender,
-        country
+        country,
+        city,
+        postalCode,
+        apartment,
+        streetAddress
       } = req.body;
 
       const user = await User.findByPk(req.user.id);
@@ -146,18 +150,23 @@ const onboardingController = {
         return res.status(404).json(ApiResponse.Error('User not found', 404));
       }
 
-      // Define step hierarchy for comparison (8-step flow - trustedContact removed)
+      // Define step hierarchy for comparison (updated flow with new steps)
       const stepHierarchy = {
         'email_verification': 0,
         'personal_info': 1,
         'employment_info': 2,
-        'kyc_verification': 3,
-        'documents': 4,
-        'documents_id_front': 4,
-        'documents_id_back': 5,
-        'documents_proof_address': 6,
-        'agreements': 7,
-        'completed': 8
+        'source_of_wealth': 3,
+        'investing_savings': 4,
+        'disclosures': 5,
+        'tax_info': 6,
+        'kyc_verification': 7,
+        'investment_experience': 8,
+        'documents': 9,
+        'documents_id_front': 9,
+        'documents_id_back': 10,
+        'documents_proof_address': 11,
+        'agreements': 12,
+        'completed': 13
       };
 
       // Only advance to employment_info if user hasn't progressed beyond it
@@ -165,13 +174,21 @@ const onboardingController = {
       const employmentStepLevel = stepHierarchy['employment_info'];
       const nextStep = currentStepLevel <= employmentStepLevel ? 'employment_info' : user.registration_step;
 
-      // Store country in address field as JSON for compatibility
-      const addressData = { country };
+      // Store address data as JSON for compatibility
+      const addressData = {
+        country,
+        city,
+        postalCode,
+        apartment: apartment || null,
+        streetAddress: streetAddress || null
+      };
 
       await user.update({
         date_of_birth: new Date(dateOfBirth),
         gender: gender.toLowerCase(),
         address: JSON.stringify(addressData),
+        city: city,
+        postal_code: postalCode,
         citizenship: country,
         registration_step: nextStep,
         registration_status: currentStepLevel <= employmentStepLevel ? 'email_verified' : user.registration_status
@@ -228,7 +245,7 @@ const onboardingController = {
       await user.update({
         occupation: jobTitle || null,
         kyc_data: updatedKycData,
-        registration_step: 'tax_info'  // Step 3: Tax Info
+        registration_step: 'source_of_wealth'  // Step 3: Source of Wealth
       });
 
       return res.status(200).json(
@@ -239,6 +256,203 @@ const onboardingController = {
       logger.error('Error submitting employment information:', error);
       return res.status(500).json(
         ApiResponse.Error('An error occurred while submitting employment information', 500)
+      );
+    }
+  },
+
+  // Submit source of wealth (Step 3)
+  submitSourceOfWealth: async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json(
+          ApiResponse.Error('Validation failed', 400, errors.array())
+        );
+      }
+
+      const { sourceOfWealth, selectedOption } = req.body;
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const sourceOfWealthData = {
+        sourceOfWealth,
+        selectedOption,
+        updatedAt: new Date()
+      };
+
+      const currentKycData = user.kyc_data || {};
+      const updatedKycData = {
+        ...currentKycData,
+        sourceOfWealth: sourceOfWealthData
+      };
+
+      await user.update({
+        kyc_data: updatedKycData,
+        registration_step: 'investing_savings'  // Move to Step 4: Investing Savings
+      });
+
+      logger.info(`User ${user.id} completed source of wealth step`);
+
+      return res.status(200).json(
+        ApiResponse.SuccessNoData('Source of wealth submitted successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error submitting source of wealth:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while submitting source of wealth', 500)
+      );
+    }
+  },
+
+  // Submit investing savings (Step 4)
+  submitInvestingSavings: async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json(
+          ApiResponse.Error('Validation failed', 400, errors.array())
+        );
+      }
+
+      const { investingWithSavings, selectedOption } = req.body;
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const investingSavingsData = {
+        investingWithSavings,
+        selectedOption,
+        updatedAt: new Date()
+      };
+
+      const currentKycData = user.kyc_data || {};
+      const updatedKycData = {
+        ...currentKycData,
+        investingSavings: investingSavingsData
+      };
+
+      await user.update({
+        kyc_data: updatedKycData,
+        registration_step: 'disclosures'  // Move to Step 5: Disclosures
+      });
+
+      return res.status(200).json(
+        ApiResponse.SuccessNoData('Investing savings submitted successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error submitting investing savings:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while submitting investing savings', 500)
+      );
+    }
+  },
+
+  // Submit disclosures (Step 5)
+  submitDisclosures: async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json(
+          ApiResponse.Error('Validation failed', 400, errors.array())
+        );
+      }
+
+      const {
+        affiliatedWithBrokerDealer,
+        publiclyTradedCompany,
+        politicallyExposedPerson,
+        familyOfPoliticalFigure,
+        noneApply,
+        selectedDisclosure
+      } = req.body;
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const disclosuresData = {
+        affiliatedWithBrokerDealer: affiliatedWithBrokerDealer || false,
+        publiclyTradedCompany: publiclyTradedCompany || false,
+        politicallyExposedPerson: politicallyExposedPerson || false,
+        familyOfPoliticalFigure: familyOfPoliticalFigure || false,
+        noneApply: noneApply || false,
+        selectedDisclosure,
+        updatedAt: new Date()
+      };
+
+      const currentKycData = user.kyc_data || {};
+      const updatedKycData = {
+        ...currentKycData,
+        disclosures: disclosuresData
+      };
+
+      await user.update({
+        kyc_data: updatedKycData,
+        registration_step: 'tax_info'  // Move to Step 6: Tax Information
+      });
+
+      return res.status(200).json(
+        ApiResponse.SuccessNoData('Disclosures submitted successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error submitting disclosures:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while submitting disclosures', 500)
+      );
+    }
+  },
+
+  // Submit investment experience (Step 8)
+  submitInvestmentExperience: async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json(
+          ApiResponse.Error('Validation failed', 400, errors.array())
+        );
+      }
+
+      const { investmentExperience, selectedOption } = req.body;
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        return res.status(404).json(ApiResponse.Error('User not found', 404));
+      }
+
+      const investmentExperienceData = {
+        investmentExperience,
+        selectedOption,
+        updatedAt: new Date()
+      };
+
+      const currentKycData = user.kyc_data || {};
+      const updatedKycData = {
+        ...currentKycData,
+        investmentExperience: investmentExperienceData
+      };
+
+      await user.update({
+        kyc_data: updatedKycData,
+        registration_step: 'kyc_verification'  // Move to KYC Verification
+      });
+
+      return res.status(200).json(
+        ApiResponse.SuccessNoData('Investment experience submitted successfully')
+      );
+
+    } catch (error) {
+      logger.error('Error submitting investment experience:', error);
+      return res.status(500).json(
+        ApiResponse.Error('An error occurred while submitting investment experience', 500)
       );
     }
   },
@@ -758,8 +972,12 @@ const onboardingController = {
       const steps = {
         personalDetails: !!(user.date_of_birth && user.gender && user.address),
         employment: !!kycData.employment,
+        sourceOfWealth: !!kycData.sourceOfWealth,
+        investingSavings: !!kycData.investingSavings,
+        disclosures: !!kycData.disclosures,
         taxInfo: !!kycData.taxInfo,
         kyc: !!kycData.kyc,
+        investmentExperience: !!kycData.investmentExperience,
         idFront: !!kycData.documents?.idFront,
         idBack: !!kycData.documents?.idBack,
         proofOfAddress: !!kycData.documents?.proofOfAddress,
@@ -771,22 +989,26 @@ const onboardingController = {
       const totalSteps = Object.keys(steps).length;
       const progressPercentage = Math.round((completedSteps / totalSteps) * 100);
 
-      // Map registration steps to step numbers (9-step flow with tax info)
+      // Map registration steps to step numbers (updated flow with new steps)
       const stepMapping = {
-        'email_verification': 0,      // Email verification is pre-onboarding (handled at login)
-        'personal_info': 1,           // Step 1: Personal Details
-        'employment_info': 2,         // Step 2: Employment
-        'tax_info': 3,                // Step 3: Tax Info
-        'kyc_verification': 4,        // Step 4: KYC
-        'documents': 5,               // Step 5: ID FRONT (legacy)
-        'documents_id_front': 5,      // Step 5: ID FRONT
-        'documents_id_back': 6,       // Step 6: ID BACK
-        'documents_proof_address': 7, // Step 7: PROOF OF ADDRESS
-        'agreements': 8,              // Step 8: Accept Terms and Conditions
-        'kyc_pending': 9,             // Step 9: Completion
-        'kyc_under_review': 9,        // Step 9: Under Review
-        'completed': 9,               // Step 9: Completed
-        'initial_completed': 9        // Step 9: Initial Completed
+        'email_verification': 0,       // Email verification is pre-onboarding (handled at login)
+        'personal_info': 1,            // Step 1: Personal Details
+        'employment_info': 2,          // Step 2: Employment
+        'source_of_wealth': 3,         // Step 3: Source of Wealth
+        'investing_savings': 4,        // Step 4: Investing Savings
+        'disclosures': 5,              // Step 5: Disclosures
+        'tax_info': 6,                 // Step 6: Tax Info
+        'kyc_verification': 7,         // Step 7: KYC
+        'investment_experience': 8,    // Step 8: Investment Experience
+        'documents': 9,                // Step 9: ID FRONT (legacy)
+        'documents_id_front': 9,       // Step 9: ID FRONT
+        'documents_id_back': 10,       // Step 10: ID BACK
+        'documents_proof_address': 11, // Step 11: PROOF OF ADDRESS
+        'agreements': 12,              // Step 12: Accept Terms and Conditions
+        'kyc_pending': 13,             // Step 13: Completion
+        'kyc_under_review': 13,        // Step 13: Under Review
+        'completed': 13,               // Step 13: Completed
+        'initial_completed': 13        // Step 13: Initial Completed
       };
 
       let currentStepCount = stepMapping[user.registration_step];
@@ -871,48 +1093,76 @@ const onboardingController = {
           },
           {
             stepNumber: 3,
+            stepName: 'Source of Wealth',
+            endpoint: '/api/v1/onboarding/source-of-wealth',
+            completed: !!kycData.sourceOfWealth,
+            data: kycData.sourceOfWealth || null
+          },
+          {
+            stepNumber: 4,
+            stepName: 'Investing Savings',
+            endpoint: '/api/v1/onboarding/investing-savings',
+            completed: !!kycData.investingSavings,
+            data: kycData.investingSavings || null
+          },
+          {
+            stepNumber: 5,
+            stepName: 'Disclosures',
+            endpoint: '/api/v1/onboarding/disclosures',
+            completed: !!kycData.disclosures,
+            data: kycData.disclosures || null
+          },
+          {
+            stepNumber: 6,
             stepName: 'Tax Information',
             endpoint: '/api/v1/onboarding/tax-info',
             completed: !!kycData.taxInfo,
             data: kycData.taxInfo || null
           },
           {
-            stepNumber: 4,
+            stepNumber: 7,
             stepName: 'KYC',
             endpoint: '/api/v1/onboarding/kyc-info',
             completed: !!kycData.kyc,
             data: kycData.kyc || null
           },
           {
-            stepNumber: 5,
+            stepNumber: 8,
+            stepName: 'Investment Experience',
+            endpoint: '/api/v1/onboarding/investment-experience',
+            completed: !!kycData.investmentExperience,
+            data: kycData.investmentExperience || null
+          },
+          {
+            stepNumber: 9,
             stepName: 'ID FRONT',
             endpoint: '/api/v1/onboarding/upload-id-front',
             completed: !!kycData.documents?.idFront,
             data: kycData.documents?.idFront || null
           },
           {
-            stepNumber: 6,
+            stepNumber: 10,
             stepName: 'ID BACK',
             endpoint: '/api/v1/onboarding/upload-id-back',
             completed: !!kycData.documents?.idBack,
             data: kycData.documents?.idBack || null
           },
           {
-            stepNumber: 7,
+            stepNumber: 11,
             stepName: 'PROOF OF ADDRESS',
             endpoint: '/api/v1/onboarding/upload-proof-of-address',
             completed: !!kycData.documents?.proofOfAddress,
             data: kycData.documents?.proofOfAddress || null
           },
           {
-            stepNumber: 8,
+            stepNumber: 12,
             stepName: 'Accept Terms and Conditions',
             endpoint: '/api/v1/onboarding/agreements',
             completed: !!(user.terms_accepted && user.privacy_accepted),
             data: kycData.agreements || null
           },
           {
-            stepNumber: 9,
+            stepNumber: 13,
             stepName: 'Completion',
             endpoint: '/api/v1/onboarding/complete',
             completed: user.registration_status === 'completed',
@@ -925,15 +1175,19 @@ const onboardingController = {
           completedSteps: kycData ? Object.values({
             personalDetails: !!(user.date_of_birth && user.gender && user.address),
             employment: !!kycData.employment,
+            sourceOfWealth: !!kycData.sourceOfWealth,
+            investingSavings: !!kycData.investingSavings,
+            disclosures: !!kycData.disclosures,
             taxInfo: !!kycData.taxInfo,
             kyc: !!kycData.kyc,
+            investmentExperience: !!kycData.investmentExperience,
             idFront: !!kycData.documents?.idFront,
             idBack: !!kycData.documents?.idBack,
             proofOfAddress: !!kycData.documents?.proofOfAddress,
             agreements: !!(user.terms_accepted && user.privacy_accepted),
             completion: user.registration_status === 'completed'
           }).filter(Boolean).length : 0,
-          totalSteps: 9,
+          totalSteps: 13,
           isComplete: user.registration_status === 'completed',
           kycStatus: user.kyc_status,
           accountStatus: user.account_status

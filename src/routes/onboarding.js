@@ -24,7 +24,21 @@ const personalDetailsValidation = [
   body('country')
     .trim()
     .notEmpty()
-    .withMessage('Country is required')
+    .withMessage('Country is required'),
+  body('city')
+    .trim()
+    .notEmpty()
+    .withMessage('City is required'),
+  body('postalCode')
+    .trim()
+    .notEmpty()
+    .withMessage('Postal code is required'),
+  body('apartment')
+    .optional()
+    .trim(),
+  body('streetAddress')
+    .optional()
+    .trim()
 ];
 
 const employmentDetailsValidation = [
@@ -96,6 +110,63 @@ const agreementsValidation = [
     .withMessage('Terms and conditions must be accepted')
 ];
 
+const sourceOfWealthValidation = [
+  body('sourceOfWealth')
+    .isIn(['salary', 'family', 'inheritance', 'investments', 'student loans'])
+    .withMessage('Source of wealth must be one of: salary, family, inheritance, investments, student loans'),
+  body('selectedOption')
+    .trim()
+    .notEmpty()
+    .withMessage('Selected option is required')
+];
+
+const investingSavingsValidation = [
+  body('investingWithSavings')
+    .isBoolean()
+    .withMessage('Investing with savings must be true or false'),
+  body('selectedOption')
+    .trim()
+    .notEmpty()
+    .withMessage('Selected option is required')
+];
+
+const disclosuresValidation = [
+  body('affiliatedWithBrokerDealer')
+    .optional()
+    .isBoolean()
+    .withMessage('affiliatedWithBrokerDealer must be a boolean'),
+  body('publiclyTradedCompany')
+    .optional()
+    .isBoolean()
+    .withMessage('publiclyTradedCompany must be a boolean'),
+  body('politicallyExposedPerson')
+    .optional()
+    .isBoolean()
+    .withMessage('politicallyExposedPerson must be a boolean'),
+  body('familyOfPoliticalFigure')
+    .optional()
+    .isBoolean()
+    .withMessage('familyOfPoliticalFigure must be a boolean'),
+  body('noneApply')
+    .optional()
+    .isBoolean()
+    .withMessage('noneApply must be a boolean'),
+  body('selectedDisclosure')
+    .trim()
+    .notEmpty()
+    .withMessage('Selected disclosure is required')
+];
+
+const investmentExperienceValidation = [
+  body('investmentExperience')
+    .isIn(['none', 'beginner', 'intermediate', 'expert'])
+    .withMessage('Investment experience must be one of: none, beginner, intermediate, expert'),
+  body('selectedOption')
+    .trim()
+    .notEmpty()
+    .withMessage('Selected option is required')
+];
+
 // Routes (matching Rivenapp pattern exactly)
 
 // Get current user with personal details (matching Rivenapp pattern)
@@ -104,8 +175,12 @@ router.get('/current-user/personal-details', auth, onboardingController.getCurre
 // Submit onboarding steps (matching Rivenapp pattern)
 router.post('/personal-details', auth, personalDetailsValidation, onboardingController.submitPersonalDetails);
 router.post('/employment-info', auth, employmentDetailsValidation, onboardingController.submitEmploymentInfo);
+router.post('/source-of-wealth', auth, sourceOfWealthValidation, onboardingController.submitSourceOfWealth);
+router.post('/investing-savings', auth, investingSavingsValidation, onboardingController.submitInvestingSavings);
+router.post('/disclosures', auth, disclosuresValidation, onboardingController.submitDisclosures);
 router.post('/tax-info', auth, onboardingController.uploadTaxDocumentMiddleware, onboardingController.uploadTaxDocument);
 router.post('/kyc-info', auth, kycValidation, onboardingController.submitKycInfo);
+router.post('/investment-experience', auth, investmentExperienceValidation, onboardingController.submitInvestmentExperience);
 router.post('/trusted-contact', auth, trustedContactValidation, onboardingController.submitTrustedContact);
 
 // Individual document upload endpoints (matching Rivenapp pattern)

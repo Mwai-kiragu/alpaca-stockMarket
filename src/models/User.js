@@ -131,7 +131,29 @@ User.init({
     allowNull: true
   },
   registration_step: {
-    type: DataTypes.ENUM('email_verification', 'personal_info', 'employment_info', 'tax_info', 'phone_verification', 'address_info', 'kyc_verification', 'trusted_contact', 'documents', 'documents_id_front', 'documents_id_back', 'documents_proof_address', 'agreements', 'kyc_pending', 'kyc_under_review', 'completed', 'initial_completed'),
+    type: DataTypes.ENUM(
+      'email_verification',
+      'personal_info',
+      'employment_info',
+      'source_of_wealth',
+      'investing_savings',
+      'disclosures',
+      'tax_info',
+      'phone_verification',
+      'address_info',
+      'kyc_verification',
+      'investment_experience',
+      'trusted_contact',
+      'documents',
+      'documents_id_front',
+      'documents_id_back',
+      'documents_proof_address',
+      'agreements',
+      'kyc_pending',
+      'kyc_under_review',
+      'completed',
+      'initial_completed'
+    ),
     defaultValue: 'email_verification'
   },
   kyc_status: {
