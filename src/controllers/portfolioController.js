@@ -1,4 +1,4 @@
-const { User, Order } = require('../models');
+const { User, Order, Wallet } = require('../models');
 const alpacaService = require('../services/alpacaService');
 const exchangeService = require('../services/exchangeService');
 const logger = require('../utils/logger');
@@ -7,30 +7,49 @@ const getPortfolio = async (req, res) => {
   try {
     // Check if user has an Alpaca account
     const user = await User.findByPk(req.user.id);
+
+    // Get local wallet balance
+    let wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
+    if (!wallet) {
+      wallet = { kes_balance: 0, usd_balance: 0, frozen_kes: 0, frozen_usd: 0 };
+    }
+
+    const localKesBalance = parseFloat(wallet.kes_balance) || 0;
+    const localUsdBalance = parseFloat(wallet.usd_balance) || 0;
+
     if (!user || !user.alpaca_account_id) {
       const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
+      // Calculate portfolio value from local wallet only
+      const localCashUsd = localUsdBalance + (localKesBalance / exchangeRate);
+      const localCashKes = localKesBalance + (localUsdBalance * exchangeRate);
+
       return res.json({
         success: true,
         portfolio: {
           summary: {
-            totalEquity: 0,
-            totalEquityKES: 0,
+            totalEquity: localCashUsd,
+            totalEquityKES: localCashKes,
             dayChange: 0,
             dayChangeKES: 0,
             dayChangePercent: 0,
-            buyingPower: 0,
-            buyingPowerKES: 0,
-            cash: 0,
-            cashKES: 0,
-            portfolioValue: 0,
-            portfolioValueKES: 0,
+            buyingPower: localCashUsd,
+            buyingPowerKES: localCashKes,
+            cash: localCashUsd,
+            cashKES: localCashKes,
+            portfolioValue: localCashUsd,
+            portfolioValueKES: localCashKes,
             lastUpdated: new Date().toISOString()
           },
           positions: [],
           positionsCount: 0,
           exchangeRate,
           account: null,
-          message: 'No trading account found. Complete onboarding to start trading.'
+          localWallet: {
+            kesBalance: localKesBalance,
+            usdBalance: localUsdBalance
+          },
+          message: user ? 'No trading account found. Complete onboarding to start trading.' : null
         }
       });
     }
@@ -48,12 +67,20 @@ const getPortfolio = async (req, res) => {
       limit: 100
     });
 
-    // Calculate portfolio metrics
-    const equity = parseFloat(account.equity || 0);
+    // Calculate portfolio metrics from Alpaca
+    const alpacaEquity = parseFloat(account.equity || 0);
     const dayChange = parseFloat(account.unrealized_pl || 0);
-    const dayChangePercent = equity > 0 ? (dayChange / (equity - dayChange)) * 100 : 0;
-    const buyingPower = parseFloat(account.buying_power || 0);
-    const cash = parseFloat(account.cash || 0);
+    const dayChangePercent = alpacaEquity > 0 ? (dayChange / (alpacaEquity - dayChange)) * 100 : 0;
+    const alpacaBuyingPower = parseFloat(account.buying_power || 0);
+    const alpacaCash = parseFloat(account.cash || 0);
+
+    // Convert local wallet to USD and combine with Alpaca
+    const localCashUsd = localUsdBalance + (localKesBalance / exchangeRate);
+
+    // Total values = Alpaca + Local Wallet
+    const totalCash = alpacaCash + localCashUsd;
+    const totalEquity = alpacaEquity + localCashUsd;
+    const totalBuyingPower = alpacaBuyingPower + localCashUsd;
 
     // Format positions
     const formattedPositions = positions.map(position => {
@@ -89,17 +116,17 @@ const getPortfolio = async (req, res) => {
       success: true,
       portfolio: {
         summary: {
-          totalEquity: equity,
-          totalEquityKES: equity * exchangeRate,
+          totalEquity,
+          totalEquityKES: totalEquity * exchangeRate,
           dayChange,
           dayChangeKES: dayChange * exchangeRate,
           dayChangePercent: parseFloat(dayChangePercent.toFixed(2)),
-          buyingPower,
-          buyingPowerKES: buyingPower * exchangeRate,
-          cash,
-          cashKES: cash * exchangeRate,
-          portfolioValue: equity,
-          portfolioValueKES: equity * exchangeRate,
+          buyingPower: totalBuyingPower,
+          buyingPowerKES: totalBuyingPower * exchangeRate,
+          cash: totalCash,
+          cashKES: totalCash * exchangeRate,
+          portfolioValue: totalEquity,
+          portfolioValueKES: totalEquity * exchangeRate,
           lastUpdated: new Date().toISOString()
         },
         positions: formattedPositions,
@@ -112,6 +139,11 @@ const getPortfolio = async (req, res) => {
           transfersBlocked: account.transfers_blocked,
           accountBlocked: account.account_blocked,
           createdAt: account.created_at
+        },
+        localWallet: {
+          kesBalance: localKesBalance,
+          usdBalance: localUsdBalance,
+          totalUsd: localCashUsd
         }
       }
     });
