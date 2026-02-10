@@ -71,21 +71,32 @@ const createOrder = async (req, res) => {
       });
     }
 
+    const COMMISSION_RATE = 0.01;
+    const commissionUsd = orderValue * COMMISSION_RATE;
+    const totalCostUsd = orderValue + commissionUsd;
+
     let finalOrderValue = orderValue;
     let exchangeRate = 1;
     let requiredBalance;
     let walletCurrency;
 
+    let commissionInUserCurrency = commissionUsd;
+    let totalCostInUserCurrency = totalCostUsd;
+
     // Handle currency conversion if needed
     if (currency === 'KES') {
-      // Convert KES to USD for Alpaca
+      // Convert USD to KES for user display/charging
       const conversion = await exchangeService.convertKEStoUSD(orderValue);
       finalOrderValue = conversion.finalAmount;
       exchangeRate = conversion.rate;
-      requiredBalance = orderValue;
+
+      const orderValueKes = orderValue * exchangeRate;
+      commissionInUserCurrency = commissionUsd * exchangeRate;
+      totalCostInUserCurrency = orderValueKes + commissionInUserCurrency;
+
+      requiredBalance = totalCostInUserCurrency;
       walletCurrency = 'KES';
 
-      // Check KES balance
       if (side === 'buy' && wallet.availableKes < requiredBalance) {
         const shortfall = requiredBalance - wallet.availableKes;
         return res.status(400).json({
@@ -97,6 +108,11 @@ const createOrder = async (req, res) => {
             required: `KES ${requiredBalance.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
             available: `KES ${wallet.availableKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
             shortfall: `KES ${shortfall.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            breakdown: {
+              stockValue: `KES ${orderValueKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              commission: `KES ${commissionInUserCurrency.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`,
+              total: `KES ${requiredBalance.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            },
             suggestions: [
               'Deposit more funds to your KES wallet',
               'Reduce the order quantity',
@@ -108,10 +124,10 @@ const createOrder = async (req, res) => {
       }
     } else {
       // USD order
-      requiredBalance = orderValue;
+      requiredBalance = totalCostUsd; // Total including commission
       walletCurrency = 'USD';
 
-      // Check USD balance
+      // Check USD balance (now includes commission)
       if (side === 'buy' && wallet.availableUsd < requiredBalance) {
         const shortfall = requiredBalance - wallet.availableUsd;
         return res.status(400).json({
@@ -123,6 +139,11 @@ const createOrder = async (req, res) => {
             required: `$${requiredBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
             available: `$${wallet.availableUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
             shortfall: `$${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            breakdown: {
+              stockValue: `$${orderValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+              commission: `$${commissionUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`,
+              total: `$${requiredBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            },
             suggestions: [
               'Deposit more funds to your USD wallet',
               'Reduce the order quantity',
@@ -148,6 +169,17 @@ const createOrder = async (req, res) => {
       currency,
       exchange_rate: exchangeRate,
       status: 'pending',
+      fees: {
+        commission: {
+          rate: COMMISSION_RATE,
+          percentage: '1%',
+          amountUsd: commissionUsd,
+          amountInUserCurrency: commissionInUserCurrency,
+          currency: walletCurrency
+        },
+        totalCost: totalCostInUserCurrency,
+        stockValue: currency === 'KES' ? orderValue * exchangeRate : orderValue
+      },
       metadata: {
         client_order_id: `ORDER_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         estimated_price: estimatedPrice,
@@ -216,7 +248,15 @@ const createOrder = async (req, res) => {
           orderValue: order.order_value,
           currency: order.currency,
           exchangeRate: order.exchange_rate,
+          fees: order.fees,
           createdAt: order.createdAt
+        },
+        costBreakdown: {
+          stockValue: order.fees.stockValue,
+          commission: order.fees.commission.amountInUserCurrency,
+          commissionRate: order.fees.commission.percentage,
+          totalCost: order.fees.totalCost,
+          currency: order.currency
         }
       });
 
@@ -488,24 +528,35 @@ const handleOrderFill = async (order) => {
     const wallet = await Wallet.findOne({ where: { user_id: order.user_id } });
     const user = await User.findByPk(order.user_id);
 
+    // Get commission from order fees
+    const commission = order.fees?.commission?.amountInUserCurrency || 0;
+
     if (order.side === 'buy') {
-      // Unfreeze any remaining funds
-      const remainingFrozen = order.order_value - (order.filled_quantity * order.average_price);
+      // Unfreeze any remaining funds (includes commission that was frozen)
+      const totalFrozen = order.fees?.totalCost || order.order_value;
+      const actualStockCost = order.filled_quantity * order.average_price;
+      const remainingFrozen = totalFrozen - actualStockCost - commission;
+
       if (remainingFrozen > 0) {
         await wallet.unfreezeFunds(remainingFrozen, order.currency);
       }
 
-      // Deduct the actual filled amount
-      const actualCost = order.filled_quantity * order.average_price;
-      await wallet.updateBalance(actualCost, order.currency, 'subtract');
+      // Deduct the actual filled amount (stock cost)
+      await wallet.updateBalance(actualStockCost, order.currency, 'subtract');
+
+      // Deduct the commission (platform fee)
+      if (commission > 0) {
+        await wallet.updateBalance(commission, order.currency, 'subtract');
+      }
 
     } else if (order.side === 'sell') {
-      // Credit the sale proceeds
+      // Credit the sale proceeds (minus commission)
       const saleProceeds = order.filled_quantity * order.average_price;
-      await wallet.updateBalance(saleProceeds, order.currency, 'add');
+      const netProceeds = saleProceeds - commission;
+      await wallet.updateBalance(netProceeds, order.currency, 'add');
     }
 
-    // Create transaction record
+    // Create transaction record for the trade
     await Transaction.create({
       wallet_id: wallet.id,
       type: order.side === 'buy' ? 'trade_buy' : 'trade_sell',
@@ -524,6 +575,30 @@ const handleOrderFill = async (order) => {
       }
     });
 
+    // Create separate transaction record for commission (platform revenue)
+    if (commission > 0) {
+      await Transaction.create({
+        wallet_id: wallet.id,
+        type: 'fee', // Using 'fee' type for platform commission
+        amount: -commission, // Negative because it's deducted from user
+        currency: order.currency,
+        status: 'completed',
+        reference: `FEE_${order.id}`,
+        exchange_rate: order.exchange_rate,
+        description: `Platform commission (1%) for ${order.side.toUpperCase()} ${order.symbol}`,
+        metadata: {
+          order_id: order.id,
+          symbol: order.symbol,
+          fee_type: 'commission',
+          commission_rate: '1%',
+          stock_value: order.filled_quantity * order.average_price,
+          commission_amount: commission
+        }
+      });
+
+      logger.info(`Commission collected for order ${order.id}: ${order.currency} ${commission.toFixed(2)}`);
+    }
+
     // Send notification email
     try {
       await emailService.sendTransactionEmail(user, {
@@ -535,7 +610,8 @@ const handleOrderFill = async (order) => {
         metadata: {
           symbol: order.symbol,
           quantity: order.filled_quantity,
-          price: order.average_price
+          price: order.average_price,
+          commission: commission
         }
       });
     } catch (emailError) {
