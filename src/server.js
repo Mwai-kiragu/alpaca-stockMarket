@@ -25,6 +25,7 @@ const notificationRoutes = require('./routes/notifications');
 const supportRoutes = require('./routes/support');
 
 const app = express();
+app.set('trust proxy', 1);
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
