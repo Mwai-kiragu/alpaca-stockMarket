@@ -1,0 +1,60 @@
+name: Deploy Development
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      VM_USER: ${{ secrets.VM_USER }}
+      DEPLOY_PATH: /var/www/riven-dev
+      PM2_NAME: riven-dev
+      APP_PORT: "3000"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "$VM_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+
+      - name: Sync files to VM
+        run: |
+          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=10"
+          ssh $SSH_OPTS "$VM_USER@$VM_HOST" "mkdir -p $DEPLOY_PATH"
+          tar --exclude='.git' \
+              --exclude='node_modules' \
+              --exclude='.env' \
+              --exclude='*.log' \
+              -czf - . | \
+            ssh $SSH_OPTS "$VM_USER@$VM_HOST" "cd $DEPLOY_PATH && tar -xzf -"
+
+      - name: Write env file
+        run: |
+          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+          echo "$DEV_ENV" | ssh $SSH_OPTS "$VM_USER@$VM_HOST" "cat > $DEPLOY_PATH/.env"
+        env:
+          DEV_ENV: ${{ secrets.DEV_ENV }}
+
+      - name: Install dependencies & run migrations
+        run: |
+          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=10"
+          ssh $SSH_OPTS "$VM_USER@$VM_HOST" \
+            "set -e && cd $DEPLOY_PATH && npm ci --omit=dev && npm run migrate 2>/dev/null || echo 'No migrations'"
+
+      - name: Restart PM2
+        run: |
+          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+          ssh $SSH_OPTS "$VM_USER@$VM_HOST" \
+            "cd $DEPLOY_PATH && pm2 delete $PM2_NAME 2>/dev/null; PORT=$APP_PORT pm2 start src/server.js --name $PM2_NAME && pm2 save"
