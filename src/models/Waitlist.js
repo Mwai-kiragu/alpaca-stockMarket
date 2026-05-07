@@ -30,7 +30,7 @@ Waitlist.init({
   sequelize,
   modelName: 'Waitlist',
   tableName: 'waitlist',
-  indexes: [{ fields: ['email'] }, { fields: ['createdAt'] }],
+  indexes: [{ fields: ['email'] }, { fields: ['created_at'] }],
 });
 
 module.exports = Waitlist;
