@@ -2,6 +2,7 @@ const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
 const { User, EmailVerificationToken, PhoneVerificationToken, PasswordResetToken, sequelize } = require('../models');
 const emailService = require('../services/emailService');
+const brevoEmailService = require('../services/brevoEmailService');
 const notificationService = require('../services/notificationService');
 const logger = require('../utils/logger');
 
@@ -209,8 +210,13 @@ const login = async (req, res) => {
         id: user.id,
         fullName: `${user.first_name} ${user.last_name}`,
         email: user.email,
+        phone: user.phone,
         requiresVerification,
         onboardingComplete,
+        registrationStep: user.registration_step,
+        // Security setup — app uses these to decide whether to prompt biometric/PIN
+        biometricEnabled: user.biometric_enabled,
+        pinEnabled: user.pin_enabled,
         // Referral info
         referralCode: user.referral_code,
         referralLink: `https://www.rivenapp.com/signup?ref=${user.referral_code}`,
@@ -1142,6 +1148,220 @@ const recoverAccount = async (req, res) => {
   }
 };
 
+const registerV2 = async (req, res) => {
+  try {
+    const { fullName, email, password, phoneNumber, citizenship, dateOfBirth, gender, ref, termsAccepted } = req.body;
+
+    logger.info(`V2 registration attempt for email: ${email}`);
+
+    const existingUser = await User.findOne({
+      where: { [Op.or]: [{ email }, { phone: phoneNumber }] }
+    });
+
+    if (existingUser) {
+      if (existingUser.email === email) {
+        return res.status(400).json({
+          success: false,
+          message: 'This email is already registered. Please log in or use "Forgot Password".'
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        message: 'This phone number is already registered. Please log in or contact support.'
+      });
+    }
+
+    const nameParts = fullName.trim().split(' ');
+    const firstName = nameParts[0];
+    const lastName = nameParts.slice(1).join(' ') || firstName;
+
+    let referrerId = null;
+    if (ref) {
+      const referrer = await User.findOne({ where: { referral_code: ref.toUpperCase() } });
+      if (referrer) referrerId = referrer.id;
+    }
+
+    const now = new Date();
+    const user = await User.create({
+      first_name: firstName,
+      last_name: lastName,
+      email,
+      phone: phoneNumber,
+      password,
+      citizenship: citizenship || 'Kenya',
+      date_of_birth: dateOfBirth || null,
+      gender: gender ? gender.toLowerCase() : 'not_specified',
+      terms_accepted: termsAccepted === true,
+      privacy_accepted: termsAccepted === true,
+      terms_accepted_at: termsAccepted === true ? now : null,
+      privacy_accepted_at: termsAccepted === true ? now : null,
+      registration_step: 'email_verification',
+      registration_status: 'started',
+      kyc_status: 'not_started',
+      referred_by: referrerId
+    });
+
+    const verificationCode = generateVerificationCode();
+    const verificationToken = EmailVerificationToken.generateToken();
+
+    await EmailVerificationToken.create({
+      user_id: user.id,
+      token: verificationToken,
+      verification_code: verificationCode,
+      expires_at: new Date(Date.now() + 10 * 60 * 1000)
+    });
+
+    logger.info(`V2 VERIFICATION CODE for ${email}: ${verificationCode}`);
+
+    brevoEmailService.sendVerificationCodeEmail(user, verificationCode)
+      .then(result => {
+        if (result.success) logger.info(`V2 verification email sent to ${email}`);
+        else logger.warn(`V2 failed to send verification email to ${email}: ${result.error || result.message}`);
+      })
+      .catch(err => logger.error(`V2 email service error for ${email}:`, err));
+
+    res.status(201).json({
+      success: true,
+      message: 'Registration successful. A verification code has been sent to your email.',
+      data: { email }
+    });
+  } catch (error) {
+    logger.error('V2 registration error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue creating your account. Please try again.'
+    });
+  }
+};
+
+// Step 2: Verify OTP — returns JWT so the user is immediately logged in
+const verifyEmailV2 = async (req, res) => {
+  try {
+    const { email, verificationCode } = req.body;
+
+    const user = await User.findOne({ where: { email } });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No account found with this email address.'
+      });
+    }
+
+    if (user.is_email_verified) {
+      return res.status(400).json({
+        success: false,
+        message: 'This email is already verified. Please log in.'
+      });
+    }
+
+    const emailToken = await EmailVerificationToken.findOne({
+      where: { user_id: user.id, verification_code: verificationCode, used: false }
+    });
+
+    if (!emailToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid verification code. Please check the code or request a new one.'
+      });
+    }
+
+    if (emailToken.isExpired()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification code has expired. Please request a new one.'
+      });
+    }
+
+    await user.update({
+      is_email_verified: true,
+      registration_step: 'initial_completed',
+      registration_status: 'email_verified',
+      last_login: new Date()
+    });
+    await emailToken.update({ used: true });
+
+    const token = generateToken(user.id);
+
+    logger.info(`V2 email verified, user logged in: ${email}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Email verified successfully.',
+      token,
+      user: {
+        id: user.id,
+        fullName: `${user.first_name} ${user.last_name}`,
+        email: user.email,
+        phone: user.phone,
+        citizenship: user.citizenship,
+        registrationStep: user.registration_step,
+        onboardingComplete: false,
+        referralCode: user.referral_code,
+        referralLink: `https://www.rivenapp.com/signup?ref=${user.referral_code}`,
+        referralsCount: user.referrals_count
+      }
+    });
+  } catch (error) {
+    logger.error('V2 verify email error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue verifying your code. Please try again.'
+    });
+  }
+};
+
+// Resend OTP — no auth required since user hasn't received a JWT yet
+const resendVerificationV2 = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const user = await User.findOne({ where: { email } });
+
+    if (!user) {
+      // Don't reveal whether the account exists
+      return res.status(200).json({ success: true, message: 'If this email is registered, a new code has been sent.' });
+    }
+
+    if (user.is_email_verified) {
+      return res.status(400).json({ success: false, message: 'This email is already verified.' });
+    }
+
+    await EmailVerificationToken.update(
+      { used: true },
+      { where: { user_id: user.id, used: false } }
+    );
+
+    const verificationCode = generateVerificationCode();
+    const verificationToken = EmailVerificationToken.generateToken();
+
+    await EmailVerificationToken.create({
+      user_id: user.id,
+      token: verificationToken,
+      verification_code: verificationCode,
+      expires_at: new Date(Date.now() + 10 * 60 * 1000)
+    });
+
+    logger.info(`V2 RESEND VERIFICATION CODE for ${email}: ${verificationCode}`);
+
+    brevoEmailService.sendVerificationCodeEmail(user, verificationCode)
+      .then(result => {
+        if (result.success) logger.info(`V2 resend verification email sent to ${email}`);
+        else logger.warn(`V2 resend failed for ${email}: ${result.error || result.message}`);
+      })
+      .catch(err => logger.error(`V2 resend email error for ${email}:`, err));
+
+    res.status(200).json({ success: true, message: 'Verification code resent successfully.' });
+  } catch (error) {
+    logger.error('V2 resend verification error:', error);
+    res.status(500).json({ success: false, message: 'We encountered an issue. Please try again.' });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -1157,5 +1377,9 @@ module.exports = {
   getCurrentUser,
   // Account management
   deleteAccount,
-  recoverAccount
+  recoverAccount,
+  // V2 signup flow
+  registerV2,
+  verifyEmailV2,
+  resendVerificationV2
 };

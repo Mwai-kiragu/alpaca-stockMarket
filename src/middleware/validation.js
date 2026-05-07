@@ -367,8 +367,58 @@ const withdrawalValidation = [
   handleValidationErrors
 ];
 
+const emailValidator = [
+  body('email')
+    .custom((value) => {
+      if (!value || value.trim().length === 0) throw new Error('Email is required');
+      const gmailAliasRegex = /^[a-zA-Z0-9._%+-]+\+[a-zA-Z0-9._%-]*@gmail\.com$/;
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+      const testEmailRegex = /^[a-zA-Z0-9._%+-]+@test\.com$/;
+      if (gmailAliasRegex.test(value) || emailRegex.test(value) || testEmailRegex.test(value)) return true;
+      throw new Error('Please enter a valid email address');
+    })
+];
+
+const registerV2Validation = [
+  body('fullName')
+    .trim()
+    .isLength({ min: 2 })
+    .withMessage('Full name must be at least 2 characters'),
+  ...emailValidator,
+  body('phoneNumber')
+    .isMobilePhone('any')
+    .withMessage('Valid phone number is required'),
+  body('password')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters')
+    .custom((value) => {
+      if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'testing') return true;
+      if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(value)) {
+        throw new Error('Password must contain at least one uppercase letter, one lowercase letter, and one number');
+      }
+      return true;
+    }),
+  body('citizenship')
+    .trim()
+    .notEmpty()
+    .withMessage('Citizenship is required'),
+  body('dateOfBirth')
+    .isISO8601()
+    .withMessage('Valid date of birth is required (YYYY-MM-DD)'),
+  body('gender')
+    .isIn(['male', 'female', 'other', 'Male', 'Female', 'Other'])
+    .withMessage('Gender must be male, female, or other'),
+  body('termsAccepted')
+    .custom((value) => {
+      if (value !== true) throw new Error('You must accept the Terms & Conditions to continue');
+      return true;
+    }),
+  handleValidationErrors
+];
+
 module.exports = {
   registerValidation,
+  registerV2Validation,
   loginValidation,
   orderValidation,
   depositValidation,

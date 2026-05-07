@@ -12,11 +12,15 @@ const {
   resetPassword,
   getCurrentUser,
   deleteAccount,
-  recoverAccount
+  recoverAccount,
+  registerV2,
+  verifyEmailV2,
+  resendVerificationV2
 } = require('../controllers/authController');
 const { auth } = require('../middleware/auth');
 const {
   registerValidation,
+  registerV2Validation,
   loginValidation
 } = require('../middleware/validation');
 
@@ -51,5 +55,10 @@ router.get('/current-user', auth, getCurrentUser);
 // Account management
 router.delete('/delete-account', auth, deleteAccount);
 router.post('/recover-account', recoverAccount);
+
+// V2 signup flow
+router.post('/v2/register', registerV2Validation, registerV2);
+router.post('/v2/verify-email', verifyEmailV2);
+router.post('/v2/resend-verification', resendVerificationV2);
 
 module.exports = router;

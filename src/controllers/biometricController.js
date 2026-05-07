@@ -408,7 +408,7 @@ const setPin = async (req, res) => {
     const pinHash = await bcrypt.hash(pin, salt);
 
     await User.update(
-      { pin_hash: pinHash },
+      { pin_hash: pinHash, pin_enabled: true },
       { where: { id: userId } }
     );
 
