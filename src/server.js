@@ -23,6 +23,7 @@ const updatesRoutes = require('./routes/updates');
 const searchRoutes = require('./routes/search');
 const notificationRoutes = require('./routes/notifications');
 const supportRoutes = require('./routes/support');
+const waitlistRoutes = require('./routes/waitlist');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -63,6 +64,7 @@ app.use('/api/v1/updates', updatesRoutes);
 app.use('/api/v1/search', searchRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/support', supportRoutes);
+app.use('/api/v1/waitlist', waitlistRoutes);
 
 app.get('/health', (req, res) => {
   res.status(200).json({

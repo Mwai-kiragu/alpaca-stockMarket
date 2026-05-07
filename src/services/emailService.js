@@ -356,6 +356,49 @@ class EmailService {
     });
   }
 
+  async sendWaitlistConfirmationEmail(email, name) {
+    const firstName = name ? name.split(' ')[0] : 'there';
+    const html = `
+      <div style="max-width:600px;margin:0 auto;padding:40px 20px;font-family:'Helvetica Neue',Arial,sans-serif;background:#ffffff;">
+        <div style="text-align:center;margin-bottom:40px;">
+          <h1 style="font-size:32px;font-weight:800;color:#111111;margin:0;letter-spacing:-1px;">Riven</h1>
+        </div>
+
+        <div style="border:1px solid #eeeeee;border-radius:12px;padding:32px;margin-bottom:32px;">
+          <h2 style="font-size:22px;font-weight:700;color:#111111;margin:0 0 12px;">You're on the list, ${firstName}.</h2>
+          <p style="color:#555555;line-height:1.7;margin:0 0 20px;">
+            Thanks for joining the Riven waitlist. We're building a better way to invest — across African markets and beyond.
+          </p>
+          <p style="color:#555555;line-height:1.7;margin:0;">
+            When we're ready for you, you'll be the first to know. Keep an eye on your inbox.
+          </p>
+        </div>
+
+        <div style="background:#f7f7f7;border-radius:12px;padding:24px;margin-bottom:32px;">
+          <h3 style="font-size:14px;font-weight:700;color:#111111;margin:0 0 16px;text-transform:uppercase;letter-spacing:0.5px;">What's coming</h3>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <p style="color:#555555;margin:0;line-height:1.6;">&#x2713;&nbsp; Trade US stocks &amp; African markets from one app</p>
+            <p style="color:#555555;margin:0;line-height:1.6;">&#x2713;&nbsp; Fund with M-Pesa and local payment methods</p>
+            <p style="color:#555555;margin:0;line-height:1.6;">&#x2713;&nbsp; AI-powered insights tailored for African investors</p>
+            <p style="color:#555555;margin:0;line-height:1.6;">&#x2713;&nbsp; Learn investing through Riven Academy</p>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid #eeeeee;padding-top:24px;text-align:center;color:#999999;font-size:12px;">
+          <p style="margin:0;">You're receiving this because you signed up at rivenapp.com</p>
+          <p style="margin:8px 0 0;">© ${new Date().getFullYear()} Riven. All rights reserved.</p>
+        </div>
+      </div>
+    `;
+
+    return this.sendEmail({
+      to: email,
+      subject: "You're on the Riven waitlist",
+      html,
+      text: `Hi ${firstName},\n\nThanks for joining the Riven waitlist. We're building a better way to invest across African markets and beyond. You'll hear from us soon.\n\n— The Riven Team`,
+    });
+  }
+
   async sendSupportTicketEmail(user, ticketData) {
     let html, subject;
 

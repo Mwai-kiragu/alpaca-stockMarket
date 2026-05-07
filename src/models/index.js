@@ -5,6 +5,7 @@ const Order = require('./Order');
 const Notification = require('./Notification');
 const { SupportTicket, SupportTicketMessage } = require('./SupportTicket');
 const EmailVerificationToken = require('./EmailVerificationToken');
+const Waitlist = require('./Waitlist');
 
 // Define associations
 User.hasOne(Wallet, { foreignKey: 'user_id', as: 'wallet' });
@@ -37,5 +38,6 @@ module.exports = {
   Notification,
   SupportTicket,
   SupportTicketMessage,
-  EmailVerificationToken
+  EmailVerificationToken,
+  Waitlist,
 };
