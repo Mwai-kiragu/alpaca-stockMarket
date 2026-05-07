@@ -42,8 +42,9 @@ jobs:
 
       - name: Write env file
         run: |
-          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
-          echo "$DEV_ENV" | ssh $SSH_OPTS "$VM_USER@$VM_HOST" "cat > $DEPLOY_PATH/.env"
+          printf '%s' "$DEV_ENV" > /tmp/dev.env
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no /tmp/dev.env "$VM_USER@$VM_HOST:$DEPLOY_PATH/.env"
+          rm /tmp/dev.env
         env:
           DEV_ENV: ${{ secrets.DEV_ENV }}
 
