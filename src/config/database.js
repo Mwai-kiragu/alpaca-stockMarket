@@ -48,7 +48,7 @@ const connectDB = async () => {
     logger.info(`PostgreSQL Connected: ${sequelize.config.host}:${sequelize.config.port}`);
 
     if (process.env.NODE_ENV !== 'production') {
-      await sequelize.sync({ alter: true });
+      await sequelize.sync({ alter: false }); // Changed from alter: true to prevent schema changes
       logger.info('Database synchronized');
     }
   } catch (error) {
@@ -58,7 +58,8 @@ const connectDB = async () => {
     logger.info('2. Start PostgreSQL: brew services start postgresql');
     logger.info('3. Create database: createdb trading_platform');
     logger.info('4. Update .env with correct DATABASE_URL');
-    process.exit(1);
+    // Don't exit the process - just log the error and continue
+    logger.warn('Server will continue running without database connection');
   }
 };
 

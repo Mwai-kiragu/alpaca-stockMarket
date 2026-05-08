@@ -56,6 +56,55 @@ const getMarketNews = async (req, res) => {
   }
 };
 
+const getNewsById = async (req, res) => {
+  try {
+    const { newsId } = req.params;
+
+    if (!newsId) {
+      return res.status(400).json({
+        success: false,
+        message: 'News ID is required'
+      });
+    }
+
+    // Fetch recent news and find the specific article
+    const news = await alpacaService.getNews(null, 50); // Max limit allowed by Alpaca
+    const article = news.find(item => item.id === newsId || item.id === parseInt(newsId));
+
+    if (!article) {
+      return res.status(404).json({
+        success: false,
+        message: 'News article not found'
+      });
+    }
+
+    const formattedArticle = {
+      id: article.id,
+      headline: article.headline,
+      summary: article.summary,
+      content: article.content,
+      author: article.author,
+      source: article.source,
+      publishedAt: article.published_at,
+      updatedAt: article.updated_at,
+      url: article.url,
+      symbols: article.symbols || [],
+      images: article.images || []
+    };
+
+    res.json({
+      success: true,
+      article: formattedArticle
+    });
+  } catch (error) {
+    logger.error('Get news by ID error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch news article'
+    });
+  }
+};
+
 const getEducationalContent = async (req, res) => {
   try {
     const { category = 'trading', level = 'beginner', limit = 10 } = req.query;
@@ -279,7 +328,7 @@ const getMarketInsights = async (req, res) => {
 
 const getEconomicCalendar = async (req, res) => {
   try {
-    const { start, end } = req.query;
+    const { start, end, isHoliday } = req.query;
 
     const defaultStart = start || new Date().toISOString().split('T')[0];
     const defaultEnd = end || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
@@ -319,6 +368,84 @@ const getEconomicCalendar = async (req, res) => {
       }
     ];
 
+    // Fetch real dividend data from Alpaca Corporate Actions API
+    // Note: Alpaca API has 90-day limit, so we need to split large date ranges
+    let dividendAnnouncements = [];
+    try {
+      const startDate = new Date(defaultStart);
+      const endDate = new Date(defaultEnd);
+      const daysDiff = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
+
+      if (daysDiff <= 90) {
+        // Single request for ranges <= 90 days
+        dividendAnnouncements = await alpacaService.getCorporateActions({
+          ca_types: 'dividend',
+          since: defaultStart,
+          until: defaultEnd,
+          date_type: 'ex_date'
+        });
+      } else {
+        // Split into 90-day chunks for larger ranges
+        const allAnnouncements = [];
+        let currentStart = new Date(startDate);
+
+        while (currentStart <= endDate) {
+          const currentEnd = new Date(currentStart);
+          currentEnd.setDate(currentEnd.getDate() + 89); // 90 days inclusive
+
+          if (currentEnd > endDate) {
+            currentEnd.setTime(endDate.getTime());
+          }
+
+          const chunkStart = currentStart.toISOString().split('T')[0];
+          const chunkEnd = currentEnd.toISOString().split('T')[0];
+
+          const chunk = await alpacaService.getCorporateActions({
+            ca_types: 'dividend',
+            since: chunkStart,
+            until: chunkEnd,
+            date_type: 'ex_date'
+          });
+
+          allAnnouncements.push(...chunk);
+
+          // Move to next chunk
+          currentStart.setDate(currentStart.getDate() + 90);
+        }
+
+        dividendAnnouncements = allAnnouncements;
+      }
+
+      logger.info(`Fetched ${dividendAnnouncements.length} dividend announcements from Alpaca`);
+      if (dividendAnnouncements.length > 0) {
+        logger.info('Sample dividend announcement structure:', JSON.stringify(dividendAnnouncements[0], null, 2));
+      }
+    } catch (error) {
+      logger.warn('Failed to fetch dividend announcements:', error);
+    }
+
+    // Transform Alpaca corporate actions response to dividend events format
+    const dividendEvents = dividendAnnouncements
+      .filter(announcement => announcement && announcement.target_symbol)
+      .map(announcement => ({
+        id: announcement.id,
+        symbol: announcement.target_symbol,
+        title: `${announcement.target_symbol} Dividend`,
+        description: announcement.cash?.rate ? `$${announcement.cash.rate} per share` : 'Dividend payment',
+        exDividendDate: announcement.ex_date,
+        declarationDate: announcement.declaration_date,
+        recordDate: announcement.record_date,
+        paymentDate: announcement.payable_date,
+        amount: announcement.cash?.rate || 0,
+        currency: announcement.cash?.currency || 'USD',
+        frequency: announcement.cash?.frequency || 'quarterly',
+        category: 'dividend',
+        caType: announcement.ca_type,
+        caSubType: announcement.ca_sub_type
+      }));
+
+    logger.info(`After filtering and transformation: ${dividendEvents.length} dividend events`);
+
     const formattedCalendar = calendar.map(day => ({
       date: day.date,
       marketOpen: day.open,
@@ -329,17 +456,27 @@ const getEconomicCalendar = async (req, res) => {
       events: economicEvents.filter(event => event.date === day.date)
     }));
 
+    // Filter by holiday status if isHoliday query parameter is provided
+    let filteredCalendar = formattedCalendar;
+    if (isHoliday !== undefined) {
+      const holidayFilter = isHoliday === 'true' || isHoliday === true;
+      filteredCalendar = formattedCalendar.filter(day => day.isHoliday === holidayFilter);
+    }
+
     res.json({
       success: true,
-      calendar: formattedCalendar,
+      calendar: filteredCalendar,
       economicEvents: economicEvents.filter(event =>
         event.date >= defaultStart && event.date <= defaultEnd
+      ),
+      dividends: dividendEvents.filter(dividend =>
+        dividend.exDividendDate >= defaultStart && dividend.exDividendDate <= defaultEnd
       ),
       period: {
         start: defaultStart,
         end: defaultEnd
       },
-      count: formattedCalendar.length
+      count: filteredCalendar.length
     });
   } catch (error) {
     logger.error('Get economic calendar error:', error);
@@ -511,6 +648,7 @@ const calculateMaxDrawdown = (prices) => {
 
 module.exports = {
   getMarketNews,
+  getNewsById,
   getEducationalContent,
   getMarketInsights,
   getEconomicCalendar,

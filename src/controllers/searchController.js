@@ -1,6 +1,10 @@
 const alpacaService = require('../services/alpacaService');
+const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
 const logger = require('../utils/logger');
+
+const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
+const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
 
 const searchStocks = async (req, res) => {
   try {
@@ -11,6 +15,12 @@ const searchStocks = async (req, res) => {
         success: false,
         message: 'Search query must be at least 2 characters long'
       });
+    }
+
+    // African exchange → MyStocks search
+    if (isAfrican(exchange)) {
+      const data = await ms.getStocks({ exchange: exchange.toUpperCase(), search: query.trim(), limit });
+      return res.json({ success: true, provider: 'mystocks', results: data, count: Array.isArray(data) ? data.length : 0 });
     }
 
     const searchQuery = query.toLowerCase().trim();

@@ -2,31 +2,63 @@ const express = require('express');
 const {
   register,
   login,
+  requestVerification,
+  verifyCode,
+  getAlpacaTerms,
+  acceptTermsAndPrivacy,
   getMe,
-  updateProfile,
-  submitKYC,
-  changePassword,
-  forgotPassword,
-  verifyEmail,
-  resendVerificationEmail
+  checkKYCStatus,
+  requestPasswordReset,
+  resetPassword,
+  getCurrentUser,
+  deleteAccount,
+  recoverAccount,
+  registerV2,
+  verifyEmailV2,
+  resendVerificationV2
 } = require('../controllers/authController');
 const { auth } = require('../middleware/auth');
 const {
   registerValidation,
-  loginValidation,
-  kycValidation
+  registerV2Validation,
+  loginValidation
 } = require('../middleware/validation');
 
 const router = express.Router();
 
+// Authentication endpoints
 router.post('/register', registerValidation, register);
 router.post('/login', loginValidation, login);
+
+// Verification endpoints
+router.post('/request-verification', auth, requestVerification);
+// TEMPORARILY REMOVED AUTH: Will add back when email service is ready
+router.post('/verify', verifyCode);
+
+// Get Alpaca terms and privacy policy
+router.get('/alpaca-terms', getAlpacaTerms);
+
+// Accept terms and privacy policy
+router.post('/accept-terms', auth, acceptTermsAndPrivacy);
+
+// User profile
 router.get('/me', auth, getMe);
-router.put('/profile', auth, updateProfile);
-router.post('/kyc', auth, kycValidation, submitKYC);
-router.put('/change-password', auth, changePassword);
-router.post('/forgot-password', forgotPassword);
-router.get('/verify-email', verifyEmail);
-router.post('/resend-verification', auth, resendVerificationEmail);
+
+// Check KYC status from Alpaca
+router.get('/kyc-status', auth, checkKYCStatus);
+
+// Rivenapp pattern endpoints (matching C# API structure)
+router.post('/request-password-reset', requestPasswordReset);
+router.post('/reset-password', resetPassword);
+router.get('/current-user', auth, getCurrentUser);
+
+// Account management
+router.delete('/delete-account', auth, deleteAccount);
+router.post('/recover-account', recoverAccount);
+
+// V2 signup flow
+router.post('/v2/register', registerV2Validation, registerV2);
+router.post('/v2/verify-email', verifyEmailV2);
+router.post('/v2/resend-verification', resendVerificationV2);
 
 module.exports = router;

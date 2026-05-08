@@ -16,6 +16,7 @@ pids
 .env.development.local
 .env.test.local
 .env.production.local
+.env.example
 
 # Logs
 logs/
@@ -90,3 +91,36 @@ data/
 
 # Redis
 dump.rdb
+
+.env.testsms
+API_ENDPOINTS_NOTIFICATIONS.md
+FIREBASE_SETUP.md
+NOTIFICATION_SYSTEM.md
+POSTGRESQL_SETUP.md
+INSTALLATION.md
+DATABASE_UPDATE.md
+.env.example
+.claude
+API_ENDPOINTS_ASSETS.md
+API_ENDPOINTS_WATCHLIST.md
+.env.backup
+complete-flow-funding.md
+FUNDING_SYSTEM.md
+CALLBACK_TROUBLESHOOTING.md
+COMPLETE_USER_FLOW.md
+HOW_TO_CHECK_PAYMENT_STATUS.md
+KCB_INTEGRATION.md
+KCB_SUPPORT_REQUEST.md
+test-kcb-callback.js
+test-kcb-stkpush.js
+test-kcb.js
+WITHDRAWAL_GUIDE.md
+WITHDRAWAL_METHODS.md
+docs
+examples
+postman
+riven-postman-collection.json
+ENDPOINTS.md
+.env.dev
+.env.example
+.env.testsms

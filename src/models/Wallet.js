@@ -5,11 +5,11 @@ class Transaction extends Model {}
 
 class Wallet extends Model {
   get availableKes() {
-    return this.kes_balance - this.frozen_kes;
+    return parseFloat(this.kes_balance || 0) - parseFloat(this.frozen_kes || 0);
   }
 
   get availableUsd() {
-    return this.usd_balance - this.frozen_usd;
+    return parseFloat(this.usd_balance || 0) - parseFloat(this.frozen_usd || 0);
   }
 
   async addTransaction(transactionData) {
@@ -23,43 +23,70 @@ class Wallet extends Model {
   }
 
   async freezeFunds(amount, currency) {
+    const parsedAmount = parseFloat(amount);
+
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      throw new Error('Invalid amount to freeze');
+    }
+
     if (currency === 'KES') {
-      if (this.availableKes < amount) {
+      if (this.availableKes < parsedAmount) {
         throw new Error('Insufficient KES balance');
       }
-      this.frozen_kes += amount;
+      const currentFrozen = parseFloat(this.frozen_kes) || 0;
+      this.frozen_kes = currentFrozen + parsedAmount;
     } else if (currency === 'USD') {
-      if (this.availableUsd < amount) {
+      if (this.availableUsd < parsedAmount) {
         throw new Error('Insufficient USD balance');
       }
-      this.frozen_usd += amount;
+      const currentFrozen = parseFloat(this.frozen_usd) || 0;
+      this.frozen_usd = currentFrozen + parsedAmount;
     }
+
     return this.save();
   }
 
   async unfreezeFunds(amount, currency) {
-    if (currency === 'KES') {
-      this.frozen_kes = Math.max(0, this.frozen_kes - amount);
-    } else if (currency === 'USD') {
-      this.frozen_usd = Math.max(0, this.frozen_usd - amount);
+    const parsedAmount = parseFloat(amount);
+
+    if (isNaN(parsedAmount) || parsedAmount < 0) {
+      throw new Error('Invalid amount to unfreeze');
     }
+
+    if (currency === 'KES') {
+      const currentFrozen = parseFloat(this.frozen_kes) || 0;
+      this.frozen_kes = Math.max(0, currentFrozen - parsedAmount);
+    } else if (currency === 'USD') {
+      const currentFrozen = parseFloat(this.frozen_usd) || 0;
+      this.frozen_usd = Math.max(0, currentFrozen - parsedAmount);
+    }
+
     return this.save();
   }
 
   async updateBalance(amount, currency, operation = 'add') {
+    const parsedAmount = parseFloat(amount);
+
+    if (isNaN(parsedAmount) || parsedAmount < 0) {
+      throw new Error('Invalid amount for balance update');
+    }
+
     if (currency === 'KES') {
+      const currentBalance = parseFloat(this.kes_balance) || 0;
       if (operation === 'add') {
-        this.kes_balance += amount;
+        this.kes_balance = currentBalance + parsedAmount;
       } else {
-        this.kes_balance = Math.max(0, this.kes_balance - amount);
+        this.kes_balance = Math.max(0, currentBalance - parsedAmount);
       }
     } else if (currency === 'USD') {
+      const currentBalance = parseFloat(this.usd_balance) || 0;
       if (operation === 'add') {
-        this.usd_balance += amount;
+        this.usd_balance = currentBalance + parsedAmount;
       } else {
-        this.usd_balance = Math.max(0, this.usd_balance - amount);
+        this.usd_balance = Math.max(0, currentBalance - parsedAmount);
       }
     }
+
     return this.save();
   }
 }

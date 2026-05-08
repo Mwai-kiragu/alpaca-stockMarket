@@ -3,39 +3,391 @@ const logger = require('../utils/logger');
 
 class AlpacaService {
   constructor() {
-    this.apiKey = process.env.ALPACA_API_KEY;
-    this.secretKey = process.env.ALPACA_SECRET_KEY;
-    this.baseUrl = process.env.ALPACA_BASE_URL || 'https://paper-api.alpaca.markets';
-    this.dataBaseUrl = process.env.ALPACA_DATA_BASE_URL || 'https://data.alpaca.markets';
+    // Trading mode: 'paper' or 'live'
+    this.tradingMode = process.env.ALPACA_TRADING_MODE || 'paper';
+    this.isLiveMode = this.tradingMode === 'live';
 
+    // Broker API credentials (for account management)
+    this.brokerApiKey = process.env.ALPACA_BROKER_API_KEY;
+    this.brokerSecretKey = process.env.ALPACA_BROKER_SECRET_KEY;
+    this.brokerUrl = process.env.ALPACA_BROKER_API_URL || 'https://broker-api.sandbox.alpaca.markets';
+
+    // Paper Trading API credentials
+    this.paperApiKey = process.env.ALPACA_PAPER_API_KEY;
+    this.paperSecretKey = process.env.ALPACA_PAPER_SECRET_KEY;
+    this.paperUrl = process.env.ALPACA_PAPER_API_URL || 'https://paper-api.alpaca.markets';
+
+    // Live Trading API credentials
+    this.liveApiKey = process.env.ALPACA_LIVE_API_KEY;
+    this.liveSecretKey = process.env.ALPACA_LIVE_SECRET_KEY;
+    this.liveUrl = process.env.ALPACA_LIVE_API_URL || 'https://api.alpaca.markets';
+
+    this.apiKey = this.brokerApiKey;
+    this.secretKey = this.brokerSecretKey;
+
+    // Set trading URL based on mode
+    this.tradingUrl = this.isLiveMode ? this.liveUrl : this.paperUrl;
+    this.baseUrl = this.brokerUrl;
+    this.dataBaseUrl = 'https://data.alpaca.markets';
+
+    // Broker API headers (for account management)
     this.tradingHeaders = {
-      'APCA-API-KEY-ID': this.apiKey,
-      'APCA-API-SECRET-KEY': this.secretKey,
+      'APCA-API-KEY-ID': this.brokerApiKey,
+      'APCA-API-SECRET-KEY': this.brokerSecretKey,
       'Content-Type': 'application/json'
     };
+
+    // Paper Trading headers
+    this.paperHeaders = {
+      'APCA-API-KEY-ID': this.paperApiKey,
+      'APCA-API-SECRET-KEY': this.paperSecretKey,
+      'Content-Type': 'application/json'
+    };
+
+    // Live Trading headers
+    this.liveHeaders = {
+      'APCA-API-KEY-ID': this.liveApiKey,
+      'APCA-API-SECRET-KEY': this.liveSecretKey,
+      'Content-Type': 'application/json'
+    };
+
+    // Active trading headers (based on mode)
+    this.activeTradingHeaders = this.isLiveMode ? this.liveHeaders : this.paperHeaders;
+
+    logger.info(`Alpaca Service initialized in ${this.tradingMode.toUpperCase()} mode`, {
+      tradingUrl: this.tradingUrl,
+      brokerUrl: this.brokerUrl,
+      isLiveMode: this.isLiveMode
+    });
+  }
+
+  mapToUSState(state) {
+    if (!state) return 'NY';
+
+    const stateMapping = {
+      'Nairobi County': 'NY',
+      'Mombasa County': 'CA',
+      'Kisumu County': 'IL',
+      'Nakuru County': 'TX',
+      'Eldoret': 'FL',
+
+      'Lagos': 'NY',
+      'Johannesburg': 'CA',
+      'Cape Town': 'FL',
+      'London': 'NY',
+      'Toronto': 'NY',
+      'Vancouver': 'CA',
+
+      'County': 'NY',
+      'State': 'CA',
+      'Province': 'TX'
+    };
+
+    if (stateMapping[state]) {
+      return stateMapping[state];
+    }
+
+    for (const [key, value] of Object.entries(stateMapping)) {
+      if (state.toLowerCase().includes(key.toLowerCase())) {
+        return value;
+      }
+    }
+    return 'NY';
+  }
+
+  mapToUSCity(city) {
+    if (!city) return 'New York';
+
+    const cityMapping = {
+      'Nairobi': 'New York',
+      'Mombasa': 'Los Angeles',
+      'Kisumu': 'Chicago',
+      'Nakuru': 'Dallas',
+      'Eldoret': 'Miami',
+      'Lagos': 'New York',
+      'Johannesburg': 'Los Angeles',
+      'Cape Town': 'San Francisco',
+      'London': 'Boston',
+      'Toronto': 'Detroit',
+      'Vancouver': 'Seattle'
+    };
+
+    return cityMapping[city] || city;
+  }
+
+  mapToUSZipCode(zipCode) {
+    if (!zipCode) return '10001';
+
+    if (zipCode.startsWith('00')) return '10001';
+    if (zipCode.startsWith('20')) return '90210';
+    if (zipCode.startsWith('40')) return '60601';
+    if (zipCode.startsWith('30')) return '75201';
+
+    if (/^\d{5}(-\d{4})?$/.test(zipCode)) {
+      return zipCode;
+    }
+    return '10001';
+  }
+
+  mapCountryToAlpacaFormat(country) {
+    if (!country) return 'USA';
+
+    const countryMappings = {
+      // Major markets
+      'kenya': 'KEN',
+      'united states': 'USA',
+      'usa': 'USA',
+      'united kingdom': 'GBR',
+      'uk': 'GBR',
+      'canada': 'CAN',
+      'australia': 'AUS',
+      'south africa': 'ZAF',
+
+      // African countries
+      'nigeria': 'NGA',
+      'ghana': 'GHA',
+      'uganda': 'UGA',
+      'tanzania': 'TZA',
+      'rwanda': 'RWA',
+      'ethiopia': 'ETH',
+      'egypt': 'EGY',
+      'morocco': 'MAR',
+      'botswana': 'BWA',
+      'zambia': 'ZMB',
+      'zimbabwe': 'ZWE',
+      'malawi': 'MWI',
+      'mozambique': 'MOZ',
+      'namibia': 'NAM',
+      'burundi': 'BDI',
+      'sudan': 'SDN',
+      'south sudan': 'SSD',
+      'somalia': 'SOM',
+      'democratic republic of congo': 'COD',
+      'congo': 'COG',
+      'cameroon': 'CMR',
+      'ivory coast': 'CIV',
+      'senegal': 'SEN',
+      'mali': 'MLI',
+      'burkina faso': 'BFA',
+      'niger': 'NER',
+      'chad': 'TCD',
+      'benin': 'BEN',
+      'togo': 'TGO',
+      'liberia': 'LBR',
+      'sierra leone': 'SLE',
+      'guinea': 'GIN',
+      'gambia': 'GMB',
+      'mauritania': 'MRT',
+      'algeria': 'DZA',
+      'tunisia': 'TUN',
+      'libya': 'LBY',
+      'madagascar': 'MDG',
+      'mauritius': 'MUS',
+      'seychelles': 'SYC',
+      'angola': 'AGO',
+      'gabon': 'GAB',
+      'equatorial guinea': 'GNQ',
+      'central african republic': 'CAF',
+      'djibouti': 'DJI',
+      'eritrea': 'ERI',
+      'lesotho': 'LSO',
+      'swaziland': 'SWZ',
+      'eswatini': 'SWZ',
+
+      // Asian countries
+      'china': 'CHN',
+      'india': 'IND',
+      'japan': 'JPN',
+      'indonesia': 'IDN',
+      'malaysia': 'MYS',
+      'singapore': 'SGP',
+      'thailand': 'THA',
+      'vietnam': 'VNM',
+      'philippines': 'PHL',
+      'south korea': 'KOR',
+      'taiwan': 'TWN',
+      'hong kong': 'HKG',
+      'pakistan': 'PAK',
+      'bangladesh': 'BGD',
+      'sri lanka': 'LKA',
+      'myanmar': 'MMR',
+      'cambodia': 'KHM',
+      'laos': 'LAO',
+      'brunei': 'BRN',
+
+      // European countries
+      'germany': 'DEU',
+      'france': 'FRA',
+      'italy': 'ITA',
+      'spain': 'ESP',
+      'netherlands': 'NLD',
+      'belgium': 'BEL',
+      'switzerland': 'CHE',
+      'austria': 'AUT',
+      'sweden': 'SWE',
+      'norway': 'NOR',
+      'denmark': 'DNK',
+      'finland': 'FIN',
+      'poland': 'POL',
+      'czech republic': 'CZE',
+      'slovakia': 'SVK',
+      'hungary': 'HUN',
+      'romania': 'ROU',
+      'bulgaria': 'BGR',
+      'greece': 'GRC',
+      'portugal': 'PRT',
+      'ireland': 'IRL',
+      'iceland': 'ISL',
+      'luxembourg': 'LUX',
+      'malta': 'MLT',
+      'cyprus': 'CYP',
+      'croatia': 'HRV',
+      'slovenia': 'SVN',
+      'serbia': 'SRB',
+      'montenegro': 'MNE',
+      'bosnia and herzegovina': 'BIH',
+      'macedonia': 'MKD',
+      'albania': 'ALB',
+      'estonia': 'EST',
+      'latvia': 'LVA',
+      'lithuania': 'LTU',
+      'ukraine': 'UKR',
+      'belarus': 'BLR',
+      'russia': 'RUS',
+      'moldova': 'MDA',
+
+      // Middle East
+      'saudi arabia': 'SAU',
+      'united arab emirates': 'ARE',
+      'uae': 'ARE',
+      'qatar': 'QAT',
+      'kuwait': 'KWT',
+      'bahrain': 'BHR',
+      'oman': 'OMN',
+      'israel': 'ISR',
+      'palestine': 'PSE',
+      'jordan': 'JOR',
+      'lebanon': 'LBN',
+      'syria': 'SYR',
+      'iraq': 'IRQ',
+      'iran': 'IRN',
+      'turkey': 'TUR',
+      'yemen': 'YEM',
+
+      // Americas
+      'brazil': 'BRA',
+      'argentina': 'ARG',
+      'chile': 'CHL',
+      'colombia': 'COL',
+      'peru': 'PER',
+      'venezuela': 'VEN',
+      'ecuador': 'ECU',
+      'bolivia': 'BOL',
+      'paraguay': 'PRY',
+      'uruguay': 'URY',
+      'guyana': 'GUY',
+      'suriname': 'SUR',
+      'french guiana': 'GUF',
+      'mexico': 'MEX',
+      'guatemala': 'GTM',
+      'belize': 'BLZ',
+      'honduras': 'HND',
+      'el salvador': 'SLV',
+      'nicaragua': 'NIC',
+      'costa rica': 'CRI',
+      'panama': 'PAN',
+      'jamaica': 'JAM',
+      'haiti': 'HTI',
+      'dominican republic': 'DOM',
+      'cuba': 'CUB',
+      'puerto rico': 'PRI',
+      'trinidad and tobago': 'TTO',
+      'barbados': 'BRB',
+
+      // Oceania
+      'new zealand': 'NZL',
+      'fiji': 'FJI',
+      'papua new guinea': 'PNG',
+      'solomon islands': 'SLB',
+      'vanuatu': 'VUT',
+      'samoa': 'WSM',
+      'tonga': 'TON',
+      'palau': 'PLW'
+    };
+
+    const normalizedCountry = country.toLowerCase().trim();
+    return countryMappings[normalizedCountry] || 'USA'; // Default to USA for Alpaca compatibility
   }
 
   async createAccount(userData) {
     try {
+      // Generate a realistic test SSN for sandbox
+      const generateTestSSN = () => {
+        return '900' + Math.floor(Math.random() * 90 + 10) + Math.floor(Math.random() * 9000 + 1000);
+      };
+
+      // Format phone number for Alpaca (must be US format for now)
+      const formatPhone = (phone) => {
+        if (!phone) return '15551234567'; // Default test phone
+
+        // Remove all non-digits
+        const digitsOnly = phone.replace(/\D/g, '');
+
+        // If it's an international number (like +254...), convert to US format for Alpaca
+        if (digitsOnly.length > 10) {
+          // For testing purposes, generate a US phone number
+          const areaCode = Math.floor(Math.random() * 900) + 100; // 100-999
+          const exchange = Math.floor(Math.random() * 900) + 100; // 100-999
+          const number = Math.floor(Math.random() * 9000) + 1000; // 1000-9999
+          return `1${areaCode}${exchange}${number}`;
+        }
+
+        // If it's already 10 digits, assume US and add country code
+        if (digitsOnly.length === 10) {
+          return `1${digitsOnly}`;
+        }
+
+        return '15551234567'; // Fallback
+      };
+
+      // Format street address - Alpaca requires it to not be only digits
+      const formatStreetAddress = (street) => {
+        if (!street) return '123 Main Street';
+
+        // Check if street contains only digits (with optional spaces)
+        const trimmed = street.trim();
+        if (/^\d+$/.test(trimmed.replace(/\s/g, ''))) {
+          // If only digits, append "Street" to make it a valid address
+          return `${trimmed} Main Street`;
+        }
+
+        return trimmed;
+      };
+
+      // For Alpaca Broker API, we need proper account creation data
       const accountData = {
         contact: {
           email_address: userData.email,
-          phone_number: userData.phone,
-          street_address: [userData.address || '123 Main St'],
-          city: 'Nairobi',
-          state: 'NY',
-          postal_code: '10001',
-          country: 'KE'
+          phone_number: formatPhone(userData.phone),
+          street_address: [formatStreetAddress(userData.address?.street)],
+          city: this.mapToUSCity(userData.address?.city) || 'New York',
+          state: this.mapToUSState(userData.address?.state) || 'NY',
+          postal_code: this.mapToUSZipCode(userData.address?.postalCode) || '10001',
+          country: 'USA' // Alpaca requires USA even for international users
         },
         identity: {
           given_name: userData.firstName,
           family_name: userData.lastName,
-          date_of_birth: userData.dateOfBirth,
+          date_of_birth: userData.dateOfBirth instanceof Date
+            ? userData.dateOfBirth.toISOString().split('T')[0]
+            : (typeof userData.dateOfBirth === 'string'
+              ? userData.dateOfBirth.split('T')[0]
+              : '1990-01-01'), // Handle both Date objects and strings
           tax_id_type: 'USA_SSN',
-          tax_id: '123456789',
-          country_of_citizenship: 'KE',
-          country_of_birth: 'KE',
-          country_of_tax_residence: 'KE',
+          tax_id: generateTestSSN(), // Generate realistic test SSN for sandbox
+          country_of_citizenship: this.mapCountryToAlpacaFormat(userData.address?.country),
+          country_of_birth: this.mapCountryToAlpacaFormat(userData.identity?.nationality || userData.address?.country),
+          country_of_tax_residence: this.mapCountryToAlpacaFormat(userData.address?.country),
           funding_source: ['employment_income']
         },
         disclosures: {
@@ -43,17 +395,12 @@ class AlpacaService {
           is_affiliated_exchange_or_finra: false,
           is_politically_exposed: false,
           immediate_family_exposed: false,
-          employment_status: 'employed',
-          employer_name: 'Trading Platform',
-          employer_address: '123 Main St',
-          employment_position: 'Trader'
+          employment_status: userData.employment?.status?.toLowerCase() || 'employed',
+          employer_name: userData.employment?.employerName || 'Self Employed',
+          employer_address: formatStreetAddress(userData.address?.street),
+          employment_position: userData.employment?.jobTitle || 'Developer'
         },
         agreements: [
-          {
-            agreement: 'margin_agreement',
-            signed_at: new Date().toISOString(),
-            ip_address: '127.0.0.1'
-          },
           {
             agreement: 'account_agreement',
             signed_at: new Date().toISOString(),
@@ -63,35 +410,87 @@ class AlpacaService {
             agreement: 'customer_agreement',
             signed_at: new Date().toISOString(),
             ip_address: '127.0.0.1'
-          }
-        ],
-        documents: [
+          },
           {
-            document_type: 'identity_verification',
-            document_sub_type: 'passport',
-            content: '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcU...',
-            mime_type: 'image/jpeg'
+            agreement: 'margin_agreement',
+            signed_at: new Date().toISOString(),
+            ip_address: '127.0.0.1'
           }
         ]
       };
 
-      const response = await axios.post(`${this.baseUrl}/v1/accounts`, accountData, {
-        headers: this.tradingHeaders
+      // Add documents if available
+      if (userData.documents && userData.documents.length > 0) {
+        accountData.documents = userData.documents.map(doc => ({
+          document_type: 'identity_verification',
+          document_sub_type: doc.type || 'passport',
+          content: doc.base64Content || doc.content,
+          mime_type: doc.mimeType || 'image/jpeg'
+        }));
+      }
+
+      logger.info('Creating Alpaca account with formatted data:', {
+        originalData: {
+          name: `${userData.firstName} ${userData.lastName}`,
+          email: userData.email,
+          phone: userData.phone,
+          address: userData.address,
+          employment: userData.employment
+        },
+        alpacaData: {
+          contact: accountData.contact,
+          identity: {
+            ...accountData.identity,
+            tax_id: '[HIDDEN]' // Don't log SSN
+          },
+          disclosures: accountData.disclosures
+        }
       });
 
-      logger.info('Alpaca account created:', { userId: userData.userId, accountId: response.data.id });
+      // Use broker API for account creation, not trading API
+      const response = await axios.post(`${this.brokerUrl}/v1/accounts`, accountData, {
+        headers: this.tradingHeaders,
+        timeout: 30000 // 30 second timeout
+      });
+
+      logger.info('Alpaca account created successfully:', {
+        userId: userData.userId,
+        accountId: response.data.id,
+        status: response.data.status
+      });
+
       return response.data;
     } catch (error) {
-      logger.error('Alpaca account creation error:', error.response?.data || error.message);
-      throw new Error('Failed to create Alpaca account');
+      const errorMessage = error.response?.data?.message || error.message;
+      const errorDetails = error.response?.data || {};
+
+      logger.error('Alpaca account creation error:', {
+        message: errorMessage,
+        status: error.response?.status,
+        details: errorDetails,
+        userData: {
+          email: userData.email,
+          userId: userData.userId
+        }
+      });
+
+      throw new Error(`Failed to create Alpaca account: ${errorMessage}`);
     }
   }
 
-  async getAccount() {
+  async getAccount(accountId = null) {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/account`, {
-        headers: this.tradingHeaders
+      // If accountId is provided, use Broker API, otherwise use Trading API for trading account
+      const endpoint = accountId
+        ? `${this.baseUrl}/v1/accounts/${accountId}`  // Broker API for specific account
+        : `${this.tradingUrl}/v2/account`;  // Trading API (paper or live based on mode)
+
+      const headers = accountId ? this.tradingHeaders : this.activeTradingHeaders;
+
+      const response = await axios.get(endpoint, {
+        headers: headers
       });
+
       return response.data;
     } catch (error) {
       logger.error('Get Alpaca account error:', error.response?.data || error.message);
@@ -99,14 +498,91 @@ class AlpacaService {
     }
   }
 
-  async getPositions() {
+  // Get account status from Alpaca for Broker API accounts
+  async getAccountStatus(accountId) {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/positions`, {
+      const response = await axios.get(`${this.baseUrl}/v1/accounts/${accountId}`, {
         headers: this.tradingHeaders
+      });
+
+      const account = response.data;
+
+      // Map Alpaca account status to our KYC status
+      const statusMapping = {
+        'SUBMITTED': 'submitted',
+        'ACCOUNT_UPDATED': 'under_review',
+        'APPROVAL_PENDING': 'pending',
+        'APPROVED': 'approved',
+        'REJECTED': 'rejected',
+        'ACTIVE': 'approved',
+        'INACTIVE': 'rejected'
+      };
+
+      return {
+        accountId: account.id,
+        status: account.status,
+        kycStatus: statusMapping[account.status] || 'pending',
+        tradingEnabled: account.status === 'ACTIVE',
+        accountType: account.account_type,
+        createdAt: account.created_at,
+        updatedAt: account.updated_at,
+        alpacaData: account
+      };
+    } catch (error) {
+      logger.error('Get Alpaca account status error:', error.response?.data || error.message);
+      throw new Error('Failed to get account status from Alpaca');
+    }
+  }
+
+  // Check multiple accounts for admin dashboard
+  async getAccountStatuses(accountIds) {
+    try {
+      const promises = accountIds.map(id => this.getAccountStatus(id));
+      const results = await Promise.allSettled(promises);
+
+      return results.map((result, index) => {
+        if (result.status === 'fulfilled') {
+          return result.value;
+        } else {
+          return {
+            accountId: accountIds[index],
+            error: result.reason.message,
+            kycStatus: 'unknown'
+          };
+        }
+      });
+    } catch (error) {
+      logger.error('Get multiple account statuses error:', error);
+      throw new Error('Failed to get account statuses');
+    }
+  }
+
+  async getPositions(accountId = null) {
+    try {
+      // If accountId is provided, use Broker API for user-specific positions
+      if (accountId) {
+        const response = await axios.get(
+          `${this.baseUrl}/v1/trading/accounts/${accountId}/positions`,
+          { headers: this.tradingHeaders }
+        );
+        logger.info(`Retrieved ${response.data.length} positions for account ${accountId}`);
+        return response.data;
+      }
+
+      // Fallback to Trading API for shared positions (admin/testing)
+      const response = await axios.get(`${this.tradingUrl}/v2/positions`, {
+        headers: this.activeTradingHeaders
       });
       return response.data;
     } catch (error) {
       logger.error('Get positions error:', error.response?.data || error.message);
+
+      // Return empty array if no positions found (404)
+      if (error.response?.status === 404) {
+        logger.info(`No positions found for account ${accountId}`);
+        return [];
+      }
+
       throw new Error('Failed to get positions');
     }
   }
@@ -134,15 +610,17 @@ class AlpacaService {
         alpacaOrder.extended_hours = true;
       }
 
-      const response = await axios.post(`${this.baseUrl}/v2/orders`, alpacaOrder, {
-        headers: this.tradingHeaders
+      // Use Trading API (paper or live based on ALPACA_TRADING_MODE)
+      const response = await axios.post(`${this.tradingUrl}/v2/orders`, alpacaOrder, {
+        headers: this.activeTradingHeaders
       });
 
       logger.info('Alpaca order created:', {
         symbol: orderData.symbol,
         side: orderData.side,
         quantity: orderData.quantity,
-        orderId: response.data.id
+        orderId: response.data.id,
+        mode: this.tradingMode
       });
 
       return response.data;
@@ -154,8 +632,9 @@ class AlpacaService {
 
   async getOrder(orderId) {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/orders/${orderId}`, {
-        headers: this.tradingHeaders
+      // Use Trading API (paper or live based on ALPACA_TRADING_MODE)
+      const response = await axios.get(`${this.tradingUrl}/v2/orders/${orderId}`, {
+        headers: this.activeTradingHeaders
       });
       return response.data;
     } catch (error) {
@@ -166,11 +645,12 @@ class AlpacaService {
 
   async cancelOrder(orderId) {
     try {
-      await axios.delete(`${this.baseUrl}/v2/orders/${orderId}`, {
-        headers: this.tradingHeaders
+      // Use Trading API (paper or live based on ALPACA_TRADING_MODE)
+      await axios.delete(`${this.tradingUrl}/v2/orders/${orderId}`, {
+        headers: this.activeTradingHeaders
       });
 
-      logger.info('Order cancelled:', { orderId });
+      logger.info('Order cancelled:', { orderId, mode: this.tradingMode });
       return true;
     } catch (error) {
       logger.error('Cancel order error:', error.response?.data || error.message);
@@ -180,8 +660,9 @@ class AlpacaService {
 
   async getOrders(status = 'all', limit = 50) {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/orders`, {
-        headers: this.tradingHeaders,
+      // Use Trading API (paper or live based on ALPACA_TRADING_MODE)
+      const response = await axios.get(`${this.tradingUrl}/v2/orders`, {
+        headers: this.activeTradingHeaders,
         params: { status, limit }
       });
       return response.data;
@@ -193,6 +674,12 @@ class AlpacaService {
 
   async getAssets(status = 'active', assetClass = 'us_equity', exchange = null) {
     try {
+      // Use Paper Trading API for market data and assets
+      if (!this.paperApiKey || !this.paperSecretKey) {
+        logger.warn('No valid Paper Trading API credentials configured');
+        throw new Error('Paper Trading API credentials not configured. Please set ALPACA_PAPER_API_KEY and ALPACA_PAPER_SECRET_KEY in your environment variables.');
+      }
+
       const params = {
         status,
         asset_class: assetClass
@@ -202,25 +689,167 @@ class AlpacaService {
         params.exchange = exchange;
       }
 
-      const response = await axios.get(`${this.baseUrl}/v2/assets`, {
-        headers: this.tradingHeaders,
+      // Use Paper Trading API for assets
+      const url = `${this.paperUrl}/v2/assets`;
+      logger.info(`Fetching assets from Paper Trading API: ${url}`);
+
+      const response = await axios.get(url, {
+        headers: this.paperHeaders, // Use paper trading headers
         params
       });
       return response.data;
     } catch (error) {
       logger.error('Get assets error:', error.response?.data || error.message);
-      throw new Error('Failed to get assets');
+
+      // Return empty array instead of throwing for better UX
+      if (error.response?.status === 401 || error.response?.status === 403) {
+        logger.warn('Alpaca API authentication failed. Please check your API credentials.');
+        return [];
+      }
+
+      throw error;
     }
+  }
+
+  // Get company logo from Alpaca's logo endpoint via our proxy
+  getCompanyLogo(symbol, companyName = null) {
+    if (!symbol) return null;
+
+    // Return our proxy endpoint URL instead of direct Alpaca URL
+    // The proxy handles authentication and serves the logo publicly
+    // This allows frontend to use <img> tags directly without auth issues
+    return `/api/v1/assets/logo/${symbol.toUpperCase()}`;
+  }
+
+  // Stock symbol to company name mapping
+  getCompanyName(symbol) {
+    const companyNames = {
+      'AAPL': 'Apple Inc.',
+      'GOOGL': 'Alphabet Inc. Class A',
+      'GOOG': 'Alphabet Inc. Class C',
+      'MSFT': 'Microsoft Corporation',
+      'AMZN': 'Amazon.com Inc.',
+      'TSLA': 'Tesla Inc.',
+      'NVDA': 'NVIDIA Corporation',
+      'META': 'Meta Platforms Inc.',
+      'NFLX': 'Netflix Inc.',
+      'BABA': 'Alibaba Group Holding Limited',
+      'V': 'Visa Inc.',
+      'JPM': 'JPMorgan Chase & Co.',
+      'JNJ': 'Johnson & Johnson',
+      'WMT': 'Walmart Inc.',
+      'PG': 'Procter & Gamble Company',
+      'UNH': 'UnitedHealth Group Incorporated',
+      'HD': 'Home Depot Inc.',
+      'MA': 'Mastercard Incorporated',
+      'BAC': 'Bank of America Corporation',
+      'DIS': 'Walt Disney Company',
+      'ADBE': 'Adobe Inc.',
+      'CRM': 'Salesforce Inc.',
+      'PYPL': 'PayPal Holdings Inc.',
+      'INTC': 'Intel Corporation',
+      'CMCSA': 'Comcast Corporation',
+      'PFE': 'Pfizer Inc.',
+      'VZ': 'Verizon Communications Inc.',
+      'T': 'AT&T Inc.',
+      'ABT': 'Abbott Laboratories',
+      'NKE': 'Nike Inc.',
+      'KO': 'Coca-Cola Company',
+      'ORCL': 'Oracle Corporation',
+      'CRM': 'Salesforce Inc.',
+      'AVGO': 'Broadcom Inc.',
+      'ACN': 'Accenture plc',
+      'TXN': 'Texas Instruments Incorporated',
+      'LLY': 'Eli Lilly and Company',
+      'ABBV': 'AbbVie Inc.',
+      'XOM': 'Exxon Mobil Corporation',
+      'CVX': 'Chevron Corporation',
+      'WFC': 'Wells Fargo & Company',
+      'TMO': 'Thermo Fisher Scientific Inc.',
+      'COST': 'Costco Wholesale Corporation',
+      'MDT': 'Medtronic plc',
+      'DHR': 'Danaher Corporation',
+      'NEE': 'NextEra Energy Inc.',
+      'PM': 'Philip Morris International Inc.',
+      'RTX': 'Raytheon Technologies Corporation',
+      'LIN': 'Linde plc',
+      'QCOM': 'QUALCOMM Incorporated',
+      'HON': 'Honeywell International Inc.',
+      'UPS': 'United Parcel Service Inc.',
+      'LOW': 'Lowe\'s Companies Inc.',
+      'IBM': 'International Business Machines Corporation',
+      'SPGI': 'S&P Global Inc.',
+      'CAT': 'Caterpillar Inc.',
+      'INTU': 'Intuit Inc.',
+      'GS': 'Goldman Sachs Group Inc.',
+      'AMD': 'Advanced Micro Devices Inc.',
+      'AMAT': 'Applied Materials Inc.',
+      'BLK': 'BlackRock Inc.',
+      'C': 'Citigroup Inc.',
+      'MU': 'Micron Technology Inc.',
+      'NOW': 'ServiceNow Inc.',
+      'ISRG': 'Intuitive Surgical Inc.',
+      'SYK': 'Stryker Corporation',
+      'ZTS': 'Zoetis Inc.',
+      'LRCX': 'Lam Research Corporation',
+      'ADI': 'Analog Devices Inc.',
+      'REGN': 'Regeneron Pharmaceuticals Inc.',
+      'KLAC': 'KLA Corporation',
+      'PANW': 'Palo Alto Networks Inc.',
+      'CSX': 'CSX Corporation',
+      'SNPS': 'Synopsys Inc.',
+      'CDNS': 'Cadence Design Systems Inc.',
+      'MRVL': 'Marvell Technology Inc.',
+      'CRWD': 'CrowdStrike Holdings Inc.',
+      'FTNT': 'Fortinet Inc.',
+      'ADSK': 'Autodesk Inc.',
+      'NXPI': 'NXP Semiconductors N.V.',
+      'WDAY': 'Workday Inc.',
+      'TEAM': 'Atlassian Corporation',
+      'DDOG': 'Datadog Inc.',
+      'SNOW': 'Snowflake Inc.',
+      'ZM': 'Zoom Video Communications Inc.',
+      'CZR': 'Caesars Entertainment Inc.',
+      'ROKU': 'Roku Inc.',
+      'PLTR': 'Palantir Technologies Inc.',
+      'U': 'Unity Software Inc.',
+      'RBLX': 'Roblox Corporation',
+      'COIN': 'Coinbase Global Inc.',
+      'RIVN': 'Rivian Automotive Inc.',
+      'LCID': 'Lucid Group Inc.',
+      'HOOD': 'Robinhood Markets Inc.'
+    };
+
+    return companyNames[symbol.toUpperCase()] || symbol;
   }
 
   async getAsset(symbol) {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/assets/${symbol}`, {
-        headers: this.tradingHeaders
+      const assetResponse = await axios.get(`${this.paperUrl}/v2/assets/${symbol.toUpperCase()}`, {
+        headers: this.paperHeaders
       });
-      return response.data;
+
+      const asset = assetResponse.data;
+
+      return {
+        symbol: asset.symbol,
+        name: asset.name,
+        logo: this.getCompanyLogo(asset.symbol, asset.name),
+        exchange: asset.exchange,
+        class: asset.class,
+        status: asset.status,
+        tradable: asset.tradable,
+        marginable: asset.marginable,
+        shortable: asset.shortable,
+        easy_to_borrow: asset.easy_to_borrow,
+        fractionable: asset.fractionable
+      };
     } catch (error) {
       logger.error('Get asset error:', error.response?.data || error.message);
+
+      if (error.response?.status === 404) {
+        throw new Error(`Asset ${symbol} not found`);
+      }
       throw new Error('Failed to get asset');
     }
   }
@@ -228,19 +857,20 @@ class AlpacaService {
   async getLatestQuote(symbol) {
     try {
       const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/${symbol}/quotes/latest`, {
-        headers: this.tradingHeaders
+        headers: this.paperHeaders
       });
       return response.data.quote;
     } catch (error) {
-      logger.error('Get latest quote error:', error.response?.data || error.message);
+      logger.debug('Get latest quote error:', error.response?.data || error.message);
       throw new Error('Failed to get latest quote');
     }
   }
 
   async getLatestTrade(symbol) {
     try {
+      // Use Paper Trading API for market data
       const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/${symbol}/trades/latest`, {
-        headers: this.tradingHeaders
+        headers: this.paperHeaders
       });
       return response.data.trade;
     } catch (error) {
@@ -254,20 +884,116 @@ class AlpacaService {
       const params = {
         symbols: symbol,
         timeframe,
-        limit
+        limit,
+        feed: 'iex', // Use IEX feed for free tier (instead of SIP which requires paid subscription)
+        adjustment: 'split' // Adjust for stock splits
       };
 
-      if (start) params.start = start;
-      if (end) params.end = end;
+      // If no start/end specified, get most recent data available
+      if (!start && !end) {
+        const now = new Date();
+        const startDate = new Date();
 
+        // Go back far enough to get the requested number of bars
+        if (timeframe.includes('Day')) {
+          startDate.setDate(startDate.getDate() - (limit * 2)); // Go back 2x the limit in days
+        } else if (timeframe.includes('Week')) {
+          startDate.setDate(startDate.getDate() - (limit * 7 * 2)); // Go back weeks
+        } else if (timeframe.includes('Month')) {
+          startDate.setMonth(startDate.getMonth() - (limit * 2)); // Go back months
+        } else {
+          // For intraday (minutes/hours), go back several days
+          startDate.setDate(startDate.getDate() - 7);
+        }
+
+        params.start = startDate.toISOString().split('T')[0];
+        // Explicitly set end date to today to request most recent data
+        params.end = now.toISOString().split('T')[0];
+
+        logger.info(`Date range for ${symbol}: start=${params.start}, end=${params.end}`);
+      } else {
+        if (start) params.start = start;
+        if (end) params.end = end;
+      }
+
+      logger.debug(`Fetching bars for ${symbol}: ${JSON.stringify(params)}`);
+
+      // Use Data API for market data
       const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/bars`, {
-        headers: this.tradingHeaders,
+        headers: this.paperHeaders,
         params
       });
 
-      return response.data.bars[symbol] || [];
+      const bars = response.data.bars[symbol] || [];
+
+      if (bars.length > 0) {
+        const firstBar = bars[0];
+        const lastBar = bars[bars.length - 1];
+        const lastBarDate = new Date(lastBar.t);
+        const now = new Date();
+        const daysSinceLastBar = Math.floor((now - lastBarDate) / (1000 * 60 * 60 * 24));
+
+        logger.info(`Received ${bars.length} bars for ${symbol}:`);
+        logger.info(`  First bar: ${firstBar.t}`);
+        logger.info(`  Last bar: ${lastBar.t}`);
+        logger.info(`  Data age: ${daysSinceLastBar} days old`);
+        logger.info(`  Current date: ${now.toISOString()}`);
+
+        if (daysSinceLastBar > 30) {
+          logger.warn(`⚠️  DATA AGE WARNING: Data for ${symbol} is ${daysSinceLastBar} days old!`);
+          logger.warn(`⚠️  This indicates the free tier IEX feed has limited access to recent data.`);
+          logger.warn(`⚠️  Free tier typically provides historical data only, not real-time or recent data.`);
+          logger.warn(`⚠️  Consider upgrading to a paid Alpaca subscription for real-time data access.`);
+        }
+      } else {
+        logger.warn(`No bars data received for ${symbol}`);
+      }
+
+      return bars;
     } catch (error) {
       logger.error('Get bars error:', error.response?.data || error.message);
+
+      // Handle subscription/permission errors gracefully
+      if (error.response?.data?.message?.includes('subscription') ||
+          error.response?.data?.message?.includes('permit')) {
+        logger.warn(`Subscription limitation for ${symbol}, trying alternative approach`);
+
+        // Try with longer delay and IEX feed explicitly
+        try {
+          const endDate = new Date();
+          endDate.setDate(endDate.getDate() - 1); // Yesterday's data
+          const startDate = new Date();
+          startDate.setDate(startDate.getDate() - 90); // 90 days ago
+
+          const fallbackParams = {
+            symbols: symbol,
+            timeframe: '1Day',
+            limit: Math.min(limit, 100),
+            feed: 'iex',
+            start: startDate.toISOString().split('T')[0],
+            end: endDate.toISOString().split('T')[0]
+          };
+
+          logger.info(`Retrying with fallback params: ${JSON.stringify(fallbackParams)}`);
+
+          const fallbackResponse = await axios.get(`${this.dataBaseUrl}/v2/stocks/bars`, {
+            headers: this.paperHeaders,
+            params: fallbackParams
+          });
+
+          return fallbackResponse.data.bars[symbol] || [];
+        } catch (fallbackError) {
+          logger.error('Fallback bars request also failed:', fallbackError.message);
+          return [];
+        }
+      }
+
+      // Return empty array for other non-critical errors
+      if (error.response?.status === 404 || error.response?.status === 422) {
+        logger.warn(`No bars data available for ${symbol}`);
+        return [];
+      }
+
       throw new Error('Failed to get price bars');
     }
   }
@@ -275,10 +1001,15 @@ class AlpacaService {
   async getNews(symbols, limit = 10) {
     try {
       const params = { limit };
-      if (symbols) params.symbols = symbols;
 
+      // If symbols is an array, join them with commas
+      if (symbols && symbols.length > 0) {
+        params.symbols = Array.isArray(symbols) ? symbols.join(',') : symbols;
+      }
+
+      // Use Paper Trading API for news data
       const response = await axios.get(`${this.dataBaseUrl}/v1beta1/news`, {
-        headers: this.tradingHeaders,
+        headers: this.paperHeaders,
         params
       });
 
@@ -359,8 +1090,9 @@ class AlpacaService {
       if (start) params.start = start;
       if (end) params.end = end;
 
-      const response = await axios.get(`${this.baseUrl}/v2/calendar`, {
-        headers: this.tradingHeaders,
+      // Use Paper Trading API for market calendar
+      const response = await axios.get(`${this.paperUrl}/v2/calendar`, {
+        headers: this.paperHeaders,
         params
       });
 
@@ -373,13 +1105,780 @@ class AlpacaService {
 
   async getMarketStatus() {
     try {
-      const response = await axios.get(`${this.baseUrl}/v2/clock`, {
-        headers: this.tradingHeaders
+      logger.info('Getting market status from:', `${this.paperUrl}/v2/clock`);
+      const response = await axios.get(`${this.paperUrl}/v2/clock`, {
+        headers: this.paperHeaders
       });
+      logger.info('Market status response received:', response.data);
       return response.data;
     } catch (error) {
-      logger.error('Get market status error:', error.response?.data || error.message);
-      throw new Error('Failed to get market status');
+      logger.error('Get market status error:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status
+      });
+      return {
+        is_open: false,
+        next_open: null,
+        next_close: null,
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  async getCorporateActions(params = {}) {
+    try {
+      // Build query parameters
+      const queryParams = {};
+
+      // ca_types: dividend, merger, spinoff, split
+      if (params.ca_types) queryParams.ca_types = params.ca_types;
+      else queryParams.ca_types = 'dividend'; // Default to dividends
+
+      // Date range (required, max 90 days)
+      if (params.since) queryParams.since = params.since;
+      if (params.until) queryParams.until = params.until;
+
+      // Optional filters
+      if (params.symbol) queryParams.symbol = params.symbol;
+      if (params.cusip) queryParams.cusip = params.cusip;
+
+      // date_type: declaration_date, ex_date, record_date, payable_date
+      if (params.date_type) queryParams.date_type = params.date_type;
+      else queryParams.date_type = 'ex_date'; // Default to ex-dividend date
+
+      logger.info('Getting corporate actions from Alpaca:', queryParams);
+
+      const response = await axios.get(`${this.paperUrl}/v2/corporate_actions/announcements`, {
+        headers: this.paperHeaders,
+        params: queryParams
+      });
+
+      logger.info(`Retrieved ${response.data.length || 0} corporate action announcements`);
+
+      // Log first announcement for debugging
+      if (response.data && response.data.length > 0) {
+        logger.info('First announcement keys:', Object.keys(response.data[0]));
+        logger.info('First announcement sample:', {
+          id: response.data[0].id,
+          ca_type: response.data[0].ca_type,
+          ca_sub_type: response.data[0].ca_sub_type,
+          initiating_symbol: response.data[0].initiating_symbol,
+          initiating_original_cusip: response.data[0].initiating_original_cusip,
+          target_symbol: response.data[0].target_symbol,
+          declaration_date: response.data[0].declaration_date,
+          ex_date: response.data[0].ex_date,
+          record_date: response.data[0].record_date,
+          payable_date: response.data[0].payable_date
+        });
+      }
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get corporate actions error:', error.response?.data || error.message);
+
+      // Return empty array on error instead of throwing
+      // This prevents the entire calendar endpoint from failing
+      return [];
+    }
+  }
+
+  async getMostActiveStocks(limit = 30) {
+    try {
+      const response = await axios.get(`${this.dataBaseUrl}/v1beta1/screener/stocks/most-actives`, {
+        headers: this.paperHeaders,
+        params: {
+          by: 'volume',
+          top: Math.min(limit, 50)
+        }
+      });
+
+      const symbols = response.data.most_actives.map(stock => stock.symbol);
+      logger.info(`Retrieved ${symbols.length} most active stocks from Alpaca screener`);
+      return symbols;
+    } catch (error) {
+      logger.error('Get most active stocks error:', error.response?.data || error.message);
+
+      logger.warn('Screener API failed, falling back to regular assets endpoint');
+      try {
+        const assets = await this.getAssets('active', 'us_equity');
+
+        const majorExchangeAssets = assets
+          .filter(asset => ['NASDAQ', 'NYSE'].includes(asset.exchange) && asset.tradable)
+          .slice(0, Math.min(limit, 30))
+          .map(asset => asset.symbol);
+
+        logger.info(`Fallback: Retrieved ${majorExchangeAssets.length} assets from regular endpoint`);
+        return majorExchangeAssets;
+      } catch (fallbackError) {
+        logger.error('Fallback assets fetch also failed:', fallbackError.message);
+        return [];
+      }
+    }
+  }
+
+  async getTopGainers(limit = 20) {
+    try {
+      const response = await axios.get(`${this.dataBaseUrl}/v1beta1/screener/stocks/movers`, {
+        headers: this.paperHeaders,
+        params: {
+          top: Math.min(limit, 20)
+        }
+      });
+
+      logger.info(`Retrieved ${response.data.gainers?.length || 0} top gainers from Alpaca`);
+      return response.data.gainers || [];
+    } catch (error) {
+      logger.error('Get top gainers error:', error.response?.data || error.message);
+      return [];
+    }
+  }
+
+  async getTopLosers(limit = 20) {
+    try {
+      const response = await axios.get(`${this.dataBaseUrl}/v1beta1/screener/stocks/movers`, {
+        headers: this.paperHeaders,
+        params: {
+          top: Math.min(limit, 20)
+        }
+      });
+
+      logger.info(`Retrieved ${response.data.losers?.length || 0} top losers from Alpaca`);
+      return response.data.losers || [];
+    } catch (error) {
+      logger.error('Get top losers error:', error.response?.data || error.message);
+      return [];
+    }
+  }
+
+  async getTopMovers(limit = 20) {
+    try {
+      const response = await axios.get(`${this.dataBaseUrl}/v1beta1/screener/stocks/movers`, {
+        headers: this.paperHeaders,
+        params: {
+          top: Math.min(limit, 20)
+        }
+      });
+
+      const gainers = response.data.gainers || [];
+      const losers = response.data.losers || [];
+
+      // Enrich with market data (quotes and logos)
+      const enrichGainers = await Promise.all(
+        gainers.slice(0, limit).map(async (stock) => {
+          try {
+            const quote = await this.getLatestQuote(stock.symbol);
+            const asset = await this.getAsset(stock.symbol);
+
+            return {
+              symbol: stock.symbol,
+              name: asset.name || stock.symbol,
+              logo: this.getCompanyLogo(stock.symbol, asset.name),
+              price: stock.price,
+              change: stock.change,
+              changePercent: stock.percent_change,
+              volume: stock.volume,
+              marketCap: stock.market_cap,
+              askPrice: quote.ap,
+              bidPrice: quote.bp,
+              lastUpdated: quote.t
+            };
+          } catch (error) {
+            logger.warn(`Failed to enrich data for ${stock.symbol}:`, error.message);
+            return {
+              symbol: stock.symbol,
+              name: stock.symbol,
+              logo: this.getCompanyLogo(stock.symbol, stock.symbol),
+              price: stock.price,
+              change: stock.change,
+              changePercent: stock.percent_change,
+              volume: stock.volume,
+              marketCap: stock.market_cap
+            };
+          }
+        })
+      );
+
+      const enrichLosers = await Promise.all(
+        losers.slice(0, limit).map(async (stock) => {
+          try {
+            const quote = await this.getLatestQuote(stock.symbol);
+            const asset = await this.getAsset(stock.symbol);
+
+            return {
+              symbol: stock.symbol,
+              name: asset.name || stock.symbol,
+              logo: this.getCompanyLogo(stock.symbol, asset.name),
+              price: stock.price,
+              change: stock.change,
+              changePercent: stock.percent_change,
+              volume: stock.volume,
+              marketCap: stock.market_cap,
+              askPrice: quote.ap,
+              bidPrice: quote.bp,
+              lastUpdated: quote.t
+            };
+          } catch (error) {
+            logger.warn(`Failed to enrich data for ${stock.symbol}:`, error.message);
+            return {
+              symbol: stock.symbol,
+              name: stock.symbol,
+              logo: this.getCompanyLogo(stock.symbol, stock.symbol),
+              price: stock.price,
+              change: stock.change,
+              changePercent: stock.percent_change,
+              volume: stock.volume,
+              marketCap: stock.market_cap
+            };
+          }
+        })
+      );
+
+      logger.info(`Retrieved ${enrichGainers.length} gainers and ${enrichLosers.length} losers`);
+
+      return {
+        gainers: enrichGainers,
+        losers: enrichLosers,
+        lastUpdated: new Date().toISOString()
+      };
+    } catch (error) {
+      logger.error('Get top movers error:', error.response?.data || error.message);
+      return {
+        gainers: [],
+        losers: [],
+        lastUpdated: new Date().toISOString()
+      };
+    }
+  }
+
+  async getUpcomingEvents(daysAhead = 7) {
+    try {
+      const today = new Date();
+      const endDate = new Date();
+      endDate.setDate(today.getDate() + daysAhead);
+
+      const formatDate = (date) => {
+        return date.toISOString().split('T')[0];
+      };
+
+      // Get market calendar
+      const calendar = await this.getMarketCalendar(formatDate(today), formatDate(endDate));
+
+      // Format events
+      const events = calendar.map(day => ({
+        date: day.date,
+        status: day.status || 'open',
+        open: day.open,
+        close: day.close,
+        sessionOpen: day.session_open,
+        sessionClose: day.session_close,
+        type: day.status === 'closed' ? 'market_closed' : 'market_open',
+        description: day.status === 'closed' ? 'Market Closed' : 'Market Trading Day'
+      }));
+
+      logger.info(`Retrieved ${events.length} upcoming market events`);
+
+      return {
+        events,
+        startDate: formatDate(today),
+        endDate: formatDate(endDate),
+        count: events.length
+      };
+    } catch (error) {
+      logger.error('Get upcoming events error:', error.response?.data || error.message);
+      return {
+        events: [],
+        startDate: null,
+        endDate: null,
+        count: 0
+      };
+    }
+  }
+
+  async getAllWatchlists() {
+    try {
+      const response = await axios.get(`${this.paperUrl}/v2/watchlists`, {
+        headers: this.paperHeaders
+      });
+
+      logger.info(`Retrieved ${response.data.length} watchlists from Alpaca`);
+      return response.data;
+    } catch (error) {
+      logger.error('Get all watchlists error:', error.response?.data || error.message);
+      throw new Error('Failed to get watchlists');
+    }
+  }
+
+  async createWatchlist(name, symbols = []) {
+    try {
+      const response = await axios.post(
+        `${this.paperUrl}/v2/watchlists`,
+        {
+          name: name,
+          symbols: symbols
+        },
+        {
+          headers: this.paperHeaders
+        }
+      );
+
+      logger.info(`Watchlist "${name}" created successfully with ${symbols.length} symbols`);
+      return response.data;
+    } catch (error) {
+      logger.error('Create watchlist error:', error.response?.data || error.message);
+      throw new Error(error.response?.data?.message || 'Failed to create watchlist');
+    }
+  }
+
+  async getWatchlistById(watchlistId) {
+    try {
+      logger.info(`Fetching watchlist by ID: ${watchlistId} from ${this.paperUrl}/v2/watchlists/${watchlistId}`);
+
+      const response = await axios.get(`${this.paperUrl}/v2/watchlists/${watchlistId}`, {
+        headers: this.paperHeaders
+      });
+
+      logger.info(`Watchlist ${watchlistId} response:`, JSON.stringify(response.data, null, 2));
+      logger.info(`Assets count: ${response.data.assets ? response.data.assets.length : 0}`);
+      logger.info(`Assets array:`, response.data.assets);
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get watchlist by ID error:', error.response?.data || error.message);
+      throw new Error('Failed to get watchlist');
+    }
+  }
+
+  async updateWatchlist(watchlistId, name, symbols) {
+    try {
+      const response = await axios.put(
+        `${this.paperUrl}/v2/watchlists/${watchlistId}`,
+        {
+          name: name,
+          symbols: symbols
+        },
+        {
+          headers: this.paperHeaders
+        }
+      );
+
+      logger.info(`Watchlist ${watchlistId} updated successfully`);
+      return response.data;
+    } catch (error) {
+      logger.error('Update watchlist error:', error.response?.data || error.message);
+
+      if (error.response?.status === 404) {
+        throw new Error(`Watchlist not found: ${watchlistId}`);
+      }
+
+      throw new Error('Failed to update watchlist');
+    }
+  }
+
+  async addSymbolToWatchlist(watchlistId, symbol) {
+    try {
+      const response = await axios.post(
+        `${this.paperUrl}/v2/watchlists/${watchlistId}`,
+        {
+          symbol: symbol.toUpperCase()
+        },
+        {
+          headers: this.paperHeaders
+        }
+      );
+
+      logger.info(`Symbol ${symbol} added to watchlist ${watchlistId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Add symbol to watchlist error:', error.response?.data || error.message);
+
+      if (error.response?.status === 404) {
+        throw new Error(`Watchlist not found: ${watchlistId}`);
+      }
+
+      if (error.response?.status === 422) {
+        throw new Error('Symbol already exists in watchlist or is invalid');
+      }
+
+      throw new Error('Failed to add symbol to watchlist');
+    }
+  }
+
+  async removeSymbolFromWatchlist(watchlistId, symbol) {
+    try {
+      const response = await axios.delete(
+        `${this.paperUrl}/v2/watchlists/${watchlistId}/${symbol.toUpperCase()}`,
+        {
+          headers: this.paperHeaders
+        }
+      );
+
+      logger.info(`Symbol ${symbol} removed from watchlist ${watchlistId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Remove symbol from watchlist error:', error.response?.data || error.message);
+
+      if (error.response?.status === 404) {
+        throw new Error(`Watchlist not found: ${watchlistId}`);
+      }
+
+      throw new Error('Failed to remove symbol from watchlist');
+    }
+  }
+
+  async deleteWatchlist(watchlistId) {
+    try {
+      await axios.delete(`${this.paperUrl}/v2/watchlists/${watchlistId}`, {
+        headers: this.paperHeaders
+      });
+
+      logger.info(`Watchlist ${watchlistId} deleted successfully`);
+      return true;
+    } catch (error) {
+      logger.error('Delete watchlist error:', error.response?.data || error.message);
+
+      if (error.response?.status === 404) {
+        throw new Error(`Watchlist not found: ${watchlistId}`);
+      }
+
+      throw new Error('Failed to delete watchlist');
+    }
+  }
+
+  async getWatchlistWithMarketData(watchlistId) {
+    try {
+      const watchlist = await this.getWatchlistById(watchlistId);
+
+      if (!watchlist.assets || watchlist.assets.length === 0) {
+        return {
+          ...watchlist,
+          enrichedAssets: []
+        };
+      }
+
+      const marketDataPromises = watchlist.assets.map(async (asset) => {
+        try {
+          const quote = await this.getLatestQuote(asset.symbol);
+          const bars = await this.getBars(asset.symbol, '1Day', null, null, 2);
+
+          const companyName = asset.name || this.getCompanyName(asset.symbol);
+          const currentPrice = quote.ap || quote.bp;
+
+          let changePercent = 0;
+          let change = 0;
+          let high = 0;
+          let low = 0;
+          let volume = 0;
+
+          if (bars.length >= 2) {
+            const previousClose = parseFloat(bars[bars.length - 2].c);
+            change = currentPrice - previousClose;
+            changePercent = (change / previousClose) * 100;
+          }
+
+          // Get today's bar data for high, low, volume
+          if (bars.length >= 1) {
+            const todayBar = bars[bars.length - 1];
+            high = parseFloat(todayBar.h);
+            low = parseFloat(todayBar.l);
+            volume = parseInt(todayBar.v) || 0;
+          }
+
+          return {
+            symbol: asset.symbol,
+            name: companyName,
+            logo: `/api/v1/assets/logo/${asset.symbol}`,
+            exchange: asset.exchange,
+            assetClass: asset.class,
+            status: asset.status,
+            tradable: asset.tradable,
+            marginable: asset.marginable,
+            shortable: asset.shortable,
+            easyToBorrow: asset.easy_to_borrow,
+            fractionable: asset.fractionable,
+            marketData: {
+              currentPrice: currentPrice,
+              change: change,
+              changePercent: changePercent,
+              volume: volume,
+              high: high,
+              low: low,
+              lastUpdated: quote.t,
+              isProfit: change >= 0
+            }
+          };
+        } catch (error) {
+          logger.warn(`Failed to get market data for ${asset.symbol}:`, error.message);
+          const companyName = asset.name || this.getCompanyName(asset.symbol);
+          return {
+            symbol: asset.symbol,
+            name: companyName,
+            logo: `/api/v1/assets/logo/${asset.symbol}`,
+            exchange: asset.exchange || 'UNKNOWN',
+            assetClass: asset.class || 'us_equity',
+            status: asset.status || 'active',
+            tradable: asset.tradable !== false,
+            marginable: asset.marginable !== false,
+            shortable: asset.shortable !== false,
+            easyToBorrow: asset.easy_to_borrow !== false,
+            fractionable: asset.fractionable !== false,
+            marketData: {
+              currentPrice: 0,
+              change: 0,
+              changePercent: 0,
+              volume: 0,
+              high: 0,
+              low: 0,
+              lastUpdated: new Date().toISOString(),
+              isProfit: true
+            }
+          };
+        }
+      });
+
+      const enrichedAssets = await Promise.all(marketDataPromises);
+
+      return {
+        id: watchlist.id,
+        name: watchlist.name,
+        account_id: watchlist.account_id,
+        created_at: watchlist.created_at,
+        updated_at: watchlist.updated_at,
+        assets: enrichedAssets,
+        count: enrichedAssets.length
+      };
+    } catch (error) {
+      logger.error('Get watchlist with market data error:', error.response?.data || error.message);
+      throw new Error('Failed to get watchlist with market data');
+    }
+  }
+
+  isSandboxMode() {
+    const alpacaMode = process.env.ALPACA_MODE || 'sandbox';
+    return alpacaMode === 'sandbox';
+  }
+
+  async createFundingWallet(accountId) {
+    try {
+      logger.info(`Creating funding wallet for account: ${accountId}`);
+
+      const response = await axios.post(
+        `${this.baseUrl}/v1/accounts/${accountId}/funding/wallets`,
+        {},
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      logger.info(`Funding wallet created successfully for account ${accountId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Create funding wallet error:', error.response?.data || error.message);
+
+      // If wallet already exists, try to get it
+      if (error.response?.status === 409) {
+        logger.info('Funding wallet already exists, fetching existing wallet');
+        return await this.getFundingWallet(accountId);
+      }
+
+      throw new Error('Failed to create funding wallet');
+    }
+  }
+
+  async getFundingWallet(accountId) {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/v1/accounts/${accountId}/funding/wallets`,
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      // Return the first wallet (accounts typically have one funding wallet)
+      return response.data[0] || null;
+    } catch (error) {
+      logger.error('Get funding wallet error:', error.response?.data || error.message);
+      throw new Error('Failed to get funding wallet');
+    }
+  }
+
+  async demoDepositToWallet(accountId, amount) {
+    try {
+      if (!this.isSandboxMode()) {
+        throw new Error('Demo deposits are only available in sandbox mode');
+      }
+
+      logger.info(`Demo deposit: Adding $${amount} to account ${accountId}`);
+
+      // Get or create funding wallet
+      let wallet = await this.getFundingWallet(accountId);
+      if (!wallet) {
+        wallet = await this.createFundingWallet(accountId);
+      }
+
+      // Demo deposit endpoint
+      const response = await axios.post(
+        `${this.baseUrl}/v1/accounts/${accountId}/funding/wallets/demo/deposit`,
+        {
+          amount: amount.toString(),
+          currency: 'USD'
+        },
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      logger.info(`Demo deposit successful: $${amount} added to account ${accountId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Demo deposit error:', error.response?.data || error.message);
+      throw new Error('Failed to process demo deposit');
+    }
+  }
+
+  async createACHRelationship(accountId, bankDetails) {
+    try {
+      if (this.isSandboxMode()) {
+        logger.info('Creating ACH relationship in sandbox mode');
+      }
+
+      const response = await axios.post(
+        `${this.baseUrl}/v1/accounts/${accountId}/ach_relationships`,
+        {
+          account_owner_name: bankDetails.accountOwnerName,
+          bank_account_type: bankDetails.accountType, // CHECKING or SAVINGS
+          bank_account_number: bankDetails.accountNumber,
+          bank_routing_number: bankDetails.routingNumber,
+          nickname: bankDetails.nickname || 'Primary Bank'
+        },
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      logger.info(`ACH relationship created for account ${accountId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Create ACH relationship error:', error.response?.data || error.message);
+      throw new Error('Failed to create ACH relationship');
+    }
+  }
+
+  async getACHRelationships(accountId) {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/v1/accounts/${accountId}/ach_relationships`,
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get ACH relationships error:', error.response?.data || error.message);
+      throw new Error('Failed to get ACH relationships');
+    }
+  }
+
+  async createTransfer(accountId, transferData) {
+    try {
+      logger.info(`Creating transfer for account ${accountId}:`, {
+        amount: transferData.amount,
+        direction: transferData.direction
+      });
+
+      const response = await axios.post(
+        `${this.baseUrl}/v1/accounts/${accountId}/transfers`,
+        {
+          transfer_type: 'ach',
+          relationship_id: transferData.relationshipId,
+          amount: transferData.amount.toString(),
+          direction: transferData.direction // INCOMING or OUTGOING
+        },
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      logger.info(`Transfer created successfully for account ${accountId}`);
+      return response.data;
+    } catch (error) {
+      logger.error('Create transfer error:', error.response?.data || error.message);
+      throw new Error('Failed to create transfer');
+    }
+  }
+
+  async getTransfer(accountId, transferId) {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/v1/accounts/${accountId}/transfers/${transferId}`,
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get transfer error:', error.response?.data || error.message);
+      throw new Error('Failed to get transfer');
+    }
+  }
+
+  async getTransfers(accountId) {
+    try {
+      const response = await axios.get(
+        `${this.baseUrl}/v1/accounts/${accountId}/transfers`,
+        {
+          headers: this.tradingHeaders
+        }
+      );
+
+      return response.data;
+    } catch (error) {
+      logger.error('Get transfers error:', error.response?.data || error.message);
+      throw new Error('Failed to get transfers');
+    }
+  }
+
+  async depositToAccount(accountId, amount, relationshipId = null) {
+    try {
+      if (this.isSandboxMode()) {
+        // Sandbox: Use demo deposit
+        return await this.demoDepositToWallet(accountId, amount);
+      } else {
+        // Production: Use ACH transfer
+        if (!relationshipId) {
+          throw new Error('ACH relationship ID required for production deposits');
+        }
+        return await this.createTransfer(accountId, {
+          amount,
+          direction: 'INCOMING',
+          relationshipId
+        });
+      }
+    } catch (error) {
+      logger.error('Deposit to account error:', error.message);
+      throw error;
+    }
+  }
+
+  async withdrawFromAccount(accountId, amount, relationshipId) {
+    try {
+      if (this.isSandboxMode()) {
+        // In sandbox, we can simulate withdrawal
+        logger.info(`Sandbox withdrawal: $${amount} from account ${accountId}`);
+        // Note: Alpaca sandbox might not have a demo withdrawal endpoint
+        // We'll create an outgoing transfer instead
+      }
+
+      return await this.createTransfer(accountId, {
+        amount,
+        direction: 'OUTGOING',
+        relationshipId
+      });
+    } catch (error) {
+      logger.error('Withdraw from account error:', error.message);
+      throw error;
     }
   }
 }
