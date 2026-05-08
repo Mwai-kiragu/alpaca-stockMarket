@@ -773,6 +773,7 @@ RIVEN - Invest in the future, today.
         </div>
       </div>
     `;
+    
 
     const text = `
       🎉 Welcome to Riven Trading!
