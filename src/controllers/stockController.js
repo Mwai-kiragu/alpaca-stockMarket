@@ -1,10 +1,14 @@
 const alpacaService = require('../services/alpacaService');
+const ms = require('../services/mystocksService');
 const logger = require('../utils/logger');
 const { mapConditionCodes } = require('../utils/conditionCodes');
 const { Watchlist, User } = require('../models');
 const Order = require('../models/Order');
 const axios = require('axios');
 const { sequelize } = require('../config/database');
+
+const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
+const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
 
 const getQuote = async (req, res) => {
   const { symbol } = req.params;
@@ -15,6 +19,14 @@ const getQuote = async (req, res) => {
         success: false,
         message: 'Stock symbol is required'
       });
+    }
+
+    // African exchange → MyStocks
+    if (isAfrican(req.query.exchange)) {
+      const stocks = await ms.getStocks({ exchange: req.query.exchange.toUpperCase(), search: symbol });
+      const stock = Array.isArray(stocks) ? stocks[0] : stocks;
+      if (!stock) return res.status(404).json({ success: false, message: 'Stock symbol not found' });
+      return res.json({ success: true, provider: 'mystocks', quote: stock });
     }
 
     const quote = await alpacaService.getLatestQuote(symbol.toUpperCase());
@@ -110,7 +122,13 @@ const getBars = async (req, res) => {
   const { symbol } = req.params;
 
   try {
-    const { timeframe = '1Day', start, end, limit = 100 } = req.query;
+    const { timeframe = '1Day', start, end, limit = 100, exchange, range = '1M' } = req.query;
+
+    // African exchange → MyStocks history
+    if (isAfrican(exchange)) {
+      const data = await ms.getStockHistory(symbol.toUpperCase(), range);
+      return res.json({ success: true, provider: 'mystocks', data });
+    }
 
     // Validate timeframe
     const validTimeframes = ['1Min', '5Min', '15Min', '30Min', '1Hour', '1Day', '1Week', '1Month'];
@@ -295,7 +313,13 @@ const getMarketStatus = async (req, res) => {
 const getNews = async (req, res) => {
   try {
     // Support both 'symbol' and 'symbols' parameters
-    const { symbol, symbols, limit = 10, start, end } = req.query;
+    const { symbol, symbols, limit = 10, start, end, exchange, page } = req.query;
+
+    // African exchange → MyStocks market intel
+    if (isAfrican(exchange)) {
+      const data = await ms.getMarketIntel({ symbol, exchange: exchange.toUpperCase(), page, limit });
+      return res.json({ success: true, provider: 'mystocks', data });
+    }
 
     let symbolsArray;
     if (symbol) {

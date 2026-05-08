@@ -4,6 +4,7 @@ const { User, EmailVerificationToken, PhoneVerificationToken, PasswordResetToken
 const emailService = require('../services/emailService');
 const brevoEmailService = require('../services/brevoEmailService');
 const notificationService = require('../services/notificationService');
+const mystocksService = require('../services/mystocksService');
 const logger = require('../utils/logger');
 
 const generateToken = (id) => {
@@ -1280,6 +1281,21 @@ const verifyEmailV2 = async (req, res) => {
       last_login: new Date()
     });
     await emailToken.update({ used: true });
+
+    // Create MyStocks sub-account (fire and forget — don't block login)
+    mystocksService.createSubAccount({
+      externalId: user.id,
+      displayName: `${user.first_name} ${user.last_name}`,
+      email: user.email
+    }).then(async (subAccount) => {
+      const subAccountId = subAccount?.data?.subAccountId || subAccount?.subAccountId;
+      if (subAccountId) {
+        await user.update({ mystocks_sub_account_id: subAccountId });
+        logger.info(`MyStocks sub-account created for ${email}: ${subAccountId}`);
+      }
+    }).catch(err => {
+      logger.error(`Failed to create MyStocks sub-account for ${email}:`, err.message);
+    });
 
     const token = generateToken(user.id);
 

@@ -1,12 +1,39 @@
 const { Order, User, Wallet, Transaction } = require('../models');
 const alpacaService = require('../services/alpacaService');
+const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
 const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
 
+const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
+const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
+
+const getMsSubAccountId = async (userId) => {
+  const user = await User.findByPk(userId, { attributes: ['mystocks_sub_account_id'] });
+  if (!user?.mystocks_sub_account_id) {
+    const err = new Error('MyStocks sub-account not found. Complete account setup.');
+    err.status = 400;
+    throw err;
+  }
+  return user.mystocks_sub_account_id;
+};
+
 const createOrder = async (req, res) => {
   try {
-    const { symbol, side, type: orderType, qty: quantity, limit_price: limitPrice, stop_price: stopPrice, time_in_force: timeInForce, currency = 'USD' } = req.body;
+    const { symbol, side, type: orderType, qty: quantity, limit_price: limitPrice, stop_price: stopPrice, time_in_force: timeInForce, currency = 'USD', exchange } = req.body;
+
+    // African exchange → MyStocks trade
+    if (isAfrican(exchange)) {
+      const subAccountId = await getMsSubAccountId(req.user.id);
+      const tradeType = (side || orderType || '').toUpperCase();
+      if (!['BUY', 'SELL'].includes(tradeType)) {
+        return res.status(400).json({ success: false, message: 'side must be BUY or SELL for African exchanges' });
+      }
+      const qty = parseFloat(quantity);
+      if (!qty || qty <= 0) return res.status(400).json({ success: false, message: 'qty must be a positive number' });
+      const data = await ms.placeTrade(subAccountId, { symbol: symbol.toUpperCase(), type: tradeType, quantity: qty });
+      return res.status(202).json({ success: true, provider: 'mystocks', data });
+    }
 
     // Get user
     const user = await User.findByPk(req.user.id);
@@ -294,7 +321,15 @@ const createOrder = async (req, res) => {
 
 const getOrders = async (req, res) => {
   try {
-    const { page = 1, limit = 20, status, symbol, side } = req.query;
+    const { page = 1, limit = 20, status, symbol, side, exchange } = req.query;
+
+    // African exchange → MyStocks orders
+    if (isAfrican(exchange)) {
+      const subAccountId = await getMsSubAccountId(req.user.id);
+      const data = await ms.getOrders(subAccountId, { symbol, status, page, limit });
+      return res.json({ success: true, provider: 'mystocks', data });
+    }
+
     const offset = (page - 1) * limit;
 
     const whereClause = { user_id: req.user.id };

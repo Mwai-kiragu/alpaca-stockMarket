@@ -1,6 +1,10 @@
 const alpacaService = require('../services/alpacaService');
+const ms = require('../services/mystocksService');
 const logger = require('../utils/logger');
 const Watchlist = require('../models/Watchlist');
+
+const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
+const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
 
 const getAssets = async (req, res) => {
   try {
@@ -35,6 +39,13 @@ const getAssets = async (req, res) => {
     // Check if requesting watchlist-prioritized view
     if (isWatchlist === 'true') {
       isWatchlistOnly = true;
+    }
+
+    // African exchange → MyStocks stocks list
+    if (isAfrican(exchange)) {
+      const { search, sector, page, limit: lim } = req.query;
+      const data = await ms.getStocks({ exchange: exchange.toUpperCase(), search, sector, page, limit: lim });
+      return res.json({ success: true, provider: 'mystocks', assets: data, count: Array.isArray(data) ? data.length : 0 });
     }
 
     if (category === 'popular') {

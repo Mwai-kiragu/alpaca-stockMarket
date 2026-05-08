@@ -7,7 +7,8 @@ const {
   getBiometricDevices,
   disableBiometric,
   updateSecurityPreferences,
-  setPin
+  setPin,
+  verifyPin
 } = require('../controllers/biometricController');
 const { auth } = require('../middleware/auth');
 const { handleValidationErrors } = require('../middleware/validation');
@@ -126,6 +127,18 @@ router.post('/pin',
   ],
   handleValidationErrors,
   setPin
+);
+
+// Verify PIN (used on login when biometric is skipped)
+router.post('/verify-pin',
+  auth,
+  [
+    body('pin')
+      .matches(/^\d{4}$/)
+      .withMessage('PIN must be exactly 4 digits')
+  ],
+  handleValidationErrors,
+  verifyPin
 );
 
 module.exports = router;

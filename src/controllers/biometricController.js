@@ -441,6 +441,36 @@ const verifyBiometricTemplate = async (response, storedHash) => {
   }
 };
 
+const verifyPin = async (req, res) => {
+  try {
+    const { pin } = req.body;
+    const userId = req.user.id;
+
+    if (!pin || !/^\d{4}$/.test(pin)) {
+      return res.status(400).json({ success: false, message: 'PIN must be exactly 4 digits' });
+    }
+
+    const user = await User.findByPk(userId, { attributes: ['id', 'pin_hash', 'pin_enabled'] });
+
+    if (!user || !user.pin_enabled || !user.pin_hash) {
+      return res.status(400).json({ success: false, message: 'PIN is not set up for this account' });
+    }
+
+    const isMatch = await bcrypt.compare(pin, user.pin_hash);
+
+    if (!isMatch) {
+      logger.warn(`Failed PIN verification for user ${userId}`);
+      return res.status(401).json({ success: false, message: 'Incorrect PIN' });
+    }
+
+    logger.info(`PIN verified for user ${userId}`);
+    res.json({ success: true, message: 'PIN verified successfully' });
+  } catch (error) {
+    logger.error('Verify PIN error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 module.exports = {
   enrollBiometric,
   requestChallenge,
@@ -448,5 +478,6 @@ module.exports = {
   getBiometricDevices,
   disableBiometric,
   updateSecurityPreferences,
-  setPin
+  setPin,
+  verifyPin
 };

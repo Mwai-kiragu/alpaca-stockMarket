@@ -173,6 +173,11 @@ User.init({
     unique: true,
     allowNull: true
   },
+  mystocks_sub_account_id: {
+    type: DataTypes.STRING(255),
+    unique: true,
+    allowNull: true
+  },
   role: {
     type: DataTypes.ENUM('user', 'admin', 'support'),
     defaultValue: 'user'

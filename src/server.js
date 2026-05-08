@@ -40,6 +40,11 @@ const productionCallbackRoutes = require('./routes/productionCallback');
 const waitlistRoutes = require('./routes/waitlist');
 const referralRoutes = require('./routes/referral');
 
+// MyStocks Africa routes (wallet, bonds/funds, webhooks)
+const msWalletRoutes = require('./routes/mystocks/msWallet');
+const msBondsFundsRoutes = require('./routes/mystocks/msBondsFunds');
+const msWebhooksRoutes = require('./routes/mystocks/msWebhooks');
+
 // Payment WebSocket handler
 const { handlePaymentWebSocket } = require('./routes/paymentWebSocket');
 
@@ -128,6 +133,11 @@ app.use('/api/v1/search', searchRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/support', supportRoutes);
 app.use('/api/v1/admin', adminRoutes);
+
+// MyStocks Africa
+app.use('/api/v1/ms', msWalletRoutes);
+app.use('/api/v1/ms', msBondsFundsRoutes);
+app.use('/api/v1/ms', msWebhooksRoutes);
 
 // Development/Testing routes
 if (process.env.NODE_ENV !== 'production') {

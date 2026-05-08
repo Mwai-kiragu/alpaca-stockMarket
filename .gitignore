@@ -119,3 +119,8 @@ WITHDRAWAL_METHODS.md
 docs
 examples
 postman
+riven-postman-collection.json
+ENDPOINTS.md
+.env.dev
+.env.example
+.env.testsms

@@ -1,5 +1,6 @@
 const { User, Order, Wallet } = require('../models');
 const alpacaService = require('../services/alpacaService');
+const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
 const logger = require('../utils/logger');
 
@@ -143,7 +144,16 @@ const getPortfolio = async (req, res) => {
           kesBalance: localKesBalance,
           usdBalance: localUsdBalance,
           totalUsd: localCashUsd
-        }
+        },
+        mystocks: await (async () => {
+          if (!user.mystocks_sub_account_id) return null;
+          try {
+            return await ms.getPortfolio(user.mystocks_sub_account_id);
+          } catch (e) {
+            logger.warn('MyStocks portfolio fetch error:', e.message);
+            return null;
+          }
+        })()
       }
     });
   } catch (error) {
