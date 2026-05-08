@@ -47,10 +47,8 @@ const msWebhooksRoutes = require('./routes/mystocks/msWebhooks');
 
 // Payment WebSocket handler
 const { handlePaymentWebSocket } = require('./routes/paymentWebSocket');
-const waitlistRoutes = require('./routes/waitlist');
 
 const app = express();
-app.set('trust proxy', 1);
 const server = createServer(app);
 
 // Enable WebSocket support for native WebSocket connections
@@ -145,7 +143,6 @@ app.use('/api/v1/ms', msWebhooksRoutes);
 if (process.env.NODE_ENV !== 'production') {
   app.use('/api/v1/sms', smsTestRoutes);
 }
-app.use('/api/v1/waitlist', waitlistRoutes);
 
 app.get('/health', (req, res) => {
   res.status(200).json({
