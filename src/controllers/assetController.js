@@ -15,6 +15,7 @@ const getAssets = async (req, res) => {
       page = 1,
       limit = 20,
       search,
+      sector,
       category,
       isWatchlist
     } = req.query;
@@ -43,9 +44,22 @@ const getAssets = async (req, res) => {
 
     // African exchange → MyStocks stocks list
     if (isAfrican(exchange)) {
-      const { search, sector, page, limit: lim } = req.query;
-      const data = await ms.getStocks({ exchange: exchange.toUpperCase(), search, sector, page, limit: lim });
-      return res.json({ success: true, provider: 'mystocks', assets: data, count: Array.isArray(data) ? data.length : 0 });
+      const data = await ms.getStocks({ exchange: exchange.toUpperCase(), search, sector });
+      const all = Array.isArray(data) ? data : (Array.isArray(data?.stocks) ? data.stocks : []);
+      const pageNum = Math.max(1, parseInt(page, 10) || 1);
+      const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
+      const start = (pageNum - 1) * limitNum;
+      const paginated = all.slice(start, start + limitNum);
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        assets: paginated,
+        count: paginated.length,
+        total: all.length,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(all.length / limitNum)
+      });
     }
 
     if (category === 'popular') {
