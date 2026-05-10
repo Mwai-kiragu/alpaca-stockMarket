@@ -19,8 +19,10 @@ const searchStocks = async (req, res) => {
 
     // African exchange → MyStocks search
     if (isAfrican(exchange)) {
-      const data = await ms.getStocks({ exchange: exchange.toUpperCase(), search: query.trim(), limit });
-      return res.json({ success: true, provider: 'mystocks', results: data, count: Array.isArray(data) ? data.length : 0 });
+      const data = await ms.getStocks({ exchange: exchange.toUpperCase(), search: query.trim() });
+      const results = Array.isArray(data) ? data : (Array.isArray(data?.stocks) ? data.stocks : []);
+      const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
+      return res.json({ success: true, provider: 'mystocks', results: results.slice(0, limitNum), count: Math.min(results.length, limitNum), total: results.length });
     }
 
     const searchQuery = query.toLowerCase().trim();
