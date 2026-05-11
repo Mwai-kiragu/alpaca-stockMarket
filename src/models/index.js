@@ -6,6 +6,9 @@ const Notification = require('./Notification');
 const { SupportTicket, SupportTicketMessage } = require('./SupportTicket');
 const EmailVerificationToken = require('./EmailVerificationToken');
 const Waitlist = require('./Waitlist');
+const Post = require('./Post');
+const StaticPage = require('./StaticPage');
+const SocialLink = require('./SocialLink');
 
 // Define associations
 User.hasOne(Wallet, { foreignKey: 'user_id', as: 'wallet' });
@@ -40,4 +43,7 @@ module.exports = {
   SupportTicketMessage,
   EmailVerificationToken,
   Waitlist,
+  Post,
+  StaticPage,
+  SocialLink,
 };

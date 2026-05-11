@@ -24,6 +24,9 @@ const searchRoutes = require('./routes/search');
 const notificationRoutes = require('./routes/notifications');
 const supportRoutes = require('./routes/support');
 const waitlistRoutes = require('./routes/waitlist');
+const postRoutes = require('./routes/posts');
+const pageRoutes = require('./routes/pages');
+const socialRoutes = require('./routes/social');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -65,6 +68,9 @@ app.use('/api/v1/search', searchRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/support', supportRoutes);
 app.use('/api/v1/waitlist', waitlistRoutes);
+app.use('/api/v1/posts', postRoutes);
+app.use('/api/v1/pages', pageRoutes);
+app.use('/api/v1/social', socialRoutes);
 
 app.get('/health', (req, res) => {
   res.status(200).json({
