@@ -44,8 +44,14 @@ connectDB();
 
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 500,
   message: 'Too many requests from this IP, please try again later.',
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: 'Too many authentication attempts, please try again later.',
 });
 
 app.use(helmet());
@@ -56,7 +62,7 @@ app.use(limiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/auth', authLimiter, authRoutes);
 app.use('/api/v1/wallet', walletRoutes);
 app.use('/api/v1/orders', orderRoutes);
 app.use('/api/v1/stocks', stockRoutes);
