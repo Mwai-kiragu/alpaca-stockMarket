@@ -6,11 +6,36 @@ const Watchlist = require('../models/Watchlist');
 const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
 const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
 
+const ASSET_CATEGORIES = [
+  { id: 'us_equity', label: 'US Stocks', description: 'Equities listed on US exchanges', provider: 'alpaca', type: 'equity', region: 'US' },
+  { id: 'us_etf',   label: 'US ETFs',   description: 'Exchange-traded funds on US exchanges', provider: 'alpaca', type: 'etf',    region: 'US' },
+  { id: 'crypto',   label: 'Crypto',    description: 'Cryptocurrency assets', provider: 'alpaca', type: 'crypto',  region: 'Global' },
+  { id: 'NSE',  label: 'NSE — Nairobi',     description: 'Nairobi Securities Exchange (Kenya)',       provider: 'mystocks', type: 'equity', region: 'Africa', exchange: 'NSE',  currency: 'KES' },
+  { id: 'NGX',  label: 'NGX — Lagos',       description: 'Nigerian Exchange Group (Nigeria)',         provider: 'mystocks', type: 'equity', region: 'Africa', exchange: 'NGX',  currency: 'NGN' },
+  { id: 'JSE',  label: 'JSE — Johannesburg', description: 'Johannesburg Stock Exchange (South Africa)', provider: 'mystocks', type: 'equity', region: 'Africa', exchange: 'JSE', currency: 'ZAR' },
+  { id: 'GSE',  label: 'GSE — Accra',       description: 'Ghana Stock Exchange (Ghana)',              provider: 'mystocks', type: 'equity', region: 'Africa', exchange: 'GSE',  currency: 'GHS' },
+  { id: 'BRVM', label: 'BRVM — Abidjan',    description: 'Bourse Régionale des Valeurs Mobilières (West Africa)', provider: 'mystocks', type: 'equity', region: 'Africa', exchange: 'BRVM', currency: 'XOF' },
+  { id: 'LUSE', label: 'LUSE — Lusaka',     description: 'Lusaka Securities Exchange (Zambia)',       provider: 'mystocks', type: 'equity', region: 'Africa', exchange: 'LUSE', currency: 'ZMW' },
+  { id: 'EGX',  label: 'EGX — Cairo',       description: 'Egyptian Exchange (Egypt)',                 provider: 'mystocks', type: 'equity', region: 'Africa', exchange: 'EGX',  currency: 'EGP' },
+  { id: 'BSE',  label: 'BSE — Gaborone',    description: 'Botswana Stock Exchange (Botswana)',        provider: 'mystocks', type: 'equity', region: 'Africa', exchange: 'BSE',  currency: 'BWP' },
+  { id: 'SEM',  label: 'SEM — Port Louis',  description: 'Stock Exchange of Mauritius (Mauritius)',  provider: 'mystocks', type: 'equity', region: 'Africa', exchange: 'SEM',  currency: 'MUR' },
+];
+
+const getAssetCategories = (req, res) => {
+  const grouped = {
+    us: ASSET_CATEGORIES.filter(c => c.region === 'US'),
+    africa: ASSET_CATEGORIES.filter(c => c.region === 'Africa'),
+    global: ASSET_CATEGORIES.filter(c => c.region === 'Global'),
+  };
+  res.json({ success: true, categories: ASSET_CATEGORIES, grouped });
+};
+
 const getAssets = async (req, res) => {
   try {
     const {
       status = 'active',
-      assetClass = 'us_equity',
+      assetClass: assetClassCamel,
+      asset_class: assetClassSnake,
       exchange,
       page = 1,
       limit = 20,
@@ -19,6 +44,8 @@ const getAssets = async (req, res) => {
       category,
       isWatchlist
     } = req.query;
+    // Accept both assetClass and asset_class query params
+    const assetClass = assetClassCamel || assetClassSnake || 'us_equity';
 
     let assets;
     let isPopular = false;
@@ -42,8 +69,12 @@ const getAssets = async (req, res) => {
       isWatchlistOnly = true;
     }
 
+    // Resolve African exchange — can come from ?exchange=NSE or ?asset_class=NSE
+    const africanExchange = isAfrican(exchange) ? exchange : (isAfrican(assetClass) ? assetClass : null);
+
     // African exchange → MyStocks stocks list
-    if (isAfrican(exchange)) {
+    if (africanExchange) {
+      const exchange = africanExchange; // shadow outer for consistency below
       const data = await ms.getStocks({ exchange: exchange.toUpperCase(), search, sector });
       const all = Array.isArray(data) ? data : (Array.isArray(data?.stocks) ? data.stocks : []);
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
@@ -665,5 +696,6 @@ module.exports = {
   searchAssets,
   getTradableAssets,
   getPopularAssets,
-  getAssetsByExchange
+  getAssetsByExchange,
+  getAssetCategories
 };
