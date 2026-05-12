@@ -5,7 +5,8 @@ const {
   searchAssets,
   getTradableAssets,
   getPopularAssets,
-  getAssetsByExchange
+  getAssetsByExchange,
+  getAssetCategories
 } = require('../controllers/assetController');
 const { getCompanyLogo } = require('../controllers/logoController');
 const { auth } = require('../middleware/auth');
@@ -15,6 +16,7 @@ const router = express.Router();
 // Public logo endpoint (no auth required for image display)
 router.get('/logo/:symbol', getCompanyLogo);
 
+router.get('/categories', getAssetCategories); 
 router.get('/', auth, getAssets);
 router.get('/search', auth, searchAssets);
 router.get('/tradable', auth, getTradableAssets);
