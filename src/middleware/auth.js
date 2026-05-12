@@ -225,7 +225,7 @@ const requirePin = async (req, res, next) => {
       });
     }
 
-    const bcrypt = require('bcryptjs');
+    const bcrypt = require('bcrypt');
     const isValidPin = await bcrypt.compare(pin, req.user.pin_hash);
 
     if (!isValidPin) {
