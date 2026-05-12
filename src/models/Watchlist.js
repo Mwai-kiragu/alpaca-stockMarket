@@ -21,8 +21,8 @@ Watchlist.init({
   },
   alpaca_watchlist_id: {
     type: DataTypes.STRING,
-    allowNull: false,
-    comment: 'Watchlist ID from Alpaca API'
+    allowNull: true,
+    comment: 'Watchlist ID from Alpaca API — null for African-exchange-only watchlists'
   },
   name: {
     type: DataTypes.STRING(100),

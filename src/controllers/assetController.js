@@ -80,7 +80,10 @@ const getAssets = async (req, res) => {
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
       const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
       const start = (pageNum - 1) * limitNum;
-      const paginated = all.slice(start, start + limitNum);
+      const paginated = all.slice(start, start + limitNum).map(asset => ({
+        ...asset,
+        logo: `/api/v1/assets/logo/${asset.symbol}`
+      }));
       return res.json({
         success: true,
         provider: 'mystocks',

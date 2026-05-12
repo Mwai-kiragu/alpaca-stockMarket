@@ -177,7 +177,9 @@ const getMarketIntelArticle = async (idOrSlug) => {
 };
 
 const getDividendCalendar = async ({ status } = {}) => {
-  const res = await client.get('/dividends/calendar', { params: { status } });
+  const params = {};
+  if (status) params.status = status.toUpperCase();
+  const res = await client.get('/dividends/calendar', { params });
   return res.data;
 };
 

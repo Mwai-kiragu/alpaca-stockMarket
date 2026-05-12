@@ -1,5 +1,9 @@
 const alpacaService = require('../services/alpacaService');
+const ms = require('../services/mystocksService');
 const logger = require('../utils/logger');
+
+const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
+const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
 
 const getMarketNews = async (req, res) => {
   try {
@@ -328,10 +332,33 @@ const getMarketInsights = async (req, res) => {
 
 const getEconomicCalendar = async (req, res) => {
   try {
-    const { start, end, isHoliday } = req.query;
+    const { start, end, isHoliday, exchange: exchangeRaw } = req.query;
+    const exchange = exchangeRaw?.trim();
 
     const defaultStart = start || new Date().toISOString().split('T')[0];
     const defaultEnd = end || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    if (isAfrican(exchange)) {
+      let dividends = [];
+      try {
+        // No status param = defaults to upcoming per MyStocks API docs
+        const data = await ms.getDividendCalendar();
+        const raw = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : (Array.isArray(data?.dividends) ? data.dividends : []));
+        dividends = raw.map(d => ({ ...d, provider: 'mystocks', exchange: exchange.toUpperCase() }));
+      } catch (e) {
+        logger.warn('MyStocks dividend calendar error:', e.message);
+      }
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        exchange: exchange.toUpperCase(),
+        calendar: [],
+        economicEvents: [],
+        dividends,
+        period: { start: defaultStart, end: defaultEnd },
+        count: dividends.length,
+        note: `Market holiday calendar for ${exchange.toUpperCase()} is not available via API. Dividend data shown.`
+      });
+    }
 
     const calendar = await alpacaService.getMarketCalendar(defaultStart, defaultEnd);
 
@@ -463,20 +490,43 @@ const getEconomicCalendar = async (req, res) => {
       filteredCalendar = formattedCalendar.filter(day => day.isHoliday === holidayFilter);
     }
 
+    const filteredEconomicEvents = economicEvents.filter(event =>
+      event.date >= defaultStart && event.date <= defaultEnd
+    );
+    const filteredDividends = dividendEvents.filter(dividend =>
+      dividend.exDividendDate >= defaultStart && dividend.exDividendDate <= defaultEnd
+    );
+
+    // Fetch MyStocks NSE dividends and merge (no status param = upcoming by default)
+    let msDividends = [];
+    try {
+      const msData = await ms.getDividendCalendar();
+      const raw = Array.isArray(msData) ? msData : (Array.isArray(msData?.data) ? msData.data : (Array.isArray(msData?.dividends) ? msData.dividends : []));
+      msDividends = raw.map(d => ({ ...d, provider: 'mystocks', exchange: 'NSE' }));
+    } catch (e) {
+      logger.warn('MyStocks dividend calendar fetch error:', e.message);
+    }
+
+    const allDividends = [
+      ...filteredDividends.map(d => ({ ...d, provider: 'alpaca' })),
+      ...msDividends
+    ];
+
     res.json({
       success: true,
       calendar: filteredCalendar,
-      economicEvents: economicEvents.filter(event =>
-        event.date >= defaultStart && event.date <= defaultEnd
-      ),
-      dividends: dividendEvents.filter(dividend =>
-        dividend.exDividendDate >= defaultStart && dividend.exDividendDate <= defaultEnd
-      ),
+      economicEvents: filteredEconomicEvents,
+      dividends: allDividends,
       period: {
         start: defaultStart,
         end: defaultEnd
       },
-      count: filteredCalendar.length
+      count: {
+        holidays: filteredCalendar.length,
+        economicEvents: filteredEconomicEvents.length,
+        dividends: allDividends.length,
+        total: filteredCalendar.length + filteredEconomicEvents.length + allDividends.length
+      }
     });
   } catch (error) {
     logger.error('Get economic calendar error:', error);
