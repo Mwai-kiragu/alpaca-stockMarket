@@ -80,6 +80,20 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false
 }));
 
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  message: 'Too many requests from this IP, please try again later.',
+  validate: { xForwardedForHeader: false },
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: 'Too many authentication attempts, please try again later.',
+  validate: { xForwardedForHeader: false },
+});
+
 // Block suspicious requests
 app.use((req, res, next) => {
   const suspiciousPaths = [
@@ -90,11 +104,6 @@ app.use((req, res, next) => {
     '/config',
     '/parameters.yml'
   ];
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 500,
-  message: 'Too many requests from this IP, please try again later.',
-});
 
   if (suspiciousPaths.some(path => req.path.includes(path))) {
     logger.warn(`Blocked suspicious request: ${req.ip} ${req.method} ${req.path}`);
@@ -102,16 +111,12 @@ const limiter = rateLimit({
   }
   next();
 });
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  message: 'Too many authentication attempts, please try again later.',
-});
 
 app.use(helmet());
 app.use(cors());
 app.use(compression());
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
+app.use(limiter);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -119,7 +124,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/uploads', express.static('uploads'));
 
 // Core authentication and onboarding endpoints
-app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/auth', authLimiter, authRoutes);
 app.use('/api/v1/user', onboardingRoutes);
 app.use('/api/v1/onboarding', onboardingRoutes);
 
@@ -135,7 +140,6 @@ app.use('/api/v1/referral', referralRoutes);
 
 // Trading platform endpoints
 app.use('/api/v1/biometric', biometricRoutes);
-app.use('/api/v1/auth', authLimiter, authRoutes);
 app.use('/api/v1/wallet', walletRoutes);
 app.use('/api/v1/funding', fundingRoutes);
 app.use('/api/v1/kcb', kcbRoutes);
