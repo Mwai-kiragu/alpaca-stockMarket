@@ -96,7 +96,7 @@ module.exports = {
   Watchlist,
   WaitlistUser,
   Referral,
-  UserReferral
+  UserReferral,
   Waitlist,
   Post,
   StaticPage,
