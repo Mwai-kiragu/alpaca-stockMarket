@@ -156,9 +156,13 @@ const fetchLogoFromSources = async (symbol) => {
     logger.debug(`FMP failed for ${symbol}: ${error.message}`);
   }
 
-  // Source 6: EODHD (free, uses symbol directly)
+  // Source 6: EODHD — uses country-specific path (e.g. KE/ABSA for NSE, US/AAPL for NYSE)
   try {
-    const eodhdUrl = `https://eodhistoricaldata.com/img/logos/US/${symbolUpper}.png`;
+    const dotIndex = symbolUpper.lastIndexOf('.');
+    const hasCountrySuffix = dotIndex !== -1 && (symbolUpper.length - dotIndex - 1) <= 3;
+    const eodCountry = hasCountrySuffix ? symbolUpper.substring(dotIndex + 1) : 'US';
+    const eodTicker = hasCountrySuffix ? symbolUpper.substring(0, dotIndex) : symbolUpper;
+    const eodhdUrl = `https://eodhistoricaldata.com/img/logos/${eodCountry}/${eodTicker}.png`;
     const response = await axios.get(eodhdUrl, {
       responseType: 'arraybuffer',
       timeout: 3000,

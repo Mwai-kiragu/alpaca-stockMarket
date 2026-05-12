@@ -570,6 +570,17 @@ const getAllWatchlists = async (req, res) => {
   }
 };
 
+// African symbols have an exchange suffix: ABSA.KE, EQTY.KE, ACCESS.NG, etc.
+const isAfricanSymbol = (sym) => /\.[A-Z]{2,3}$/.test(sym);
+const partitionSymbols = (syms) => {
+  const upper = syms.map(s => s.toUpperCase());
+  return {
+    us: upper.filter(s => !isAfricanSymbol(s)),
+    african: upper.filter(s => isAfricanSymbol(s)),
+    all: upper
+  };
+};
+
 const manageWatchlist = async (req, res) => {
   try {
     const { name, symbols, addSymbol, removeSymbol, delete: deleteWatchlist } = req.body;
@@ -619,42 +630,21 @@ const manageWatchlist = async (req, res) => {
         });
       }
 
-      try {
-        await alpacaService.addSymbolToWatchlist(
-          existingWatchlist.alpaca_watchlist_id,
-          addSymbol.toUpperCase()
-        );
-      } catch (alpacaError) {
-        if (alpacaError.message.includes('not found') || alpacaError.message.includes('404')) {
-          logger.warn(`Alpaca watchlist ${existingWatchlist.alpaca_watchlist_id} not found. Recreating...`);
+      const symbolUpper = addSymbol.toUpperCase();
+      const updatedSymbols = [...existingWatchlist.symbols, symbolUpper];
 
-          const newSymbols = [...existingWatchlist.symbols, addSymbol.toUpperCase()];
-          const alpacaWatchlist = await alpacaService.createWatchlist(
-            existingWatchlist.name,
-            newSymbols
-          );
-
-          await existingWatchlist.update({
-            alpaca_watchlist_id: alpacaWatchlist.id,
-            symbols: newSymbols
-          });
-
-          return res.json({
-            success: true,
-            message: `${addSymbol} added to watchlist successfully.`,
-            data: {
-              id: existingWatchlist.id,
-              name: existingWatchlist.name,
-              symbols: newSymbols,
-              createdAt: existingWatchlist.created_at,
-              updatedAt: existingWatchlist.updated_at
-            }
-          });
+      // Only sync non-African symbols to Alpaca
+      if (!isAfricanSymbol(symbolUpper) && existingWatchlist.alpaca_watchlist_id) {
+        try {
+          await alpacaService.addSymbolToWatchlist(existingWatchlist.alpaca_watchlist_id, symbolUpper);
+        } catch (alpacaError) {
+          if (!alpacaError.message.includes('not found') && !alpacaError.message.includes('404')) {
+            throw alpacaError;
+          }
+          logger.warn(`Alpaca watchlist ${existingWatchlist.alpaca_watchlist_id} not found, skipping Alpaca sync`);
         }
-        throw alpacaError; // Re-throw other errors
       }
 
-      const updatedSymbols = [...existingWatchlist.symbols, addSymbol.toUpperCase()];
       await existingWatchlist.update({ symbols: updatedSymbols });
 
       return res.json({
@@ -687,44 +677,16 @@ const manageWatchlist = async (req, res) => {
         });
       }
 
-      try {
-        await alpacaService.removeSymbolFromWatchlist(
-          existingWatchlist.alpaca_watchlist_id,
-          symbolUpper
-        );
-      } catch (alpacaError) {
-        if (alpacaError.message.includes('not found') || alpacaError.message.includes('404')) {
-          logger.warn(`Alpaca watchlist ${existingWatchlist.alpaca_watchlist_id} not found. Recreating...`);
-
-          const remainingSymbols = existingWatchlist.symbols.filter(s => s !== symbolUpper);
-
-          if (remainingSymbols.length > 0) {
-            const alpacaWatchlist = await alpacaService.createWatchlist(
-              existingWatchlist.name,
-              remainingSymbols
-            );
-
-            await existingWatchlist.update({
-              alpaca_watchlist_id: alpacaWatchlist.id,
-              symbols: remainingSymbols
-            });
-          } else {
-            await existingWatchlist.update({ symbols: remainingSymbols });
+      // Only sync removal to Alpaca for non-African symbols
+      if (!isAfricanSymbol(symbolUpper) && existingWatchlist.alpaca_watchlist_id) {
+        try {
+          await alpacaService.removeSymbolFromWatchlist(existingWatchlist.alpaca_watchlist_id, symbolUpper);
+        } catch (alpacaError) {
+          if (!alpacaError.message.includes('not found') && !alpacaError.message.includes('404')) {
+            throw alpacaError;
           }
-
-          return res.json({
-            success: true,
-            message: `${symbolUpper} removed from watchlist successfully.`,
-            data: {
-              id: existingWatchlist.id,
-              name: existingWatchlist.name,
-              symbols: remainingSymbols,
-              createdAt: existingWatchlist.created_at,
-              updatedAt: existingWatchlist.updated_at
-            }
-          });
+          logger.warn(`Alpaca watchlist ${existingWatchlist.alpaca_watchlist_id} not found, skipping Alpaca sync`);
         }
-        throw alpacaError; // Re-throw other errors
       }
 
       const updatedSymbols = existingWatchlist.symbols.filter(s => s !== symbolUpper);
@@ -765,49 +727,53 @@ const manageWatchlist = async (req, res) => {
     }
 
     if (existingWatchlist) {
+      // Split so African symbols bypass Alpaca; existing US symbols still sync normally
+      const { us: usSymbols, all: allSymbols } = partitionSymbols(symbols);
       let alpacaWatchlist;
 
-      try {
-        // Try to update in Alpaca
-        alpacaWatchlist = await alpacaService.updateWatchlist(
-          existingWatchlist.alpaca_watchlist_id,
-          name.trim(),
-          symbols
-        );
-      } catch (alpacaError) {
-        // If Alpaca watchlist not found (404), recreate it
-        if (alpacaError.message.includes('not found') || alpacaError.message.includes('404')) {
-          logger.warn(`Alpaca watchlist ${existingWatchlist.alpaca_watchlist_id} not found. Recreating...`);
+      if (usSymbols.length > 0) {
+        try {
+          // Try to update in Alpaca with US-only symbols
+          alpacaWatchlist = await alpacaService.updateWatchlist(
+            existingWatchlist.alpaca_watchlist_id,
+            name.trim(),
+            usSymbols
+          );
+        } catch (alpacaError) {
+          // If Alpaca watchlist not found (404), recreate it
+          if (alpacaError.message.includes('not found') || alpacaError.message.includes('404')) {
+            logger.warn(`Alpaca watchlist ${existingWatchlist.alpaca_watchlist_id} not found. Recreating...`);
 
-          // Recreate watchlist in Alpaca with new symbols
-          alpacaWatchlist = await alpacaService.createWatchlist(name.trim(), symbols);
+            // Recreate watchlist in Alpaca with US symbols only
+            alpacaWatchlist = await alpacaService.createWatchlist(name.trim(), usSymbols);
 
-          // Update database with new Alpaca ID
-          await existingWatchlist.update({
-            alpaca_watchlist_id: alpacaWatchlist.id,
-            name: alpacaWatchlist.name,
-            symbols: alpacaWatchlist.assets.map(a => a.symbol)
-          });
+            // Update database with new Alpaca ID and ALL symbols (US + African)
+            await existingWatchlist.update({
+              alpaca_watchlist_id: alpacaWatchlist.id,
+              name: alpacaWatchlist.name,
+              symbols: allSymbols
+            });
 
-          return res.json({
-            success: true,
-            message: 'Watchlist updated successfully.',
-            data: {
-              id: existingWatchlist.id,
-              name: existingWatchlist.name,
-              symbols: existingWatchlist.symbols,
-              createdAt: existingWatchlist.created_at,
-              updatedAt: existingWatchlist.updated_at
-            }
-          });
+            return res.json({
+              success: true,
+              message: 'Watchlist updated successfully.',
+              data: {
+                id: existingWatchlist.id,
+                name: existingWatchlist.name,
+                symbols: existingWatchlist.symbols,
+                createdAt: existingWatchlist.created_at,
+                updatedAt: existingWatchlist.updated_at
+              }
+            });
+          }
+          throw alpacaError; // Re-throw other errors
         }
-        throw alpacaError; // Re-throw other errors
       }
 
-      // Update in database
+      // Update in database with ALL symbols (US + African)
       await existingWatchlist.update({
-        name: alpacaWatchlist.name,
-        symbols: alpacaWatchlist.assets.map(a => a.symbol)
+        name: alpacaWatchlist ? alpacaWatchlist.name : name.trim(),
+        symbols: allSymbols
       });
 
       return res.json({
@@ -823,26 +789,35 @@ const manageWatchlist = async (req, res) => {
       });
     }
 
-    try {
-      const existingAlpacaWatchlists = await alpacaService.getAllWatchlists();
-      if (existingAlpacaWatchlists && existingAlpacaWatchlists.length > 0) {
-        logger.info(`Found ${existingAlpacaWatchlists.length} existing Alpaca watchlists. Cleaning up...`);
-        for (const wl of existingAlpacaWatchlists) {
-          await alpacaService.deleteWatchlist(wl.id);
-          logger.info(`Deleted old Alpaca watchlist: ${wl.id} (${wl.name})`);
-        }
-      }
-    } catch (cleanupError) {
-      logger.warn('Error cleaning up old watchlists:', cleanupError.message);
-    }
+    const { us: usSymbols, all: allSymbols } = partitionSymbols(symbols);
 
-    const alpacaWatchlist = await alpacaService.createWatchlist(name.trim(), symbols);
+    let alpacaWatchlistId = null;
+
+    if (usSymbols.length > 0) {
+      try {
+        const existingAlpacaWatchlists = await alpacaService.getAllWatchlists();
+        if (existingAlpacaWatchlists && existingAlpacaWatchlists.length > 0) {
+          for (const wl of existingAlpacaWatchlists) {
+            await alpacaService.deleteWatchlist(wl.id);
+          }
+        }
+      } catch (cleanupError) {
+        logger.warn('Error cleaning up old watchlists:', cleanupError.message);
+      }
+
+      try {
+        const alpacaWatchlist = await alpacaService.createWatchlist(name.trim(), usSymbols);
+        alpacaWatchlistId = alpacaWatchlist.id;
+      } catch (alpacaError) {
+        logger.warn('Failed to create Alpaca watchlist, saving to DB only:', alpacaError.message);
+      }
+    }
 
     const dbWatchlist = await Watchlist.create({
       user_id: userId,
-      alpaca_watchlist_id: alpacaWatchlist.id,
-      name: alpacaWatchlist.name,
-      symbols: alpacaWatchlist.assets.map(a => a.symbol)
+      alpaca_watchlist_id: alpacaWatchlistId,
+      name: name.trim(),
+      symbols: allSymbols
     });
 
     return res.status(201).json({
@@ -1374,38 +1349,58 @@ const deleteWatchlist = async (req, res) => {
 
 const getTopMovers = async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = Math.min(parseInt(req.query.limit) || 10, 20);
+    const { exchange } = req.query;
 
-    if (limit < 1 || limit > 20) {
-      return res.status(400).json({
-        success: false,
-        message: 'Limit must be between 1 and 20.'
+    if (limit < 1) {
+      return res.status(400).json({ success: false, message: 'Limit must be between 1 and 20.' });
+    }
+
+    const byChange = (a, b) => (b.changePct ?? b.change ?? 0) - (a.changePct ?? a.change ?? 0);
+
+    const getMsMovers = async (exch) => {
+      const data = await ms.getStocks({ exchange: exch });
+      const all = Array.isArray(data) ? data : (Array.isArray(data?.stocks) ? data.stocks : []);
+      const withChange = all.filter(s => s.changePct != null || s.change != null);
+      return {
+        gainers: [...withChange].sort(byChange).slice(0, limit).map(s => ({ ...s, provider: 'mystocks', exchange: exch })),
+        losers: [...withChange].sort((a, b) => byChange(b, a)).slice(0, limit).map(s => ({ ...s, provider: 'mystocks', exchange: exch }))
+      };
+    };
+
+    // African-specific exchange → MyStocks only
+    if (isAfrican(exchange)) {
+      const msMovers = await getMsMovers(exchange.toUpperCase());
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        exchange: exchange.toUpperCase(),
+        data: { ...msMovers, lastUpdated: new Date().toISOString() },
+        count: { gainers: msMovers.gainers.length, losers: msMovers.losers.length }
       });
     }
 
-    const movers = await alpacaService.getTopMovers(limit);
+    // No exchange → fetch Alpaca + MyStocks NSE in parallel and merge
+    const [movers, msMovers, marketStatus] = await Promise.all([
+      alpacaService.getTopMovers(limit),
+      getMsMovers('NSE').catch(e => { logger.warn('MyStocks movers error:', e.message); return { gainers: [], losers: [] }; }),
+      alpacaService.getMarketStatus().catch(() => ({ is_open: false, next_open: null, next_close: null }))
+    ]);
 
-    // Get market status
-    let marketStatus;
-    try {
-      marketStatus = await alpacaService.getMarketStatus();
-      if (!marketStatus.is_open) {
-        marketStatus.message = 'Market closed. Showing data from last trading session';
-      } else {
-        marketStatus.message = 'Market is open. Showing live data';
-      }
-    } catch (error) {
-      marketStatus = {
-        is_open: false,
-        message: 'Market status unavailable'
-      };
+    const alpacaGainers = movers.gainers.map(s => ({ ...s, provider: 'alpaca' }));
+    const alpacaLosers  = movers.losers.map(s => ({ ...s, provider: 'alpaca' }));
+
+    if (!marketStatus.is_open) {
+      marketStatus.message = 'Market closed. Showing data from last trading session';
+    } else {
+      marketStatus.message = 'Market is open. Showing live data';
     }
 
     res.json({
       success: true,
       data: {
-        gainers: movers.gainers,
-        losers: movers.losers,
+        gainers: [...alpacaGainers, ...msMovers.gainers],
+        losers:  [...alpacaLosers,  ...msMovers.losers],
         lastUpdated: movers.lastUpdated
       },
       marketStatus: {
@@ -1415,8 +1410,8 @@ const getTopMovers = async (req, res) => {
         nextClose: marketStatus.next_close
       },
       count: {
-        gainers: movers.gainers.length,
-        losers: movers.losers.length
+        gainers: alpacaGainers.length + msMovers.gainers.length,
+        losers:  alpacaLosers.length  + msMovers.losers.length
       }
     });
   } catch (error) {
