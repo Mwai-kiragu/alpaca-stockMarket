@@ -1,9 +1,10 @@
 require('dotenv').config();
-const { connectDB } = require('../src/config/database');
+const { sequelize } = require('../src/config/database');
 const { User, Wallet } = require('../src/models');
 
 async function seed() {
-  await connectDB();
+  await sequelize.authenticate();
+  await sequelize.sync({ alter: true });
 
   const email = 'admin@riven.com';
   const existing = await User.findOne({ where: { email } });

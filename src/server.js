@@ -47,6 +47,9 @@ const msWebhooksRoutes = require('./routes/mystocks/msWebhooks');
 
 // Payment WebSocket handler
 const { handlePaymentWebSocket } = require('./routes/paymentWebSocket');
+const postRoutes = require('./routes/posts');
+const pageRoutes = require('./routes/pages');
+const socialRoutes = require('./routes/social');
 
 const app = express();
 const server = createServer(app);
@@ -87,6 +90,11 @@ app.use((req, res, next) => {
     '/config',
     '/parameters.yml'
   ];
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  message: 'Too many requests from this IP, please try again later.',
+});
 
   if (suspiciousPaths.some(path => req.path.includes(path))) {
     logger.warn(`Blocked suspicious request: ${req.ip} ${req.method} ${req.path}`);
@@ -94,6 +102,13 @@ app.use((req, res, next) => {
   }
   next();
 });
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: 'Too many authentication attempts, please try again later.',
+});
+
+app.use(helmet());
 app.use(cors());
 app.use(compression());
 app.use(morgan('combined', { stream: { write: message => logger.info(message.trim()) } }));
@@ -120,6 +135,7 @@ app.use('/api/v1/referral', referralRoutes);
 
 // Trading platform endpoints
 app.use('/api/v1/biometric', biometricRoutes);
+app.use('/api/v1/auth', authLimiter, authRoutes);
 app.use('/api/v1/wallet', walletRoutes);
 app.use('/api/v1/funding', fundingRoutes);
 app.use('/api/v1/kcb', kcbRoutes);
@@ -143,6 +159,10 @@ app.use('/api/v1/ms', msWebhooksRoutes);
 if (process.env.NODE_ENV !== 'production') {
   app.use('/api/v1/sms', smsTestRoutes);
 }
+app.use('/api/v1/waitlist', waitlistRoutes);
+app.use('/api/v1/posts', postRoutes);
+app.use('/api/v1/pages', pageRoutes);
+app.use('/api/v1/social', socialRoutes);
 
 app.get('/health', (req, res) => {
   res.status(200).json({

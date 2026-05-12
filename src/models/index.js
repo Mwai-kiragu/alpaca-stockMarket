@@ -13,6 +13,10 @@ const Watchlist = require('./Watchlist');
 const WaitlistUser = require('./WaitlistUser');
 const Referral = require('./Referral');
 const UserReferral = require('./UserReferral');
+const Waitlist = require('./Waitlist');
+const Post = require('./Post');
+const StaticPage = require('./StaticPage');
+const SocialLink = require('./SocialLink');
 
 // Define associations
 User.hasOne(Wallet, { foreignKey: 'user_id', as: 'wallet' });
@@ -93,4 +97,8 @@ module.exports = {
   WaitlistUser,
   Referral,
   UserReferral
+  Waitlist,
+  Post,
+  StaticPage,
+  SocialLink,
 };
