@@ -46,12 +46,14 @@ const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 500,
   message: 'Too many requests from this IP, please try again later.',
+  validate: { xForwardedForHeader: false },
 });
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
   message: 'Too many authentication attempts, please try again later.',
+  validate: { xForwardedForHeader: false },
 });
 
 app.use(helmet());
