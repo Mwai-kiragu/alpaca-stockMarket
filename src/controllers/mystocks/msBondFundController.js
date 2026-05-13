@@ -100,4 +100,34 @@ const redeemFund = async (req, res) => {
   }
 };
 
-module.exports = { listBonds, getBond, subscribeToBond, listFunds, getFund, subscribeToFund, redeemFund };
+const listMarketIntel = async (req, res) => {
+  try {
+    const { symbol, exchange, page = 1, limit = 20 } = req.query;
+    const data = await ms.getMarketIntel({ symbol, exchange, page: parseInt(page), limit: parseInt(limit) });
+    const items = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : (Array.isArray(data?.items) ? data.items : []));
+    res.json({
+      success: true,
+      provider: 'mystocks',
+      news: items,
+      count: items.length,
+      total: data?.total || data?.count || items.length,
+      page: parseInt(page),
+      limit: parseInt(limit)
+    });
+  } catch (error) {
+    logger.error('MS listMarketIntel error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch market intelligence feed' });
+  }
+};
+
+const getMarketIntelArticle = async (req, res) => {
+  try {
+    const data = await ms.getMarketIntelArticle(req.params.idOrSlug);
+    res.json({ success: true, provider: 'mystocks', article: data });
+  } catch (error) {
+    logger.error('MS getMarketIntelArticle error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch article' });
+  }
+};
+
+module.exports = { listBonds, getBond, subscribeToBond, listFunds, getFund, subscribeToFund, redeemFund, listMarketIntel, getMarketIntelArticle };

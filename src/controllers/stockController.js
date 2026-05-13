@@ -1476,7 +1476,167 @@ const getStockChart = async (req, res) => {
       });
     }
 
-    // Get bars data
+    const limitNum = Math.min(parseInt(limit), 100);
+
+    // MyStocks path for African symbols (e.g. ABSA.KE, DANGCEM.NG)
+    if (isAfricanSymbol(symbol)) {
+      const msRange = (() => {
+        if (['1Min', '5Min', '15Min', '30Min', '1Hour'].includes(timeframe)) return '1W';
+        if (timeframe === '1Day') {
+          if (limitNum <= 7) return '1W';
+          if (limitNum <= 30) return '1M';
+          if (limitNum <= 90) return '3M';
+          return '1Y';
+        }
+        if (timeframe === '1Week') return '1Y';
+        return '5Y';
+      })();
+
+      let raw;
+      let stockName = symbol.toUpperCase();
+
+      // Step 1: fetch stock snapshot — needed for name resolution and slug building
+      let stockSnapshot = null;
+      try {
+        const ticker = symbol.includes('.') ? symbol.split('.')[0] : symbol;
+        const snap = await ms.getStocks({ search: ticker });
+        const stocks = Array.isArray(snap) ? snap : (Array.isArray(snap?.stocks) ? snap.stocks : []);
+        stockSnapshot = stocks.find(s => s.symbol?.toUpperCase() === symbol.toUpperCase()) || stocks[0] || null;
+        if (stockSnapshot?.name) stockName = stockSnapshot.name;
+      } catch (_) { /* best-effort */ }
+
+      // Step 2: try partner history endpoint (works in production)
+      try {
+        raw = await ms.getStockHistory(symbol.toUpperCase(), msRange);
+      } catch (e) {
+        logger.warn(`MyStocks partner history unavailable for ${symbol}, trying public API: ${e.message}`);
+        raw = null;
+      }
+
+      const normalizeBar = (bar) => {
+        // { date, price } from public priceHistory → treat price as close
+        if (bar.price !== undefined && bar.open === undefined) {
+          return { date: bar.date, open: bar.price, high: bar.price, low: bar.price, close: bar.price, volume: 0 };
+        }
+        return bar;
+      };
+
+      const extractHistory = (data) => {
+        const arr = Array.isArray(data) ? data
+          : (Array.isArray(data?.priceHistory) ? data.priceHistory
+          : (Array.isArray(data?.history) ? data.history
+          : (Array.isArray(data?.data) ? data.data
+          : (Array.isArray(data?.prices) ? data.prices
+          : (Array.isArray(data?.candles) ? data.candles
+          : (Array.isArray(data?.ohlcv) ? data.ohlcv
+          : []))))));
+        return arr.map(normalizeBar);
+      };
+
+      let history = extractHistory(raw);
+      let stockLogo = `/api/v1/assets/logo/${symbol.toUpperCase()}`;
+
+      // Step 3: try public web API using slug (works in sandbox + production)
+      if (!history.length && stockSnapshot?.name && stockSnapshot?.exchange) {
+        try {
+          const slug = ms.buildStockSlug(stockSnapshot.name, stockSnapshot.exchange);
+          const pubRaw = await ms.getStockBySlug(slug);
+          history = extractHistory(pubRaw);
+          // Use real logo URL from public API if available
+          if (pubRaw?.logo?.imageUrl) stockLogo = pubRaw.logo.imageUrl;
+          logger.info(`MyStocks public API chart fetched via slug: ${slug}, ${history.length} points`);
+        } catch (slugErr) {
+          logger.warn(`MyStocks public slug fallback failed for ${symbol}: ${slugErr.message}`);
+        }
+      }
+
+      // Step 4: last resort — 2-point snapshot chart from current price data
+      if (!history.length && stockSnapshot?.price) {
+        const today = new Date().toISOString().split('T')[0];
+        const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+        history = [
+          { date: yesterday, open: stockSnapshot.previousClose, high: stockSnapshot.previousClose, low: stockSnapshot.previousClose, close: stockSnapshot.previousClose, volume: 0 },
+          { date: today,     open: stockSnapshot.previousClose, high: stockSnapshot.dayHigh || stockSnapshot.price, low: stockSnapshot.dayLow || stockSnapshot.price, close: stockSnapshot.price, volume: stockSnapshot.volume || 0 }
+        ];
+      }
+
+      if (!history.length) {
+        return res.status(404).json({
+          success: false,
+          message: 'No chart data available for this symbol.'
+        });
+      }
+
+      const chartData = history.slice(-limitNum).map(bar => ({
+        timestamp: bar.date || bar.timestamp || bar.t,
+        open: parseFloat(bar.open ?? bar.o ?? 0),
+        high: parseFloat(bar.high ?? bar.h ?? 0),
+        low: parseFloat(bar.low ?? bar.l ?? 0),
+        close: parseFloat(bar.close ?? bar.c ?? 0),
+        volume: parseInt(bar.volume ?? bar.v ?? 0)
+      }));
+
+      const firstPrice = chartData[0].close;
+      const lastPrice = chartData[chartData.length - 1].close;
+      const change = lastPrice - firstPrice;
+      const changePercent = ((change / firstPrice) * 100).toFixed(2);
+      const lastDataTimestamp = chartData[chartData.length - 1].timestamp;
+
+      let chartImageUrl = null;
+      if (chartType !== 'candlestick') {
+        const chartConfig = {
+          type: chartType === 'bar' ? 'bar' : 'line',
+          data: {
+            labels: chartData.map(d => new Date(d.timestamp).toLocaleDateString()),
+            datasets: [{
+              label: `${symbol.toUpperCase()} Price`,
+              data: chartData.map(d => d.close),
+              borderColor: change >= 0 ? '#10b981' : '#ef4444',
+              backgroundColor: change >= 0 ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+              fill: true,
+              tension: 0.4
+            }]
+          },
+          options: {
+            plugins: { title: { display: true, text: `${stockName} (${symbol.toUpperCase()})` }, legend: { display: false } },
+            scales: { y: { beginAtZero: false } }
+          }
+        };
+        chartImageUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
+      }
+
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        symbol: symbol.toUpperCase(),
+        name: stockName,
+        logo: stockLogo,
+        timeframe,
+        chartType,
+        data: chartData,
+        chartImageUrl,
+        marketStatus: {
+          isOpen: false,
+          message: `African exchange data from MyStocks`,
+          isLiveData: false,
+          lastDataTimestamp
+        },
+        stats: {
+          firstPrice,
+          lastPrice,
+          change,
+          changePercent: parseFloat(changePercent),
+          trend: change >= 0 ? 'up' : 'down',
+          high: Math.max(...chartData.map(d => d.high)),
+          low: Math.min(...chartData.map(d => d.low)),
+          totalVolume: chartData.reduce((sum, d) => sum + d.volume, 0),
+          dataAge: `Last updated: ${new Date(lastDataTimestamp).toLocaleString()}`
+        },
+        count: chartData.length
+      });
+    }
+
+    // Get bars data (Alpaca — US stocks)
     logger.info(`Fetching bars for ${symbol}: timeframe=${timeframe}, limit=${limit}`);
 
     const bars = await alpacaService.getBars(
@@ -1484,7 +1644,7 @@ const getStockChart = async (req, res) => {
       timeframe,
       null,
       null,
-      Math.min(parseInt(limit), 100)
+      limitNum
     );
 
     logger.info(`Received ${bars?.length || 0} bars for ${symbol}`);

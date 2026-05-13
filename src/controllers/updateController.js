@@ -7,17 +7,38 @@ const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toU
 
 const getMarketNews = async (req, res) => {
   try {
-    const { symbols, category, limit = 20, page = 1 } = req.query;
+    const { symbols, category, limit = 20, page = 1, exchange: exchangeRaw } = req.query;
+    const exchange = exchangeRaw?.trim();
+    const pageNum = Math.max(1, parseInt(page));
+    const newsLimit = Math.min(parseInt(limit), 50);
+
+    // African exchange → MyStocks market intel only
+    if (isAfrican(exchange)) {
+      const data = await ms.getMarketIntel({ exchange: exchange.toUpperCase(), page: pageNum, limit: newsLimit });
+      const items = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : (Array.isArray(data?.items) ? data.items : []));
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        exchange: exchange.toUpperCase(),
+        news: items,
+        count: items.length,
+        total: data?.total || data?.count || items.length,
+        pagination: { currentPage: pageNum, limit: newsLimit }
+      });
+    }
 
     let symbolsArray;
     if (symbols) {
       symbolsArray = symbols.split(',').map(s => s.toUpperCase().trim()).slice(0, 10);
     }
 
-    const newsLimit = Math.min(parseInt(limit), 50);
-    const news = await alpacaService.getNews(symbolsArray, newsLimit);
+    // No exchange → fetch Alpaca + MyStocks in parallel
+    const [alpacaNews, msIntelRaw] = await Promise.all([
+      alpacaService.getNews(symbolsArray, newsLimit).catch(e => { logger.warn('Alpaca news error:', e.message); return []; }),
+      ms.getMarketIntel({ page: pageNum, limit: newsLimit }).catch(e => { logger.warn('MyStocks intel error:', e.message); return []; })
+    ]);
 
-    const formattedNews = news.map(article => ({
+    const alpacaFormatted = alpacaNews.map(article => ({
       id: article.id,
       headline: article.headline,
       summary: article.summary,
@@ -29,21 +50,27 @@ const getMarketNews = async (req, res) => {
       url: article.url,
       symbols: article.symbols || [],
       images: article.images || [],
-      category: category || 'general'
+      category: category || 'general',
+      provider: 'alpaca'
     }));
 
-    const startIndex = (page - 1) * newsLimit;
-    const paginatedNews = formattedNews.slice(startIndex, startIndex + newsLimit);
+    const msItems = Array.isArray(msIntelRaw) ? msIntelRaw : (Array.isArray(msIntelRaw?.data) ? msIntelRaw.data : (Array.isArray(msIntelRaw?.items) ? msIntelRaw.items : []));
+    const msFormatted = msItems.map(item => ({ ...item, provider: 'mystocks' }));
+
+    const allNews = [...alpacaFormatted, ...msFormatted];
+    const startIndex = (pageNum - 1) * newsLimit;
+    const paginated = allNews.slice(startIndex, startIndex + newsLimit);
 
     res.json({
       success: true,
-      news: paginatedNews,
-      count: paginatedNews.length,
-      totalCount: formattedNews.length,
+      provider: 'combined',
+      news: paginated,
+      count: paginated.length,
+      totalCount: allNews.length,
       pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(formattedNews.length / newsLimit),
-        hasMore: startIndex + newsLimit < formattedNews.length
+        currentPage: pageNum,
+        totalPages: Math.ceil(allNews.length / newsLimit),
+        hasMore: startIndex + newsLimit < allNews.length
       },
       filters: {
         symbols: symbolsArray || 'general',

@@ -6,6 +6,13 @@ const BASE_URL = process.env.MYSTOCKS_ENV === 'production'
   ? 'https://mystocks.africa/api/v1/partner'
   : 'https://mystocks.africa/api/sandbox/v1';
 
+// Public web API — no partner key needed, used for stock detail + chart history
+const publicClient = axios.create({
+  baseURL: 'https://mystocks.africa/api/v1',
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 10000
+});
+
 const client = axios.create({
   baseURL: BASE_URL,
   headers: {
@@ -111,6 +118,22 @@ const getStocks = async ({ exchange, sector, search, page, limit } = {}) => {
 
 const getStockHistory = async (symbol, range = '1M') => {
   const res = await client.get(`/stocks/${symbol}/history`, { params: { range } });
+  if (typeof res.data === 'string' && res.data.trimStart().startsWith('<')) {
+    throw new Error(`MyStocks history endpoint not available for ${symbol} (sandbox may not support this endpoint)`);
+  }
+  return res.data;
+};
+
+// Build the slug MyStocks web app uses: e.g. "Absa Bank Kenya PLC" + "NSE" → "absa-bank-kenya-plc-nse"
+const buildStockSlug = (name, exchange) =>
+  `${name.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+/g, '-')}-${exchange.toLowerCase()}`;
+
+// Public API — returns stock detail including price history used by the web chart
+const getStockBySlug = async (slug, range = '1M') => {
+  const res = await publicClient.get(`/stocks/${slug}`, { params: { t: Date.now() } });
+  if (typeof res.data === 'string' && res.data.trimStart().startsWith('<')) {
+    throw new Error(`MyStocks public stock endpoint not available for slug: ${slug}`);
+  }
   return res.data;
 };
 
@@ -218,6 +241,8 @@ module.exports = {
   getPortfolio,
   getStocks,
   getStockHistory,
+  buildStockSlug,
+  getStockBySlug,
   getStockPulse,
   getBonds,
   getBond,
