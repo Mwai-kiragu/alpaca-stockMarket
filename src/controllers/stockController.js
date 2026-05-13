@@ -124,10 +124,89 @@ const getBars = async (req, res) => {
   try {
     const { timeframe = '1Day', start, end, limit = 100, exchange, range = '1M' } = req.query;
 
-    // African exchange → MyStocks history
-    if (isAfrican(exchange)) {
-      const data = await ms.getStockHistory(symbol.toUpperCase(), range);
-      return res.json({ success: true, provider: 'mystocks', data });
+    // African symbol detected by .KE/.NG/.ZA etc. suffix → MyStocks
+    if (isAfricanSymbol(symbol)) {
+      const limitNum = Math.min(parseInt(limit), 1000);
+      const msRange = (() => {
+        if (['1Min', '5Min', '15Min', '30Min', '1Hour'].includes(timeframe)) return '1W';
+        if (timeframe === '1Day') {
+          if (limitNum <= 7) return '1W';
+          if (limitNum <= 30) return '1M';
+          if (limitNum <= 90) return '3M';
+          return '1Y';
+        }
+        if (timeframe === '1Week') return '1Y';
+        return '5Y';
+      })();
+
+      let stockName = symbol.toUpperCase();
+      let stockLogo = `/api/v1/assets/logo/${symbol.toUpperCase()}`;
+      let stockSnapshot = null;
+
+      try {
+        const ticker = symbol.includes('.') ? symbol.split('.')[0] : symbol;
+        const snap = await ms.getStocks({ search: ticker });
+        const stocks = Array.isArray(snap) ? snap : (Array.isArray(snap?.stocks) ? snap.stocks : []);
+        stockSnapshot = stocks.find(s => s.symbol?.toUpperCase() === symbol.toUpperCase()) || stocks[0] || null;
+        if (stockSnapshot?.name) stockName = stockSnapshot.name;
+      } catch (_) {}
+
+      let raw = null;
+      try {
+        raw = await ms.getStockHistory(symbol.toUpperCase(), msRange);
+      } catch (_) {}
+
+      const extractBars = (data) => {
+        const arr = Array.isArray(data) ? data
+          : (Array.isArray(data?.priceHistory) ? data.priceHistory
+          : (Array.isArray(data?.history) ? data.history
+          : (Array.isArray(data?.data) ? data.data
+          : (Array.isArray(data?.prices) ? data.prices
+          : (Array.isArray(data?.candles) ? data.candles : [])))));
+        return arr.map(bar => ({
+          timestamp: bar.date || bar.timestamp || bar.t,
+          open: parseFloat(bar.open ?? bar.o ?? bar.price ?? 0),
+          high: parseFloat(bar.high ?? bar.h ?? bar.price ?? 0),
+          low: parseFloat(bar.low ?? bar.l ?? bar.price ?? 0),
+          close: parseFloat(bar.close ?? bar.c ?? bar.price ?? 0),
+          volume: parseInt(bar.volume ?? bar.v ?? 0),
+          vwap: null,
+          tradeCount: null
+        }));
+      };
+
+      let bars = extractBars(raw);
+
+      if (!bars.length && stockSnapshot?.name && stockSnapshot?.exchange) {
+        try {
+          const slug = ms.buildStockSlug(stockSnapshot.name, stockSnapshot.exchange);
+          const pubRaw = await ms.getStockBySlug(slug);
+          bars = extractBars(pubRaw);
+          if (pubRaw?.logo?.imageUrl) stockLogo = pubRaw.logo.imageUrl;
+        } catch (_) {}
+      }
+
+      if (!bars.length && stockSnapshot?.price) {
+        const today = new Date().toISOString().split('T')[0];
+        const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+        bars = [
+          { timestamp: yesterday, open: stockSnapshot.previousClose, high: stockSnapshot.previousClose, low: stockSnapshot.previousClose, close: stockSnapshot.previousClose, volume: 0, vwap: null, tradeCount: null },
+          { timestamp: today, open: stockSnapshot.previousClose, high: stockSnapshot.dayHigh || stockSnapshot.price, low: stockSnapshot.dayLow || stockSnapshot.price, close: stockSnapshot.price, volume: stockSnapshot.volume || 0, vwap: null, tradeCount: null }
+        ];
+      }
+
+      const sliced = bars.slice(-limitNum);
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        symbol: symbol.toUpperCase(),
+        name: stockName,
+        logo: stockLogo,
+        timeframe,
+        bars: sliced,
+        count: sliced.length,
+        ownership: null
+      });
     }
 
     // Validate timeframe
