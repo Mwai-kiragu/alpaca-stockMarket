@@ -2,6 +2,15 @@
 
 module.exports = {
   async up(queryInterface, Sequelize) {
+    const addIdx = async (table, fields, opts = {}) => {
+      try { await queryInterface.addIndex(table, fields, opts); } catch (e) {
+        if (!e.message.includes('already exists')) throw e;
+      }
+    };
+
+    const tables = await queryInterface.showAllTables();
+
+    if (!tables.includes('wallets')) {
     await queryInterface.createTable('wallets', {
       id: { type: Sequelize.UUID, defaultValue: Sequelize.UUIDV4, primaryKey: true },
       user_id: {
@@ -20,7 +29,8 @@ module.exports = {
       updated_at: { type: Sequelize.DATE, allowNull: false }
     });
 
-    await queryInterface.addIndex('wallets', ['user_id'], { unique: true });
+    await addIdx('wallets', ['user_id'], { unique: true });
+    } // end if wallets
 
     await queryInterface.sequelize.query(`
       DO $$ BEGIN
@@ -34,6 +44,7 @@ module.exports = {
       EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     `);
 
+    if (!tables.includes('transactions')) {
     await queryInterface.createTable('transactions', {
       id: { type: Sequelize.UUID, defaultValue: Sequelize.UUIDV4, primaryKey: true },
       wallet_id: {
@@ -58,11 +69,12 @@ module.exports = {
       updated_at: { type: Sequelize.DATE, allowNull: false }
     });
 
-    await queryInterface.addIndex('transactions', ['wallet_id']);
-    await queryInterface.addIndex('transactions', ['reference'], { unique: true });
-    await queryInterface.addIndex('transactions', ['mpesa_transaction_id']);
-    await queryInterface.addIndex('transactions', ['status']);
-    await queryInterface.addIndex('transactions', ['created_at']);
+    await addIdx('transactions', ['wallet_id']);
+    await addIdx('transactions', ['reference'], { unique: true });
+    await addIdx('transactions', ['mpesa_transaction_id']);
+    await addIdx('transactions', ['status']);
+    await addIdx('transactions', ['created_at']);
+    } // end if transactions
   },
 
   async down(queryInterface) {

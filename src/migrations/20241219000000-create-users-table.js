@@ -3,20 +3,23 @@
 module.exports = {
   async up(queryInterface, Sequelize) {
     await queryInterface.sequelize.query(`
-      CREATE TYPE "enum_users_gender" AS ENUM ('male', 'female', 'other', 'not_specified');
-      CREATE TYPE "enum_users_registration_step" AS ENUM (
+      DO $$ BEGIN CREATE TYPE "enum_users_gender" AS ENUM ('male', 'female', 'other', 'not_specified'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+      DO $$ BEGIN CREATE TYPE "enum_users_registration_step" AS ENUM (
         'email_verification', 'personal_info', 'employment_info', 'source_of_wealth',
         'investing_savings', 'disclosures', 'tax_info', 'phone_verification',
         'address_info', 'kyc_verification', 'investment_experience', 'trusted_contact',
         'documents', 'documents_id_front', 'documents_id_back', 'documents_proof_address',
         'agreements', 'kyc_pending', 'kyc_under_review', 'completed', 'initial_completed'
-      );
-      CREATE TYPE "enum_users_kyc_status" AS ENUM ('not_started', 'pending', 'submitted', 'approved', 'rejected', 'under_review');
-      CREATE TYPE "enum_users_account_status" AS ENUM ('pending', 'active', 'suspended', 'closed');
-      CREATE TYPE "enum_users_role" AS ENUM ('user', 'admin', 'support');
-      CREATE TYPE "enum_users_status" AS ENUM ('active', 'suspended', 'closed');
-      CREATE TYPE "enum_users_registration_status" AS ENUM ('started', 'email_verified', 'phone_verified', 'quiz_completed', 'documents_uploaded', 'completed');
+      ); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+      DO $$ BEGIN CREATE TYPE "enum_users_kyc_status" AS ENUM ('not_started', 'pending', 'submitted', 'approved', 'rejected', 'under_review'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+      DO $$ BEGIN CREATE TYPE "enum_users_account_status" AS ENUM ('pending', 'active', 'suspended', 'closed'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+      DO $$ BEGIN CREATE TYPE "enum_users_role" AS ENUM ('user', 'admin', 'support'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+      DO $$ BEGIN CREATE TYPE "enum_users_status" AS ENUM ('active', 'suspended', 'closed'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+      DO $$ BEGIN CREATE TYPE "enum_users_registration_status" AS ENUM ('started', 'email_verified', 'phone_verified', 'quiz_completed', 'documents_uploaded', 'completed'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     `);
+
+    const tables = await queryInterface.showAllTables();
+    if (tables.includes('users')) return;
 
     await queryInterface.createTable('users', {
       id: {

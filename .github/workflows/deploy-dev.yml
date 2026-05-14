@@ -52,10 +52,10 @@ jobs:
         run: |
           SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=10"
           ssh $SSH_OPTS "$VM_USER@$VM_HOST" \
-            "set -e && cd $DEPLOY_PATH && npm ci --omit=dev && npm run migrate 2>/dev/null || echo 'No migrations'"
+            "set -e && cd $DEPLOY_PATH && npm ci --omit=dev && npm run migrate"
 
       - name: Restart PM2
         run: |
           SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
           ssh $SSH_OPTS "$VM_USER@$VM_HOST" \
-            "cd $DEPLOY_PATH && pm2 delete $PM2_NAME 2>/dev/null; PORT=$APP_PORT pm2 start src/server.js --name $PM2_NAME && pm2 save"
+            "cd $DEPLOY_PATH && pm2 delete $PM2_NAME 2>/dev/null; NODE_ENV=production PORT=$APP_PORT pm2 start src/server.js --name $PM2_NAME -i 2 && pm2 save"
