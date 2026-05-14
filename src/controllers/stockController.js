@@ -1050,74 +1050,128 @@ const getWatchlist = async (req, res) => {
       });
     }
 
-    // Fetch market data from Alpaca using the alpaca_watchlist_id
-    // Only US equity symbols go to Alpaca; NSE/African symbols are excluded
-    const usSymbols = (dbWatchlist.symbols || []).filter(s => !isAfricanSymbol(s));
+    const allSymbols = dbWatchlist.symbols || [];
+    const usSymbols = allSymbols.filter(s => !isAfricanSymbol(s));
+    const africanSymbols = allSymbols.filter(s => isAfricanSymbol(s));
 
-    const recreateAlpacaWatchlist = async () => {
-      let newAlpacaWatchlist;
-      try {
-        newAlpacaWatchlist = await alpacaService.createWatchlist(dbWatchlist.name, usSymbols);
-      } catch (createError) {
-        if (createError.message && createError.message.includes('watchlist name must be unique')) {
-          logger.warn(`Watchlist name "${dbWatchlist.name}" already exists in Alpaca. Cleaning up...`);
-          const allWatchlists = await alpacaService.getAllWatchlists();
-          const conflicts = allWatchlists.filter(w => w.name === dbWatchlist.name);
-          for (const w of conflicts) {
-            await alpacaService.deleteWatchlist(w.id);
-          }
-          newAlpacaWatchlist = await alpacaService.createWatchlist(dbWatchlist.name, usSymbols);
-        } else {
-          throw createError;
-        }
-      }
-      await dbWatchlist.update({ alpaca_watchlist_id: newAlpacaWatchlist.id });
-      logger.info(`Alpaca watchlist created/restored with ID: ${newAlpacaWatchlist.id}`);
-      return newAlpacaWatchlist.id;
-    };
+    // --- US assets from Alpaca ---
+    let alpacaAssets = [];
+    let watchlistName = dbWatchlist.name;
 
-    let watchlistWithMarketData;
-
-    if (!dbWatchlist.alpaca_watchlist_id && usSymbols.length === 0) {
-      // No Alpaca ID and no US symbols — return DB-only data with no market info
-      watchlistWithMarketData = { name: dbWatchlist.name, assets: [], count: 0 };
-    } else if (!dbWatchlist.alpaca_watchlist_id) {
-      // Missing Alpaca ID but has US symbols — create it now
-      logger.warn(`Watchlist ${dbWatchlist.id} has no alpaca_watchlist_id; creating now.`);
-      try {
-        const newId = await recreateAlpacaWatchlist();
-        watchlistWithMarketData = await alpacaService.getWatchlistWithMarketData(newId);
-      } catch (recoveryError) {
-        logger.error('Failed to create missing Alpaca watchlist:', recoveryError);
-        watchlistWithMarketData = { name: dbWatchlist.name, assets: [], count: 0 };
-      }
-    } else {
-      // Normal path — fetch from Alpaca, recover if stale
-      try {
-        watchlistWithMarketData = await alpacaService.getWatchlistWithMarketData(
-          dbWatchlist.alpaca_watchlist_id
-        );
-      } catch (alpacaError) {
-        logger.warn(`Error fetching watchlist from Alpaca: ${alpacaError.message}. Attempting recovery...`);
+    if (usSymbols.length > 0) {
+      const recreateAlpacaWatchlist = async () => {
+        let newWl;
         try {
-          const newId = await recreateAlpacaWatchlist();
-          watchlistWithMarketData = await alpacaService.getWatchlistWithMarketData(newId);
-          logger.info(`Successfully recovered watchlist with new ID: ${newId}`);
-        } catch (recoveryError) {
-          logger.error('Failed to recover watchlist:', recoveryError);
-          throw alpacaError;
+          newWl = await alpacaService.createWatchlist(dbWatchlist.name, usSymbols);
+        } catch (createError) {
+          if (createError.message && createError.message.includes('watchlist name must be unique')) {
+            logger.warn(`Watchlist name "${dbWatchlist.name}" already exists in Alpaca. Cleaning up...`);
+            const allWatchlists = await alpacaService.getAllWatchlists();
+            for (const w of allWatchlists.filter(w => w.name === dbWatchlist.name)) {
+              await alpacaService.deleteWatchlist(w.id);
+            }
+            newWl = await alpacaService.createWatchlist(dbWatchlist.name, usSymbols);
+          } else {
+            throw createError;
+          }
         }
+        await dbWatchlist.update({ alpaca_watchlist_id: newWl.id });
+        logger.info(`Alpaca watchlist created/restored: ${newWl.id}`);
+        return newWl.id;
+      };
+
+      try {
+        let alpacaData;
+        if (!dbWatchlist.alpaca_watchlist_id) {
+          const newId = await recreateAlpacaWatchlist();
+          alpacaData = await alpacaService.getWatchlistWithMarketData(newId);
+        } else {
+          try {
+            alpacaData = await alpacaService.getWatchlistWithMarketData(dbWatchlist.alpaca_watchlist_id);
+          } catch (alpacaError) {
+            logger.warn(`Stale Alpaca watchlist, recovering: ${alpacaError.message}`);
+            const newId = await recreateAlpacaWatchlist();
+            alpacaData = await alpacaService.getWatchlistWithMarketData(newId);
+          }
+        }
+        alpacaAssets = alpacaData.assets || [];
+        watchlistName = alpacaData.name || dbWatchlist.name;
+      } catch (err) {
+        logger.error('Failed to fetch US watchlist assets from Alpaca:', err.message);
       }
     }
+
+    // --- African assets from MyStocks ---
+    const africanAssets = await Promise.all(africanSymbols.map(async (symbol) => {
+      try {
+        const ticker = symbol.includes('.') ? symbol.split('.')[0] : symbol;
+        const snap = await ms.getStocks({ search: ticker });
+        const stocks = Array.isArray(snap) ? snap : (Array.isArray(snap?.stocks) ? snap.stocks : []);
+        const stock = stocks.find(s => s.symbol?.toUpperCase() === symbol.toUpperCase()) || stocks[0];
+        if (!stock) throw new Error('symbol not found');
+
+        const currentPrice = stock.price || 0;
+        const previousClose = stock.previousClose || currentPrice;
+        const change = currentPrice - previousClose;
+        const changePercent = previousClose ? (change / previousClose) * 100 : 0;
+
+        return {
+          symbol,
+          name: stock.name || symbol,
+          logo: `/api/v1/assets/logo/${symbol}`,
+          exchange: stock.exchange || symbol.split('.').pop() || 'NSE',
+          assetClass: 'african_equity',
+          status: 'active',
+          tradable: false,
+          marginable: false,
+          shortable: false,
+          easyToBorrow: false,
+          fractionable: false,
+          marketData: {
+            currentPrice,
+            change,
+            changePercent,
+            volume: stock.volume || 0,
+            high: stock.dayHigh || currentPrice,
+            low: stock.dayLow || currentPrice,
+            lastUpdated: new Date().toISOString(),
+            isProfit: change >= 0
+          }
+        };
+      } catch (err) {
+        logger.warn(`Failed to get MyStocks data for ${symbol}: ${err.message}`);
+        return {
+          symbol,
+          name: symbol,
+          logo: `/api/v1/assets/logo/${symbol}`,
+          exchange: symbol.split('.').pop() || 'NSE',
+          assetClass: 'african_equity',
+          status: 'active',
+          tradable: false,
+          marginable: false,
+          shortable: false,
+          easyToBorrow: false,
+          fractionable: false,
+          marketData: {
+            currentPrice: 0, change: 0, changePercent: 0,
+            volume: 0, high: 0, low: 0,
+            lastUpdated: new Date().toISOString(),
+            isProfit: false
+          }
+        };
+      }
+    }));
+
+    const assets = [...alpacaAssets, ...africanAssets];
 
     res.json({
       success: true,
       watchlist: {
         id: dbWatchlist.id,
         alpacaWatchlistId: dbWatchlist.alpaca_watchlist_id,
-        name: watchlistWithMarketData.name,
-        assets: watchlistWithMarketData.assets,
-        count: watchlistWithMarketData.count,
+        name: watchlistName,
+        assets,
+        count: assets.length,
         createdAt: dbWatchlist.created_at,
         updatedAt: dbWatchlist.updated_at
       }
@@ -1179,18 +1233,28 @@ const updateWatchlist = async (req, res) => {
       });
     }
 
-    // Update in Alpaca
-    const alpacaWatchlist = await alpacaService.updateWatchlist(
-      dbWatchlist.alpaca_watchlist_id,
-      name.trim(),
-      symbols
-    );
+    const allSymbols = symbols.map(s => s.toUpperCase());
+    const usSymbols = allSymbols.filter(s => !isAfricanSymbol(s));
 
-    // Update in database
-    await dbWatchlist.update({
-      name: alpacaWatchlist.name,
-      symbols: alpacaWatchlist.assets.map(a => a.symbol)
-    });
+    if (usSymbols.length > 0) {
+      if (!dbWatchlist.alpaca_watchlist_id) {
+        const newWl = await alpacaService.createWatchlist(name.trim(), usSymbols);
+        await dbWatchlist.update({ alpaca_watchlist_id: newWl.id, name: name.trim(), symbols: allSymbols });
+      } else {
+        await alpacaService.updateWatchlist(dbWatchlist.alpaca_watchlist_id, name.trim(), usSymbols);
+        await dbWatchlist.update({ name: name.trim(), symbols: allSymbols });
+      }
+    } else {
+      // African-only — clear Alpaca watchlist if one exists
+      if (dbWatchlist.alpaca_watchlist_id) {
+        try { await alpacaService.deleteWatchlist(dbWatchlist.alpaca_watchlist_id); } catch (_) {}
+        await dbWatchlist.update({ alpaca_watchlist_id: null, name: name.trim(), symbols: allSymbols });
+      } else {
+        await dbWatchlist.update({ name: name.trim(), symbols: allSymbols });
+      }
+    }
+
+    await dbWatchlist.reload();
 
     res.json({
       success: true,
@@ -1253,20 +1317,38 @@ const addSymbolToWatchlist = async (req, res) => {
       });
     }
 
-    // Add to Alpaca
-    const alpacaWatchlist = await alpacaService.addSymbolToWatchlist(
-      dbWatchlist.alpaca_watchlist_id,
-      symbol
-    );
+    const symbolUpper = symbol.toUpperCase();
+    const currentSymbols = dbWatchlist.symbols || [];
 
-    // Update database
-    await dbWatchlist.update({
-      symbols: alpacaWatchlist.assets.map(a => a.symbol)
-    });
+    if (currentSymbols.includes(symbolUpper)) {
+      return res.status(400).json({
+        success: false,
+        message: 'This symbol is already in your watchlist.'
+      });
+    }
+
+    const updatedSymbols = [...currentSymbols, symbolUpper];
+
+    if (isAfricanSymbol(symbolUpper)) {
+      // African symbol — DB only, no Alpaca
+      await dbWatchlist.update({ symbols: updatedSymbols });
+    } else {
+      // US symbol — sync with Alpaca
+      if (!dbWatchlist.alpaca_watchlist_id) {
+        const usSymbols = updatedSymbols.filter(s => !isAfricanSymbol(s));
+        const newWl = await alpacaService.createWatchlist(dbWatchlist.name, usSymbols);
+        await dbWatchlist.update({ alpaca_watchlist_id: newWl.id, symbols: updatedSymbols });
+      } else {
+        await alpacaService.addSymbolToWatchlist(dbWatchlist.alpaca_watchlist_id, symbolUpper);
+        await dbWatchlist.update({ symbols: updatedSymbols });
+      }
+    }
+
+    await dbWatchlist.reload();
 
     res.json({
       success: true,
-      message: `${symbol.toUpperCase()} added to your watchlist successfully.`,
+      message: `${symbolUpper} added to your watchlist successfully.`,
       watchlist: {
         id: dbWatchlist.id,
         alpacaWatchlistId: dbWatchlist.alpaca_watchlist_id,
@@ -1277,13 +1359,6 @@ const addSymbolToWatchlist = async (req, res) => {
     });
   } catch (error) {
     logger.error('Add symbol to watchlist error:', error);
-
-    if (error.message.includes('already exists')) {
-      return res.status(400).json({
-        success: false,
-        message: 'This symbol is already in your watchlist.'
-      });
-    }
 
     if (error.message.includes('not found') || error.message.includes('404')) {
       return res.status(404).json({
