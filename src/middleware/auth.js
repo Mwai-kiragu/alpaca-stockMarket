@@ -101,6 +101,25 @@ const requireKYC = (req, res, next) => {
   next();
 };
 
+const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
+const isAfricanExchange = (ex) => !!ex && AFRICAN_EXCHANGES.has(ex.toUpperCase());
+const isAfricanSymbol = (sym) => /\.[A-Z]{2,3}$/i.test(sym || '');
+
+const requireKYCOrMyStocks = (req, res, next) => {
+  const { exchange, symbol } = req.body;
+  if (isAfricanExchange(exchange) || isAfricanSymbol(symbol)) {
+    return next();
+  }
+  if (req.user.kyc_status !== 'approved') {
+    return res.status(403).json({
+      success: false,
+      message: 'KYC verification required for this action.',
+      kycStatus: req.user.kyc_status
+    });
+  }
+  next();
+};
+
 // Middleware to require biometric authentication for specific actions
 const requireBiometric = (action = 'general') => {
   return async (req, res, next) => {
@@ -264,4 +283,4 @@ const adminAuth = (req, res, next) => {
   next();
 };
 
-module.exports = { auth, authorize, requireKYC, requireBiometric, requirePin, adminAuth };
+module.exports = { auth, authorize, requireKYC, requireKYCOrMyStocks, requireBiometric, requirePin, adminAuth };
