@@ -1,5 +1,12 @@
 const { body, param, query, validationResult } = require('express-validator');
 
+const AFRICAN_EXCHANGES_V = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
+const isAfricanBodyReq = (req) => {
+  const exchange = req.body?.exchange?.trim()?.toUpperCase();
+  const symbol = req.body?.symbol || '';
+  return (exchange && AFRICAN_EXCHANGES_V.has(exchange)) || /\.[A-Z]{2,3}$/i.test(symbol);
+};
+
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -179,15 +186,18 @@ const orderValidation = [
     .toUpperCase()
     .withMessage('Stock symbol is required'),
   body('side')
+    .customSanitizer(v => v?.toLowerCase())
     .isIn(['buy', 'sell'])
     .withMessage('Side must be buy or sell'),
   body('type')
+    .if((_value, { req }) => !isAfricanBodyReq(req))
     .isIn(['market', 'limit', 'stop', 'stop_limit'])
     .withMessage('Invalid order type'),
   body('qty')
     .isFloat({ min: 0.0001 })
     .withMessage('Quantity must be at least 0.0001'),
   body('time_in_force')
+    .if((_value, { req }) => !isAfricanBodyReq(req))
     .isIn(['day', 'gtc', 'ioc', 'fok'])
     .withMessage('Invalid time_in_force. Must be day, gtc, ioc, or fok'),
   body('limit_price')

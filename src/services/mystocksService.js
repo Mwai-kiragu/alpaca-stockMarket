@@ -2,9 +2,22 @@ const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
 
-const BASE_URL = process.env.MYSTOCKS_ENV === 'production'
-  ? 'https://mystocks.africa/api/v1/partner'
-  : 'https://mystocks.africa/api/sandbox/v1';
+const isSandbox = process.env.MYSTOCKS_ENV !== 'production';
+
+// Partner/user operations: /partner prefix in both envs
+const PARTNER_URL = isSandbox
+  ? 'https://mystocks.africa/api/sandbox/v1/partner'
+  : 'https://mystocks.africa/api/v1/partner';
+
+// Market data (stocks, bonds, funds, dividends): sandbox omits /partner, production includes it
+const DATA_URL = isSandbox
+  ? 'https://mystocks.africa/api/sandbox/v1'
+  : 'https://mystocks.africa/api/v1/partner';
+
+const authHeaders = {
+  'Authorization': `Bearer ${process.env.MYSTOCKS_API_KEY}`,
+  'Content-Type': 'application/json'
+};
 
 // Public web API — no partner key needed, used for stock detail + chart history
 const publicClient = axios.create({
@@ -13,33 +26,39 @@ const publicClient = axios.create({
   timeout: 10000
 });
 
+// User/account/trade operations
 const client = axios.create({
-  baseURL: BASE_URL,
-  headers: {
-    'Authorization': `Bearer ${process.env.MYSTOCKS_API_KEY}`,
-    'Content-Type': 'application/json'
-  },
+  baseURL: PARTNER_URL,
+  headers: authHeaders,
   timeout: 15000
 });
 
-client.interceptors.response.use(
-  res => res,
-  err => {
-    const status = err.response?.status;
-    const message = err.response?.data?.message || err.message;
-    logger.error(`MyStocks API error [${status}]: ${message}`, {
-      url: err.config?.url,
-      method: err.config?.method
-    });
-    return Promise.reject(err);
-  }
-);
+// Market data: stocks, bonds, funds, dividends, market-intel
+const dataClient = axios.create({
+  baseURL: DATA_URL,
+  headers: authHeaders,
+  timeout: 15000
+});
+
+const errorInterceptor = err => {
+  const status = err.response?.status;
+  const message = err.response?.data?.message || err.message;
+  logger.error(`MyStocks API error [${status}]: ${message}`, {
+    url: err.config?.url,
+    method: err.config?.method
+  });
+  return Promise.reject(err);
+};
+client.interceptors.response.use(res => res, errorInterceptor);
+dataClient.interceptors.response.use(res => res, errorInterceptor);
 
 const idempotencyKey = () => uuidv4();
 
 const createSubAccount = async ({ externalId, displayName, email }) => {
   const res = await client.post('/users', { externalId, displayName, email });
-  return res.data;
+  const locationId = res.headers?.location ? res.headers.location.split('/').filter(Boolean).pop() : undefined;
+  const data = res.data && typeof res.data === 'object' ? res.data : {};
+  return { ...data, _locationId: locationId };
 };
 
 const getSubAccount = async (subAccountId) => {
@@ -90,18 +109,21 @@ const getTransactions = async (subAccountId, { page, limit } = {}) => {
   return res.data;
 };
 
-const placeTrade = async (subAccountId, { symbol, type, quantity }) => {
-  const res = await client.post(
-    `/users/${subAccountId}/trade`,
+const placeTrade = async (_subAccountId, { symbol, type, quantity }) => {
+  const res = await dataClient.post(
+    '/trade',
     { symbol, type, quantity },
     { headers: { 'Idempotency-Key': idempotencyKey() } }
   );
+  if (typeof res.data === 'string' && res.data.trimStart().startsWith('<')) {
+    throw new Error('MyStocks trade endpoint not available in this environment. Contact MyStocks support or use a production API key.');
+  }
   return res.data;
 };
 
-const getOrders = async (subAccountId, { symbol, status, page, limit } = {}) => {
-  const res = await client.get(`/users/${subAccountId}/orders`, {
-    params: { symbol, status, page, limit }
+const getOrders = async (_subAccountId, { symbol, status, limit } = {}) => {
+  const res = await dataClient.get('/orders', {
+    params: { symbol, status, limit }
   });
   return res.data;
 };
@@ -112,12 +134,12 @@ const getPortfolio = async (subAccountId) => {
 };
 
 const getStocks = async ({ exchange, sector, search, page, limit } = {}) => {
-  const res = await client.get('/stocks', { params: { exchange, sector, search, page, limit } });
+  const res = await dataClient.get('/stocks', { params: { exchange, sector, search, page, limit } });
   return res.data;
 };
 
 const getStockHistory = async (symbol, range = '1M') => {
-  const res = await client.get(`/stocks/${symbol}/history`, { params: { range } });
+  const res = await dataClient.get(`/stocks/${symbol}/history`, { params: { range } });
   if (typeof res.data === 'string' && res.data.trimStart().startsWith('<')) {
     throw new Error(`MyStocks history endpoint not available for ${symbol} (sandbox may not support this endpoint)`);
   }
@@ -129,7 +151,7 @@ const buildStockSlug = (name, exchange) =>
   `${name.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().replace(/\s+/g, '-')}-${exchange.toLowerCase()}`;
 
 // Public API — returns stock detail including price history used by the web chart
-const getStockBySlug = async (slug, range = '1M') => {
+const getStockBySlug = async (slug) => {
   const res = await publicClient.get(`/stocks/${slug}`, { params: { t: Date.now() } });
   if (typeof res.data === 'string' && res.data.trimStart().startsWith('<')) {
     throw new Error(`MyStocks public stock endpoint not available for slug: ${slug}`);
@@ -138,17 +160,17 @@ const getStockBySlug = async (slug, range = '1M') => {
 };
 
 const getStockPulse = async (symbol) => {
-  const res = await client.get(`/stocks/${symbol}/pulse`);
+  const res = await dataClient.get(`/stocks/${symbol}/pulse`);
   return res.data;
 };
 
 const getBonds = async ({ type, currency, exchange } = {}) => {
-  const res = await client.get('/bonds', { params: { type, currency, exchange } });
+  const res = await dataClient.get('/bonds', { params: { type, currency, exchange } });
   return res.data;
 };
 
 const getBond = async (bondId) => {
-  const res = await client.get(`/bonds/${bondId}`);
+  const res = await dataClient.get(`/bonds/${bondId}`);
   return res.data;
 };
 
@@ -162,12 +184,12 @@ const subscribeToBond = async (subAccountId, { bondId, units }) => {
 };
 
 const getFunds = async ({ category, currency } = {}) => {
-  const res = await client.get('/funds', { params: { category, currency } });
+  const res = await dataClient.get('/funds', { params: { category, currency } });
   return res.data;
 };
 
 const getFund = async (fundId) => {
-  const res = await client.get(`/funds/${fundId}`);
+  const res = await dataClient.get(`/funds/${fundId}`);
   return res.data;
 };
 
@@ -190,19 +212,19 @@ const redeemFund = async (subAccountId, { holdingId, units }) => {
 };
 
 const getMarketIntel = async ({ symbol, exchange, page, limit } = {}) => {
-  const res = await client.get('/market-intel', { params: { symbol, exchange, page, limit } });
+  const res = await dataClient.get('/market-intel', { params: { symbol, exchange, page, limit } });
   return res.data;
 };
 
 const getMarketIntelArticle = async (idOrSlug) => {
-  const res = await client.get(`/market-intel/${idOrSlug}`);
+  const res = await dataClient.get(`/market-intel/${idOrSlug}`);
   return res.data;
 };
 
 const getDividendCalendar = async ({ status } = {}) => {
   const params = {};
   if (status) params.status = status.toUpperCase();
-  const res = await client.get('/dividends/calendar', { params });
+  const res = await dataClient.get('/dividends/calendar', { params });
   return res.data;
 };
 

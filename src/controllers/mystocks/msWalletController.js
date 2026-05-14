@@ -1,14 +1,8 @@
 const ms = require('../../services/mystocksService');
-const { User } = require('../../models');
 const logger = require('../../utils/logger');
+const { ensureMyStocksSubAccount } = require('../../utils/ensureMyStocksAccount');
 
-const getSubAccountId = async (userId) => {
-  const user = await User.findByPk(userId, { attributes: ['mystocks_sub_account_id'] });
-  if (!user?.mystocks_sub_account_id) {
-    throw new Error('MyStocks sub-account not found. Please complete account setup.');
-  }
-  return user.mystocks_sub_account_id;
-};
+const getSubAccountId = ensureMyStocksSubAccount;
 
 const getWallet = async (req, res) => {
   try {

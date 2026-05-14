@@ -8,15 +8,7 @@ const logger = require('../utils/logger');
 const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
 const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
 
-const getMsSubAccountId = async (userId) => {
-  const user = await User.findByPk(userId, { attributes: ['mystocks_sub_account_id'] });
-  if (!user?.mystocks_sub_account_id) {
-    const err = new Error('MyStocks sub-account not found. Complete account setup.');
-    err.status = 400;
-    throw err;
-  }
-  return user.mystocks_sub_account_id;
-};
+const { ensureMyStocksSubAccount } = require('../utils/ensureMyStocksAccount');
 
 const createOrder = async (req, res) => {
   try {
@@ -24,14 +16,16 @@ const createOrder = async (req, res) => {
 
     // African exchange → MyStocks trade
     if (isAfrican(exchange)) {
-      const subAccountId = await getMsSubAccountId(req.user.id);
+      await ensureMyStocksSubAccount(req.user.id);
       const tradeType = (side || orderType || '').toUpperCase();
       if (!['BUY', 'SELL'].includes(tradeType)) {
         return res.status(400).json({ success: false, message: 'side must be BUY or SELL for African exchanges' });
       }
       const qty = parseFloat(quantity);
       if (!qty || qty <= 0) return res.status(400).json({ success: false, message: 'qty must be a positive number' });
-      const data = await ms.placeTrade(subAccountId, { symbol: symbol.toUpperCase(), type: tradeType, quantity: qty });
+      // MyStocks uses clean tickers without country suffix (e.g. ABSA not ABSA.KE)
+      const msSymbol = symbol.toUpperCase().replace(/\.[A-Z]{2,3}$/, '');
+      const data = await ms.placeTrade(null, { symbol: msSymbol, type: tradeType, quantity: qty });
       return res.status(202).json({ success: true, provider: 'mystocks', data });
     }
 
@@ -311,10 +305,12 @@ const createOrder = async (req, res) => {
     }
 
   } catch (error) {
-    logger.error('Create order error:', error);
-    res.status(500).json({
+    logger.error('Create order error:', error.message);
+    const msMessage = error.response?.data?.error || error.response?.data?.message;
+    const status = error.response?.status || 500;
+    res.status(status).json({
       success: false,
-      message: 'Server error during order creation'
+      message: msMessage || error.message || 'Server error during order creation'
     });
   }
 };
@@ -325,7 +321,7 @@ const getOrders = async (req, res) => {
 
     // African exchange → MyStocks orders
     if (isAfrican(exchange)) {
-      const subAccountId = await getMsSubAccountId(req.user.id);
+      const subAccountId = await ensureMyStocksSubAccount(req.user.id);
       const data = await ms.getOrders(subAccountId, { symbol, status, page, limit });
       return res.json({ success: true, provider: 'mystocks', data });
     }

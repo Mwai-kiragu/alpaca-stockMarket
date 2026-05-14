@@ -2,12 +2,17 @@ const { User } = require('../models');
 const alpacaService = require('../services/alpacaService');
 const logger = require('../utils/logger');
 
-/**
- * Middleware to check if user's Alpaca trading account is active
- * Blocks trading and transfer operations if account is closed or blocked
- */
+const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
+const isAfricanOrder = (req) => {
+  const exchange = req.body?.exchange?.trim()?.toUpperCase();
+  const symbol = req.body?.symbol || '';
+  return (exchange && AFRICAN_EXCHANGES.has(exchange)) || /\.[A-Z]{2,3}$/i.test(symbol);
+};
+
 const checkAccountStatus = async (req, res, next) => {
   try {
+    if (isAfricanOrder(req)) return next();
+
     const userId = req.user.id;
 
     // Get user's Alpaca account ID
