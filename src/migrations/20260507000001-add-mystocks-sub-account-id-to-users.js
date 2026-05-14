@@ -1,16 +1,15 @@
 'use strict';
 
 module.exports = {
-  up: async (queryInterface, Sequelize) => {
-    await queryInterface.addColumn('users', 'mystocks_sub_account_id', {
-      type: Sequelize.STRING(255),
-      allowNull: true,
-      defaultValue: null,
-      unique: true
-    });
+  async up(queryInterface) {
+    await queryInterface.sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mystocks_sub_account_id VARCHAR(255);`);
+    await queryInterface.sequelize.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS users_mystocks_sub_account_id_unique
+        ON users (mystocks_sub_account_id) WHERE mystocks_sub_account_id IS NOT NULL;
+    `);
   },
 
-  down: async (queryInterface) => {
+  async down(queryInterface) {
     await queryInterface.removeColumn('users', 'mystocks_sub_account_id');
   }
 };

@@ -1,80 +1,32 @@
 'use strict';
 
-/** @type {import('sequelize-cli').Migration} */
 module.exports = {
   async up(queryInterface, Sequelize) {
-    // Add new gender option to enum
+    await queryInterface.sequelize.query(`ALTER TYPE "enum_users_gender" ADD VALUE IF NOT EXISTS 'not_specified';`);
+    await queryInterface.sequelize.query(`ALTER TYPE "enum_users_registration_step" ADD VALUE IF NOT EXISTS 'initial_completed';`);
+
+    await queryInterface.sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted BOOLEAN NOT NULL DEFAULT false;`);
+    await queryInterface.sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_accepted BOOLEAN NOT NULL DEFAULT false;`);
+    await queryInterface.sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;`);
+    await queryInterface.sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS privacy_accepted_at TIMESTAMPTZ;`);
+    await queryInterface.sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS quiz_answers JSONB;`);
+    await queryInterface.sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS quiz_completed_at TIMESTAMPTZ;`);
+
     await queryInterface.sequelize.query(`
-      ALTER TYPE "enum_users_gender" ADD VALUE IF NOT EXISTS 'not_specified';
+      DO $$ BEGIN
+        CREATE TYPE "enum_users_registration_status" AS ENUM (
+          'started', 'email_verified', 'phone_verified', 'quiz_completed', 'documents_uploaded', 'completed'
+        );
+      EXCEPTION WHEN duplicate_object THEN NULL;
+      END $$;
     `);
 
-    // Add new registration_step option to enum
     await queryInterface.sequelize.query(`
-      ALTER TYPE "enum_users_registration_step" ADD VALUE IF NOT EXISTS 'initial_completed';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS registration_status "enum_users_registration_status" NOT NULL DEFAULT 'started';
     `);
-
-    // Add new columns
-    await queryInterface.addColumn('users', 'terms_accepted', {
-      type: Sequelize.BOOLEAN,
-      allowNull: false,
-      defaultValue: false
-    });
-
-    await queryInterface.addColumn('users', 'privacy_accepted', {
-      type: Sequelize.BOOLEAN,
-      allowNull: false,
-      defaultValue: false
-    });
-
-    await queryInterface.addColumn('users', 'terms_accepted_at', {
-      type: Sequelize.DATE,
-      allowNull: true
-    });
-
-    await queryInterface.addColumn('users', 'privacy_accepted_at', {
-      type: Sequelize.DATE,
-      allowNull: true
-    });
-
-    await queryInterface.addColumn('users', 'quiz_answers', {
-      type: Sequelize.JSONB,
-      allowNull: true,
-      defaultValue: null
-    });
-
-    await queryInterface.addColumn('users', 'quiz_completed_at', {
-      type: Sequelize.DATE,
-      allowNull: true
-    });
-
-    // Create registration_status enum type
-    await queryInterface.sequelize.query(`
-      CREATE TYPE "enum_users_registration_status" AS ENUM (
-        'started',
-        'email_verified',
-        'phone_verified',
-        'quiz_completed',
-        'documents_uploaded',
-        'completed'
-      );
-    `);
-
-    await queryInterface.addColumn('users', 'registration_status', {
-      type: Sequelize.ENUM('started', 'email_verified', 'phone_verified', 'quiz_completed', 'documents_uploaded', 'completed'),
-      allowNull: false,
-      defaultValue: 'started'
-    });
-
-    // Update gender default value
-    await queryInterface.changeColumn('users', 'gender', {
-      type: Sequelize.ENUM('male', 'female', 'other', 'not_specified'),
-      allowNull: true,
-      defaultValue: 'not_specified'
-    });
   },
 
-  async down(queryInterface, Sequelize) {
-    // Remove new columns
+  async down(queryInterface) {
     await queryInterface.removeColumn('users', 'terms_accepted');
     await queryInterface.removeColumn('users', 'privacy_accepted');
     await queryInterface.removeColumn('users', 'terms_accepted_at');
@@ -82,8 +34,6 @@ module.exports = {
     await queryInterface.removeColumn('users', 'quiz_answers');
     await queryInterface.removeColumn('users', 'quiz_completed_at');
     await queryInterface.removeColumn('users', 'registration_status');
-
-    // Drop the enum type
     await queryInterface.sequelize.query('DROP TYPE IF EXISTS "enum_users_registration_status";');
   }
 };

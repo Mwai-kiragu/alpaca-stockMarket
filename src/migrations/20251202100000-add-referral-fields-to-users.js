@@ -1,42 +1,21 @@
 'use strict';
 
 module.exports = {
-  async up(queryInterface, Sequelize) {
-    // Add referral_code column
-    await queryInterface.addColumn('users', 'referral_code', {
-      type: Sequelize.STRING(20),
-      unique: true,
-      allowNull: true
-    });
+  async up(queryInterface) {
+    await queryInterface.sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code VARCHAR(20);`);
+    await queryInterface.sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by UUID REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL;`);
+    await queryInterface.sequelize.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referrals_count INTEGER DEFAULT 0;`);
 
-    // Add referred_by column
-    await queryInterface.addColumn('users', 'referred_by', {
-      type: Sequelize.UUID,
-      allowNull: true,
-      references: {
-        model: 'users',
-        key: 'id'
-      },
-      onUpdate: 'CASCADE',
-      onDelete: 'SET NULL'
-    });
-
-    // Add referrals_count column
-    await queryInterface.addColumn('users', 'referrals_count', {
-      type: Sequelize.INTEGER,
-      defaultValue: 0
-    });
-
-    // Add indexes
-    await queryInterface.addIndex('users', ['referral_code'], {
-      unique: true,
-      where: { referral_code: { [Sequelize.Op.ne]: null } }
-    });
-    await queryInterface.addIndex('users', ['referred_by']);
-    await queryInterface.addIndex('users', ['referrals_count']);
+    // Add indexes only if they don't exist
+    await queryInterface.sequelize.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS users_referral_code_unique
+        ON users (referral_code) WHERE referral_code IS NOT NULL;
+    `);
+    await queryInterface.sequelize.query(`CREATE INDEX IF NOT EXISTS users_referred_by ON users (referred_by);`);
+    await queryInterface.sequelize.query(`CREATE INDEX IF NOT EXISTS users_referrals_count ON users (referrals_count);`);
   },
 
-  async down(queryInterface, Sequelize) {
+  async down(queryInterface) {
     await queryInterface.removeColumn('users', 'referral_code');
     await queryInterface.removeColumn('users', 'referred_by');
     await queryInterface.removeColumn('users', 'referrals_count');
