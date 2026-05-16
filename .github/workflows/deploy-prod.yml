@@ -9,9 +9,15 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      id-token: write
+
     env:
-      VM_HOST: ${{ secrets.VM_HOST }}
-      VM_USER: ${{ secrets.VM_USER }}
+      GCP_PROJECT: vehiclelookup-52da7
+      VM_NAME: riven-app-vm
+      VM_ZONE: africa-south1-a
+      DEPLOY_USER: kelvinmbugua
       DEPLOY_PATH: /var/www/riven-prod
       PM2_NAME: riven-prod
       APP_PORT: "8080"
@@ -20,42 +26,56 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "$VM_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-        env:
-          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/901371236366/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: riven-deploy@vehiclelookup-52da7.iam.gserviceaccount.com
 
-      - name: Sync files to VM
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Package release
         run: |
-          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=10"
-          ssh $SSH_OPTS "$VM_USER@$VM_HOST" "mkdir -p $DEPLOY_PATH"
           tar --exclude='.git' \
               --exclude='node_modules' \
               --exclude='.env' \
               --exclude='*.log' \
-              -czf - . | \
-            ssh $SSH_OPTS "$VM_USER@$VM_HOST" "cd $DEPLOY_PATH && tar -xzf -"
-
-      - name: Write env file
-        run: |
-          printf '%s' "$PROD_ENV" > /tmp/prod.env
-          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no /tmp/prod.env "$VM_USER@$VM_HOST:$DEPLOY_PATH/.env"
-          rm /tmp/prod.env
+              -czf /tmp/deploy.tar.gz .
+          printf '%s' "$PROD_ENV" > /tmp/deploy.env
+          chmod 600 /tmp/deploy.env
         env:
           PROD_ENV: ${{ secrets.PROD_ENV }}
 
-      - name: Install dependencies & run migrations
+      - name: Build remote deploy script
         run: |
-          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=10"
-          ssh $SSH_OPTS "$VM_USER@$VM_HOST" \
-            "set -e && cd $DEPLOY_PATH && npm ci --omit=dev && npm run migrate"
+          cat > /tmp/remote-deploy.sh <<EOF
+          #!/bin/bash
+          set -e
+          DEPLOY_PATH="${DEPLOY_PATH}"
+          PM2_NAME="${PM2_NAME}"
+          APP_PORT="${APP_PORT}"
+          mkdir -p "\$DEPLOY_PATH"
+          cd "\$DEPLOY_PATH"
+          tar -xzf /tmp/deploy.tar.gz
+          install -m 600 /tmp/deploy.env "\$DEPLOY_PATH/.env"
+          npm ci --omit=dev
+          npm run migrate
+          pm2 delete "\$PM2_NAME" 2>/dev/null || true
+          NODE_ENV=production PORT="\$APP_PORT" pm2 start src/server.js --name "\$PM2_NAME" -i 2
+          pm2 save
+          rm -f /tmp/deploy.tar.gz /tmp/deploy.env
+          EOF
+          chmod +x /tmp/remote-deploy.sh
 
-      - name: Restart PM2
+      - name: Upload artifacts to VM
         run: |
-          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
-          ssh $SSH_OPTS "$VM_USER@$VM_HOST" \
-            "cd $DEPLOY_PATH && pm2 delete $PM2_NAME 2>/dev/null; NODE_ENV=production PORT=$APP_PORT pm2 start src/server.js --name $PM2_NAME -i 2 && pm2 save"
+          gcloud compute scp /tmp/deploy.tar.gz /tmp/deploy.env /tmp/remote-deploy.sh \
+            "$VM_NAME":/tmp/ \
+            --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap
+
+      - name: Run deploy script as ${{ env.DEPLOY_USER }}
+        run: |
+          gcloud compute ssh "$VM_NAME" \
+            --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap \
+            --command="sudo install -m 600 -o $DEPLOY_USER -g $DEPLOY_USER /tmp/deploy.env /tmp/deploy.env.owned && sudo mv /tmp/deploy.env.owned /tmp/deploy.env && sudo -u $DEPLOY_USER bash /tmp/remote-deploy.sh && rm -f /tmp/remote-deploy.sh"
