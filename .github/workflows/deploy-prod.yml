@@ -64,7 +64,6 @@ jobs:
           pm2 delete "\$PM2_NAME" 2>/dev/null || true
           NODE_ENV=production PORT="\$APP_PORT" pm2 start src/server.js --name "\$PM2_NAME" -i 2
           pm2 save
-          rm -f /tmp/deploy.tar.gz /tmp/deploy.env
           EOF
           chmod +x /tmp/remote-deploy.sh
 
@@ -78,4 +77,4 @@ jobs:
         run: |
           gcloud compute ssh "$VM_NAME" \
             --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap \
-            --command="sudo install -m 600 -o $DEPLOY_USER -g $DEPLOY_USER /tmp/deploy.env /tmp/deploy.env.owned && sudo mv /tmp/deploy.env.owned /tmp/deploy.env && sudo -u $DEPLOY_USER bash /tmp/remote-deploy.sh && rm -f /tmp/remote-deploy.sh"
+            --command="sudo install -m 600 -o $DEPLOY_USER -g $DEPLOY_USER /tmp/deploy.env /tmp/deploy.env.owned && sudo mv /tmp/deploy.env.owned /tmp/deploy.env && sudo -u $DEPLOY_USER bash /tmp/remote-deploy.sh && sudo rm -f /tmp/remote-deploy.sh /tmp/deploy.tar.gz /tmp/deploy.env"
