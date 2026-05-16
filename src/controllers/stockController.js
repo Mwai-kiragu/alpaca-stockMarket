@@ -2178,8 +2178,11 @@ const getCompanyInfo = async (req, res) => {
 
       const currentPrice = stock.price ?? null;
       const previousClose = stock.previousClose ?? null;
-      const priceChange = (currentPrice != null && previousClose != null) ? currentPrice - previousClose : null;
-      const priceChangePercent = (priceChange != null && previousClose) ? parseFloat(((priceChange / previousClose) * 100).toFixed(2)) : null;
+      const priceChange = stock.change ?? ((currentPrice != null && previousClose != null) ? currentPrice - previousClose : null);
+      const priceChangePercent = stock.changePct != null
+        ? parseFloat(stock.changePct.toFixed(2))
+        : ((priceChange != null && previousClose) ? parseFloat(((priceChange / previousClose) * 100).toFixed(2)) : null);
+      const currency = stock.currency || null;
 
       let recentNews = [];
       if (intelResult.status === 'fulfilled') {
@@ -2231,10 +2234,12 @@ const getCompanyInfo = async (req, res) => {
       }
 
       let pulseData = null;
-      try {
-        pulseData = await ms.getStockPulse(ticker);
-      } catch (e) {
-        logger.warn(`getStockPulse unavailable for ${ticker}:`, e.message);
+      if (!stock.description || !stock.sector) {
+        try {
+          pulseData = await ms.getStockPulse(ticker);
+        } catch (e) {
+          logger.warn(`getStockPulse unavailable for ${ticker}:`, e.message);
+        }
       }
 
       return res.json({
@@ -2247,14 +2252,15 @@ const getCompanyInfo = async (req, res) => {
           status: 'active',
           tradable: false,
           currentPrice,
+          currency,
           priceChange,
           priceChangePercent,
           tradingInfo: { marginable: false, shortable: false, easyToBorrow: false, fractionable: false, maintenanceMarginRequirement: null },
           about: {
-            description: pulseData?.description || pulseData?.about || `${stock.name || upperSymbol} is a security trading on ${stock.exchange || exchange}.`,
-            sector: pulseData?.sector || stock.sector || null,
-            industry: pulseData?.industry || stock.industry || null,
-            website: pulseData?.website || null,
+            description: stock.description || pulseData?.description || pulseData?.about || `${stock.name || upperSymbol} is a security trading on ${stock.exchange || exchange}.`,
+            sector: stock.sector || pulseData?.sector || null,
+            industry: stock.industry || pulseData?.industry || null,
+            website: stock.website || pulseData?.website || null,
             headquarters: pulseData?.headquarters || null,
             ceo: pulseData?.ceo || null,
             employees: pulseData?.employees || null
@@ -2460,6 +2466,7 @@ const getCompanyInfo = async (req, res) => {
 
       // Current pricing
       currentPrice,
+      currency: 'USD',
       priceChange,
       priceChangePercent: priceChangePercent ? parseFloat(priceChangePercent.toFixed(2)) : null,
 
