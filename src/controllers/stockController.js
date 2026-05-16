@@ -2158,6 +2158,125 @@ const getCompanyInfo = async (req, res) => {
 
     const upperSymbol = symbol.toUpperCase();
 
+    // African symbols (.KE, .NG, .ZA, etc.) are not on Alpaca — use MyStocks
+    if (isAfricanSymbol(upperSymbol)) {
+      const ticker = upperSymbol.includes('.') ? upperSymbol.split('.')[0] : upperSymbol;
+      const exchange = upperSymbol.includes('.') ? upperSymbol.split('.').pop() : 'NSE';
+
+      const [stocksResult, intelResult] = await Promise.allSettled([
+        ms.getStocks({ search: ticker }),
+        ms.getMarketIntel({ symbol: ticker, exchange })
+      ]);
+
+      const stocksData = stocksResult.status === 'fulfilled' ? stocksResult.value : null;
+      const stocks = Array.isArray(stocksData) ? stocksData : (Array.isArray(stocksData?.stocks) ? stocksData.stocks : []);
+      const stock = stocks.find(s => s.symbol?.toUpperCase() === upperSymbol || s.symbol?.toUpperCase() === ticker) || stocks[0];
+
+      if (!stock) {
+        return res.status(404).json({ success: false, message: 'Symbol not found' });
+      }
+
+      const currentPrice = stock.price ?? null;
+      const previousClose = stock.previousClose ?? null;
+      const priceChange = (currentPrice != null && previousClose != null) ? currentPrice - previousClose : null;
+      const priceChangePercent = (priceChange != null && previousClose) ? parseFloat(((priceChange / previousClose) * 100).toFixed(2)) : null;
+
+      let recentNews = [];
+      if (intelResult.status === 'fulfilled') {
+        const articles = Array.isArray(intelResult.value) ? intelResult.value : (Array.isArray(intelResult.value?.data) ? intelResult.value.data : []);
+        recentNews = articles.slice(0, 5).map(a => ({
+          id: a.id,
+          headline: a.title || a.headline,
+          summary: a.summary || a.excerpt || null,
+          publishedAt: a.publishedAt || a.published_at || a.createdAt,
+          url: a.url || null,
+          source: a.source || 'MyStocks',
+          thumbnail: a.thumbnail || a.image || null
+        }));
+      }
+
+      let userPosition = null;
+      const userId = req.user?.id;
+      if (userId) {
+        try {
+          const user = await User.findByPk(userId);
+          if (user?.mystocks_sub_account_id) {
+            const portfolio = await ms.getPortfolio(user.mystocks_sub_account_id);
+            const holdings = Array.isArray(portfolio) ? portfolio : (Array.isArray(portfolio?.holdings) ? portfolio.holdings : []);
+            const holding = holdings.find(h => h.symbol?.toUpperCase() === upperSymbol || h.symbol?.toUpperCase() === ticker);
+            if (holding) {
+              const shares = parseFloat(holding.quantity || holding.qty || 0);
+              const mv = parseFloat(holding.marketValue || holding.market_value || 0);
+              const cb = parseFloat(holding.costBasis || holding.cost_basis || 0);
+              const avgCost = shares > 0 ? cb / shares : 0;
+              const totalReturn = mv - cb;
+              const totalReturnPct = cb > 0 ? (totalReturn / cb) * 100 : 0;
+              userPosition = {
+                shares,
+                marketValue: parseFloat(mv.toFixed(2)),
+                avgCost: parseFloat(avgCost.toFixed(2)),
+                portfolioDiversity: null,
+                todayReturn: { amount: 0, percent: 0 },
+                totalReturn: { amount: parseFloat(totalReturn.toFixed(2)), percent: parseFloat(totalReturnPct.toFixed(2)) },
+                side: 'long',
+                currentPrice,
+                lastDayPrice: previousClose,
+                source: 'mystocks'
+              };
+            }
+          }
+        } catch (positionError) {
+          logger.warn(`Failed to get MyStocks position for ${upperSymbol}:`, positionError.message);
+        }
+      }
+
+      let pulseData = null;
+      try {
+        pulseData = await ms.getStockPulse(ticker);
+      } catch (e) {
+        logger.warn(`getStockPulse unavailable for ${ticker}:`, e.message);
+      }
+
+      return res.json({
+        success: true,
+        company: {
+          symbol: upperSymbol,
+          name: stock.name || upperSymbol,
+          exchange: stock.exchange || exchange,
+          assetClass: 'african_equity',
+          status: 'active',
+          tradable: false,
+          currentPrice,
+          priceChange,
+          priceChangePercent,
+          tradingInfo: { marginable: false, shortable: false, easyToBorrow: false, fractionable: false, maintenanceMarginRequirement: null },
+          about: {
+            description: pulseData?.description || pulseData?.about || `${stock.name || upperSymbol} is a security trading on ${stock.exchange || exchange}.`,
+            sector: pulseData?.sector || stock.sector || null,
+            industry: pulseData?.industry || stock.industry || null,
+            website: pulseData?.website || null,
+            headquarters: pulseData?.headquarters || null,
+            ceo: pulseData?.ceo || null,
+            employees: pulseData?.employees || null
+          },
+          financials: {
+            marketCap: stock.marketCap || null,
+            peRatio: null,
+            dividendYield: null,
+            eps: null,
+            beta: null,
+            revenue: null,
+            profitMargin: null,
+            note: 'Detailed financials not available for African-listed stocks'
+          },
+          recentNews,
+          yourPosition: userPosition,
+          logo: alpacaService.getCompanyLogo(upperSymbol),
+          lastUpdated: new Date().toISOString()
+        }
+      });
+    }
+
     // Get asset details from Alpaca
     const asset = await alpacaService.getAsset(upperSymbol);
 
@@ -2394,7 +2513,7 @@ const getCompanyInfo = async (req, res) => {
   } catch (error) {
     logger.error('Get company info error:', error);
 
-    if (error.message.includes('symbol not found') || error.message.includes('asset not found')) {
+    if (error.message.toLowerCase().includes('not found')) {
       return res.status(404).json({
         success: false,
         message: 'Symbol not found'
