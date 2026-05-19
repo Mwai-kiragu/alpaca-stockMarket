@@ -1,4 +1,4 @@
-const { Order, User, Wallet, Transaction } = require('../models');
+const { Order, User, Wallet, Transaction, MsOrder } = require('../models');
 const alpacaService = require('../services/alpacaService');
 const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
@@ -25,6 +25,30 @@ const createOrder = async (req, res) => {
       if (!qty || qty <= 0) return res.status(400).json({ success: false, message: 'qty must be a positive number' });
       const msSymbol = symbol.toUpperCase();
       const data = await ms.placeTrade(null, { symbol: msSymbol, type: tradeType, quantity: qty });
+      await MsOrder.create({
+        user_id: req.user.id,
+        order_id: data?.orderId || null,
+        symbol: msSymbol,
+        side: tradeType,
+        quantity: qty,
+        local_price: data?.localPrice || null,
+        usd_price: data?.usdPrice || null,
+        gross_usd: data?.gross || null,
+        fee_usd: data?.fee || null,
+        total_cost_usd: data?.totalCost || null,
+        currency: data?.currency || 'KES',
+        status: data?.status || 'FILLED',
+        exchange: exchange?.toUpperCase() || 'NSE',
+        wallet_balance_after: data?.newWalletBalance || null,
+        filled_at: new Date()
+      });
+      if (data?.newWalletBalance != null) {
+        const [updated] = await User.update(
+          { mystocks_wallet_balance: data.newWalletBalance },
+          { where: { id: req.user.id } }
+        );
+        logger.info(`MyStocks wallet balance updated for user ${req.user.id}: ${data.newWalletBalance} (rows updated: ${updated})`);
+      }
       return res.status(202).json({ success: true, provider: 'mystocks', data });
     }
 

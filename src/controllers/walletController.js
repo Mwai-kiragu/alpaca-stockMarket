@@ -4,6 +4,8 @@ const exchangeService = require('../services/exchangeService');
 const kcbService = require('../services/kcbService');
 const logger = require('../utils/logger');
 const { sequelize } = require('../config/database');
+const ms = require('../services/mystocksService');
+const { ensureMyStocksSubAccount } = require('../utils/ensureMyStocksAccount');
 
 const getWallet = async (req, res) => {
   try {
@@ -24,13 +26,31 @@ const getWallet = async (req, res) => {
       logger.info(`Created new wallet for user ${req.user.id}`);
     }
 
-    const exchangeRate = await exchangeService.getExchangeRate('KES', 'USD');
+    const [exchangeRate, user] = await Promise.all([
+      exchangeService.getExchangeRate('KES', 'USD'),
+      User.findByPk(req.user.id, { attributes: ['id', 'mystocks_sub_account_id', 'mystocks_wallet_balance'] })
+    ]);
 
-    // Parse all balance values as floats to ensure proper arithmetic
     const kesBalance = parseFloat(wallet.kes_balance) || 0;
     const usdBalance = parseFloat(wallet.usd_balance) || 0;
     const frozenKes = parseFloat(wallet.frozen_kes) || 0;
     const frozenUsd = parseFloat(wallet.frozen_usd) || 0;
+
+    // MyStocks balance — try live API first, fall back to last saved balance
+    let msUsdBalance = 0;
+    let msWalletData = null;
+    try {
+      const subAccountId = await ensureMyStocksSubAccount(req.user.id);
+      const msWallet = await ms.getWallet(subAccountId);
+      const apiBalance = parseFloat(msWallet?.wallet?.balance || msWallet?.balance || 0);
+      msUsdBalance = apiBalance > 0 ? apiBalance : parseFloat(user?.mystocks_wallet_balance || 0);
+      msWalletData = { ...msWallet, wallet: { ...(msWallet?.wallet || {}), balance: msUsdBalance } };
+    } catch (_) {
+      msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
+    }
+
+    const totalUsd = usdBalance + msUsdBalance;
+    const totalKes = kesBalance + (msUsdBalance / exchangeRate);
 
     res.json({
       success: true,
@@ -41,9 +61,12 @@ const getWallet = async (req, res) => {
         availableUsd: (usdBalance - frozenUsd).toFixed(2),
         frozenKes: frozenKes.toFixed(2),
         frozenUsd: frozenUsd.toFixed(2),
-        totalValueKes: (kesBalance + (usdBalance / exchangeRate)).toFixed(2),
-        totalValueUsd: (usdBalance + (kesBalance * exchangeRate)).toFixed(2),
-        exchangeRate
+        myStocksBalance: msUsdBalance.toFixed(2),
+        myStocksBalanceKes: (msUsdBalance / exchangeRate).toFixed(2),
+        totalValueKes: totalKes.toFixed(2),
+        totalValueUsd: totalUsd.toFixed(2),
+        exchangeRate,
+        myStocksWallet: msWalletData
       }
     });
   } catch (error) {
