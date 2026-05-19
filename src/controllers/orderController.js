@@ -23,8 +23,7 @@ const createOrder = async (req, res) => {
       }
       const qty = parseFloat(quantity);
       if (!qty || qty <= 0) return res.status(400).json({ success: false, message: 'qty must be a positive number' });
-      // MyStocks uses clean tickers without country suffix (e.g. ABSA not ABSA.KE)
-      const msSymbol = symbol.toUpperCase().replace(/\.[A-Z]{2,3}$/, '');
+      const msSymbol = symbol.toUpperCase();
       const data = await ms.placeTrade(null, { symbol: msSymbol, type: tradeType, quantity: qty });
       return res.status(202).json({ success: true, provider: 'mystocks', data });
     }
