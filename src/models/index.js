@@ -17,6 +17,7 @@ const Waitlist = require('./Waitlist');
 const Post = require('./Post');
 const StaticPage = require('./StaticPage');
 const SocialLink = require('./SocialLink');
+const MsOrder = require('./MsOrder');
 
 // Define associations
 User.hasOne(Wallet, { foreignKey: 'user_id', as: 'wallet' });
@@ -101,4 +102,5 @@ module.exports = {
   Post,
   StaticPage,
   SocialLink,
+  MsOrder,
 };

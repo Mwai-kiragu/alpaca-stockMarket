@@ -1,4 +1,4 @@
-const { User, Order, Wallet } = require('../models');
+const { User, Order, Wallet, MsOrder } = require('../models');
 const alpacaService = require('../services/alpacaService');
 const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
@@ -22,37 +22,82 @@ const getPortfolio = async (req, res) => {
     const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     if (!user || !user.alpaca_account_id) {
+      // African-only user — fetch MyStocks portfolio + wallet
+      let msPortfolio = null;
+      let msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
 
-      // Calculate portfolio value from local wallet only
-      const localCashUsd = localUsdBalance + (localKesBalance / exchangeRate);
-      const localCashKes = localKesBalance + (localUsdBalance * exchangeRate);
+      try {
+        if (user?.mystocks_sub_account_id) {
+          const [portfolioData, walletData] = await Promise.allSettled([
+            ms.getPortfolio(user.mystocks_sub_account_id),
+            ms.getWallet(user.mystocks_sub_account_id)
+          ]);
+          if (portfolioData.status === 'fulfilled') msPortfolio = portfolioData.value;
+          if (walletData.status === 'fulfilled') {
+            const apiBalance = parseFloat(walletData.value?.wallet?.balance || walletData.value?.balance || 0);
+            if (apiBalance > 0) msUsdBalance = apiBalance;
+          }
+        }
+      } catch (_) {}
+
+      const positions = [];
+      if (msPortfolio) {
+        const holdings = Array.isArray(msPortfolio) ? msPortfolio
+          : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
+          : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [];
+
+        holdings.forEach(h => {
+          const qty = parseFloat(h.quantity || h.qty || 0);
+          const price = parseFloat(h.currentPrice || h.price || h.localPrice || 0);
+          const cost = parseFloat(h.averageCost || h.avgCost || price);
+          const marketValue = qty * price;
+          const unrealizedPL = marketValue - (qty * cost);
+          positions.push({
+            symbol: h.symbol,
+            name: h.name || h.symbol,
+            qty,
+            avgEntryPrice: cost,
+            currentPrice: price,
+            marketValue,
+            marketValueKES: marketValue * exchangeRate,
+            unrealizedPL,
+            unrealizedPLKES: unrealizedPL * exchangeRate,
+            unrealizedPLPC: cost > 0 ? (unrealizedPL / (qty * cost)) * 100 : 0,
+            exchange: h.exchange || 'NSE',
+            currency: h.currency || 'KES',
+            provider: 'mystocks'
+          });
+        });
+      }
+
+      const holdingsValue = positions.reduce((s, p) => s + p.marketValue, 0);
+      const totalEquity = msUsdBalance + holdingsValue + localUsdBalance + (localKesBalance / exchangeRate);
+      const totalEquityKES = totalEquity * exchangeRate;
 
       return res.json({
         success: true,
+        provider: 'mystocks',
         portfolio: {
           summary: {
-            totalEquity: localCashUsd,
-            totalEquityKES: localCashKes,
+            totalEquity,
+            totalEquityKES,
             dayChange: 0,
             dayChangeKES: 0,
             dayChangePercent: 0,
-            buyingPower: localCashUsd,
-            buyingPowerKES: localCashKes,
-            cash: localCashUsd,
-            cashKES: localCashKes,
-            portfolioValue: localCashUsd,
-            portfolioValueKES: localCashKes,
+            buyingPower: msUsdBalance,
+            buyingPowerKES: msUsdBalance * exchangeRate,
+            cash: msUsdBalance,
+            cashKES: msUsdBalance * exchangeRate,
+            portfolioValue: totalEquity,
+            portfolioValueKES: totalEquityKES,
             lastUpdated: new Date().toISOString()
           },
-          positions: [],
-          positionsCount: 0,
+          positions,
+          positionsCount: positions.length,
           exchangeRate,
           account: null,
-          localWallet: {
-            kesBalance: localKesBalance,
-            usdBalance: localUsdBalance
-          },
-          message: user ? 'No trading account found. Complete onboarding to start trading.' : null
+          localWallet: { kesBalance: localKesBalance, usdBalance: localUsdBalance },
+          myStocksWallet: { balance: msUsdBalance, currency: 'USD' }
         }
       });
     }
@@ -171,29 +216,106 @@ const getPositions = async (req, res) => {
 
     // Check if user has an Alpaca account
     const user = await User.findByPk(req.user.id);
+    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
     if (!user || !user.alpaca_account_id) {
-      const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+      // Try live MyStocks portfolio first, fall back to locally saved ms_orders
+      let positions = [];
+      try {
+        if (user?.mystocks_sub_account_id) {
+          const msPortfolio = await ms.getPortfolio(user.mystocks_sub_account_id);
+          const holdings = Array.isArray(msPortfolio) ? msPortfolio
+            : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
+            : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [];
+          if (holdings.length > 0) {
+            positions = holdings.map(h => {
+              const qty = parseFloat(h.quantity || h.qty || 0);
+              const price = parseFloat(h.currentPrice || h.price || 0);
+              const cost = parseFloat(h.averageCost || h.avgCost || price);
+              const marketValue = qty * price;
+              const costBasis = qty * cost;
+              const unrealizedPL = marketValue - costBasis;
+              return {
+                symbol: h.symbol, name: h.name || h.symbol,
+                logo: `/api/v1/assets/logo/${h.symbol}`,
+                quantity: qty, side: 'long', averageEntryPrice: cost,
+                currentPrice: price, marketValue,
+                marketValueKES: marketValue * exchangeRate,
+                costBasis, costBasisKES: costBasis * exchangeRate,
+                unrealizedPL, unrealizedPLKES: unrealizedPL * exchangeRate,
+                unrealizedPLPercent: costBasis > 0 ? parseFloat(((unrealizedPL / costBasis) * 100).toFixed(2)) : 0,
+                exchange: h.exchange || 'NSE', currency: h.currency || 'KES',
+                provider: 'mystocks', status: 'open'
+              };
+            });
+          }
+        }
+      } catch (_) {}
+
+      // Fall back to locally saved trades if portfolio API returned nothing
+      if (positions.length === 0) {
+        const msOrders = await MsOrder.findAll({ where: { user_id: req.user.id }, order: [['filled_at', 'ASC']] });
+        const bySymbol = {};
+        for (const o of msOrders) {
+          const sym = o.symbol;
+          if (!bySymbol[sym]) bySymbol[sym] = { symbol: sym, exchange: o.exchange || 'NSE', currency: o.currency || 'KES', totalQty: 0, totalCost: 0 };
+          const qty = parseFloat(o.quantity);
+          const price = parseFloat(o.usd_price || o.local_price || 0);
+          if (o.side === 'BUY') { bySymbol[sym].totalQty += qty; bySymbol[sym].totalCost += qty * price; }
+          else { bySymbol[sym].totalQty -= qty; bySymbol[sym].totalCost -= qty * price; }
+        }
+        positions = await Promise.all(
+          Object.values(bySymbol).filter(p => p.totalQty > 0.0001).map(async p => {
+            let currentPrice = p.totalQty > 0 ? p.totalCost / p.totalQty : 0;
+            try {
+              const stocks = await ms.getStocks({ search: p.symbol });
+              const stock = Array.isArray(stocks) ? stocks[0] : stocks?.stocks?.[0];
+              if (stock?.usdPrice) currentPrice = parseFloat(stock.usdPrice);
+              else if (stock?.price) currentPrice = parseFloat(stock.price) / exchangeRate;
+            } catch (_) {}
+            const avgEntry = p.totalQty > 0 ? p.totalCost / p.totalQty : 0;
+            const marketValue = p.totalQty * currentPrice;
+            const costBasis = p.totalQty * avgEntry;
+            const unrealizedPL = marketValue - costBasis;
+            return {
+              symbol: p.symbol, name: p.symbol,
+              logo: `/api/v1/assets/logo/${p.symbol}`,
+              quantity: p.totalQty, side: 'long', averageEntryPrice: avgEntry,
+              currentPrice, marketValue, marketValueKES: marketValue * exchangeRate,
+              costBasis, costBasisKES: costBasis * exchangeRate,
+              unrealizedPL, unrealizedPLKES: unrealizedPL * exchangeRate,
+              unrealizedPLPercent: costBasis > 0 ? parseFloat(((unrealizedPL / costBasis) * 100).toFixed(2)) : 0,
+              exchange: p.exchange, currency: p.currency,
+              provider: 'mystocks', status: 'open'
+            };
+          })
+        );
+      }
+
+      const totalValue = positions.reduce((s, p) => s + p.marketValue, 0);
+      const totalCostBasis = positions.reduce((s, p) => s + p.costBasis, 0);
+      const totalUnrealizedPL = totalValue - totalCostBasis;
+
       return res.json({
         success: true,
-        positions: [],
+        provider: 'mystocks',
+        positions,
         summary: {
-          totalPositions: 0,
-          totalValue: 0,
-          totalValueKES: 0,
-          totalCostBasis: 0,
-          totalCostBasisKES: 0,
-          totalUnrealizedPL: 0,
-          totalUnrealizedPLKES: 0,
-          totalUnrealizedPLPercent: 0,
+          totalPositions: positions.length,
+          totalValue: parseFloat(totalValue.toFixed(2)),
+          totalValueKES: parseFloat((totalValue * exchangeRate).toFixed(2)),
+          totalCostBasis: parseFloat(totalCostBasis.toFixed(2)),
+          totalCostBasisKES: parseFloat((totalCostBasis * exchangeRate).toFixed(2)),
+          totalUnrealizedPL: parseFloat(totalUnrealizedPL.toFixed(2)),
+          totalUnrealizedPLKES: parseFloat((totalUnrealizedPL * exchangeRate).toFixed(2)),
+          totalUnrealizedPLPercent: totalCostBasis > 0 ? parseFloat(((totalUnrealizedPL / totalCostBasis) * 100).toFixed(2)) : 0,
           exchangeRate
-        },
-        message: 'No trading account found. Complete onboarding to start trading.'
+        }
       });
     }
 
     // Get positions for this specific user's Alpaca account
     const positions = await alpacaService.getPositions(user.alpaca_account_id);
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     // Get all user orders to check for pending orders
     const userOrders = await Order.findAll({
@@ -299,11 +421,49 @@ const getPosition = async (req, res) => {
 
     // Check if user has an Alpaca account
     const user = await User.findByPk(req.user.id);
+    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
     if (!user || !user.alpaca_account_id) {
-      return res.status(404).json({
-        success: false,
-        message: 'No trading account found. Complete onboarding to start trading.'
-      });
+      // Try MyStocks portfolio for African users
+      try {
+        if (user?.mystocks_sub_account_id) {
+          const msPortfolio = await ms.getPortfolio(user.mystocks_sub_account_id);
+          const holdings = Array.isArray(msPortfolio) ? msPortfolio
+            : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
+            : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [];
+          const holding = holdings.find(h => h.symbol?.toUpperCase() === symbol.toUpperCase());
+          if (holding) {
+            const qty = parseFloat(holding.quantity || holding.qty || 0);
+            const price = parseFloat(holding.currentPrice || holding.price || 0);
+            const cost = parseFloat(holding.averageCost || holding.avgCost || price);
+            const marketValue = qty * price;
+            const costBasis = qty * cost;
+            const unrealizedPL = marketValue - costBasis;
+            return res.json({
+              success: true,
+              provider: 'mystocks',
+              position: {
+                symbol: holding.symbol,
+                quantity: qty,
+                side: 'long',
+                averageEntryPrice: cost,
+                currentPrice: price,
+                marketValue,
+                marketValueKES: marketValue * exchangeRate,
+                costBasis,
+                costBasisKES: costBasis * exchangeRate,
+                unrealizedPL,
+                unrealizedPLKES: unrealizedPL * exchangeRate,
+                unrealizedPLPercent: costBasis > 0 ? parseFloat(((unrealizedPL / costBasis) * 100).toFixed(2)) : 0,
+                exchange: holding.exchange || 'NSE',
+                currency: holding.currency || 'KES'
+              },
+              exchangeRate
+            });
+          }
+        }
+      } catch (_) {}
+      return res.status(404).json({ success: false, message: 'Position not found' });
     }
 
     // Get position from Alpaca for this specific user
@@ -340,7 +500,6 @@ const getPosition = async (req, res) => {
       order: [['created_at', 'DESC']]
     });
 
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     res.json({
       success: true,
@@ -401,46 +560,59 @@ const getPerformance = async (req, res) => {
   try {
     const { period = '1M' } = req.query;
 
-    // Get account information
-    const account = await alpacaService.getAccount();
+    const [user, exchangeRate] = await Promise.all([
+      User.findByPk(req.user.id, { attributes: ['id', 'alpaca_account_id', 'mystocks_wallet_balance'] }),
+      exchangeService.getExchangeRate('USD', 'KES')
+    ]);
 
     // Calculate date range based on period
     let startDate;
     const endDate = new Date();
 
     switch (period) {
-      case '1D':
-        startDate = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000);
-        break;
-      case '1W':
-        startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-        break;
-      case '1M':
-        startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-        break;
-      case '3M':
-        startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
-        break;
-      case '1Y':
-        startDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
-        break;
-      default:
-        startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      case '1D': startDate = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000); break;
+      case '1W': startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); break;
+      case '1M': startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); break;
+      case '3M': startDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000); break;
+      case '1Y': startDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000); break;
+      default:   startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     }
+
+    // African-only user — use MyStocks wallet balance + local orders
+    if (!user?.alpaca_account_id) {
+      const msBalance = parseFloat(user?.mystocks_wallet_balance || 0);
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        performance: {
+          period,
+          summary: {
+            currentEquity: msBalance,
+            currentEquityKES: msBalance * exchangeRate,
+            dayChange: 0, dayChangeKES: 0, dayChangePercent: 0,
+            totalTrades: 0, totalBought: 0, totalBoughtKES: 0,
+            totalSold: 0, totalSoldKES: 0, netFlow: 0, netFlowKES: 0
+          },
+          trading: { buyOrders: 0, sellOrders: 0, avgTradeSize: 0, mostTradedSymbol: null },
+          bySymbol: [],
+          exchangeRate
+        }
+      });
+    }
+
+    // Alpaca user — fetch account for equity
+    const account = await alpacaService.getAccount(user.alpaca_account_id);
 
     // Get user's orders for the period
     const orders = await Order.findAll({
       where: {
         user_id: req.user.id,
         status: 'filled',
-        filled_at: {
-          [Order.sequelize.Sequelize.Op.between]: [startDate, endDate]
-        }
+        filled_at: { [Order.sequelize.Sequelize.Op.between]: [startDate, endDate] }
       },
       order: [['filled_at', 'ASC']]
     });
 
-    // Calculate performance metrics
     const totalTrades = orders.length;
     const buyOrders = orders.filter(order => order.side === 'buy');
     const sellOrders = orders.filter(order => order.side === 'sell');
@@ -483,8 +655,6 @@ const getPerformance = async (req, res) => {
           (order.average_price * order.filled_quantity)) / perf.sellQuantity;
       }
     });
-
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     res.json({
       success: true,
@@ -621,32 +791,58 @@ const getAssetTrend = async (req, res) => {
 
     // Check if user has an Alpaca account
     const user = await User.findByPk(req.user.id);
+    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
     if (!user || !user.alpaca_account_id) {
-      // Return empty portfolio for users without Alpaca account
+      // African-only user — build trend from MyStocks portfolio holdings
+      let positions = [];
+      try {
+        if (user?.mystocks_sub_account_id) {
+          const msPortfolio = await ms.getPortfolio(user.mystocks_sub_account_id);
+          const holdings = Array.isArray(msPortfolio) ? msPortfolio
+            : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
+            : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [];
+          positions = holdings;
+        }
+      } catch (_) {}
+
+      const msBalance = parseFloat(user?.mystocks_wallet_balance || 0);
+
+      if (positions.length === 0) {
+        return res.json({
+          success: true,
+          provider: 'mystocks',
+          portfolio: {
+            invested: 0, investedKES: 0,
+            currentValue: msBalance, currentValueKES: msBalance * exchangeRate,
+            profit: 0, profitKES: 0, profitPercent: 0,
+            totalStocks: 0
+          },
+          chartData: [],
+          summary: { period: { from: null, to: null, days: 0 }, highest: msBalance, lowest: 0, bestDay: 0, worstDay: 0, average: msBalance },
+          exchangeRate,
+          lastUpdated: new Date().toISOString()
+        });
+      }
+
+      const invested = positions.reduce((s, h) => s + (parseFloat(h.averageCost || h.avgCost || 0) * parseFloat(h.quantity || h.qty || 0)), 0);
+      const currentValue = positions.reduce((s, h) => s + (parseFloat(h.currentPrice || h.price || 0) * parseFloat(h.quantity || h.qty || 0)), 0);
+      const profit = currentValue - invested;
+
       return res.json({
         success: true,
+        provider: 'mystocks',
         portfolio: {
-          invested: 0,
-          investedKES: 0,
-          currentValue: 0,
-          currentValueKES: 0,
-          profit: 0,
-          profitKES: 0,
-          profitPercent: 0,
-          totalStocks: 0
+          invested, investedKES: invested * exchangeRate,
+          currentValue, currentValueKES: currentValue * exchangeRate,
+          profit, profitKES: profit * exchangeRate,
+          profitPercent: invested > 0 ? (profit / invested) * 100 : 0,
+          totalStocks: positions.length
         },
         chartData: [],
-        summary: {
-          period: { from: null, to: null, days: 0 },
-          highest: 0,
-          lowest: 0,
-          bestDay: 0,
-          worstDay: 0,
-          average: 0
-        },
-        exchangeRate: await exchangeService.getExchangeRate('USD', 'KES'),
-        lastUpdated: new Date().toISOString(),
-        message: 'No trading account found. Complete onboarding to start trading.'
+        summary: { period: { from: null, to: null, days: 0 }, highest: currentValue, lowest: invested, bestDay: 0, worstDay: 0, average: currentValue },
+        exchangeRate,
+        lastUpdated: new Date().toISOString()
       });
     }
 
@@ -654,7 +850,6 @@ const getAssetTrend = async (req, res) => {
     const positions = await alpacaService.getPositions(user.alpaca_account_id);
 
     if (!positions || positions.length === 0) {
-      const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
       return res.json({
         success: true,
         portfolio: {
@@ -681,9 +876,6 @@ const getAssetTrend = async (req, res) => {
         message: 'No positions found. Buy stocks to see your portfolio trend.'
       });
     }
-
-    // Get exchange rate for KES conversion
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     // Calculate total cost basis for all positions
     const totalCostBasis = positions.reduce((sum, pos) => sum + parseFloat(pos.cost_basis), 0);
@@ -839,40 +1031,83 @@ const getPortfolioAllocation = async (req, res) => {
     const localCashUsd = localUsdBalance + (localKesBalance / exchangeRate);
 
     if (!user || !user.alpaca_account_id) {
-      // Return local wallet as cash allocation
-      const portfolioValue = localCashUsd;
+      // African-only user — build allocation from MyStocks portfolio + wallet
+      let holdings = [];
+      try {
+        if (user?.mystocks_sub_account_id) {
+          const msPortfolio = await ms.getPortfolio(user.mystocks_sub_account_id);
+          const raw = Array.isArray(msPortfolio) ? msPortfolio
+            : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
+            : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [];
+          holdings = raw;
+        }
+      } catch (_) {}
+
+      const msBalance = parseFloat(user?.mystocks_wallet_balance || 0);
+      const marketValue = holdings.reduce((s, h) => s + (parseFloat(h.currentPrice || h.price || 0) * parseFloat(h.quantity || h.qty || 0)), 0);
+      const portfolioValue = msBalance + marketValue + localCashUsd;
+
+      const byStock = holdings.map(h => {
+        const qty = parseFloat(h.quantity || h.qty || 0);
+        const price = parseFloat(h.currentPrice || h.price || 0);
+        const value = qty * price;
+        return {
+          symbol: h.symbol,
+          name: h.name || h.symbol,
+          value: parseFloat(value.toFixed(2)),
+          valueKES: parseFloat((value * exchangeRate).toFixed(2)),
+          percentage: portfolioValue > 0 ? parseFloat(((value / portfolioValue) * 100).toFixed(2)) : 0,
+          qty,
+          price,
+          exchange: h.exchange || 'NSE'
+        };
+      });
+
+      const bySector = Object.values(
+        holdings.reduce((acc, h) => {
+          const sector = h.sector || 'Other';
+          const qty = parseFloat(h.quantity || h.qty || 0);
+          const value = qty * parseFloat(h.currentPrice || h.price || 0);
+          if (!acc[sector]) acc[sector] = { name: sector, value: 0, valueKES: 0, percentage: 0, count: 0 };
+          acc[sector].value += value;
+          acc[sector].valueKES += value * exchangeRate;
+          acc[sector].count += 1;
+          return acc;
+        }, {})
+      ).map(s => ({ ...s, value: parseFloat(s.value.toFixed(2)), valueKES: parseFloat(s.valueKES.toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((s.value / portfolioValue) * 100).toFixed(2)) : 0 }));
+
+      const cashEntry = msBalance + localCashUsd > 0 ? [{
+        name: 'Cash (MyStocks)',
+        value: parseFloat((msBalance + localCashUsd).toFixed(2)),
+        valueKES: parseFloat(((msBalance + localCashUsd) * exchangeRate).toFixed(2)),
+        percentage: portfolioValue > 0 ? parseFloat((((msBalance + localCashUsd) / portfolioValue) * 100).toFixed(2)) : 100,
+        count: 0, stocks: []
+      }] : [];
+
       return res.json({
         success: true,
+        provider: 'mystocks',
         allocation: {
-          byAssetClass: localCashUsd > 0 ? [{
-            name: 'Cash',
-            value: parseFloat(localCashUsd.toFixed(2)),
-            valueKES: parseFloat((localCashUsd * exchangeRate).toFixed(2)),
-            percentage: 100,
-            count: 0,
-            stocks: []
-          }] : [],
-          bySector: [],
-          byStock: [],
-          byExchange: []
+          byAssetClass: [
+            ...cashEntry,
+            ...(marketValue > 0 ? [{ name: 'African Equities', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((marketValue / portfolioValue) * 100).toFixed(2)) : 0, count: holdings.length, stocks: byStock }] : [])
+          ],
+          bySector,
+          byStock,
+          byExchange: holdings.length > 0 ? [{ name: 'NSE', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: marketValue > 0 ? 100 : 0, count: holdings.length }] : []
         },
         summary: {
           portfolioValue: parseFloat(portfolioValue.toFixed(2)),
           portfolioValueKES: parseFloat((portfolioValue * exchangeRate).toFixed(2)),
-          cash: parseFloat(localCashUsd.toFixed(2)),
-          cashKES: parseFloat((localCashUsd * exchangeRate).toFixed(2)),
-          marketValue: 0,
-          marketValueKES: 0,
-          totalPositions: 0,
+          cash: parseFloat((msBalance + localCashUsd).toFixed(2)),
+          cashKES: parseFloat(((msBalance + localCashUsd) * exchangeRate).toFixed(2)),
+          marketValue: parseFloat(marketValue.toFixed(2)),
+          marketValueKES: parseFloat((marketValue * exchangeRate).toFixed(2)),
+          totalPositions: holdings.length,
           exchangeRate
         },
-        localWallet: {
-          kesBalance: localKesBalance,
-          usdBalance: localUsdBalance,
-          totalUsd: localCashUsd
-        },
-        lastUpdated: new Date().toISOString(),
-        message: user ? 'No trading account found. Complete onboarding to start trading.' : null
+        localWallet: { kesBalance: localKesBalance, usdBalance: localUsdBalance, totalUsd: localCashUsd },
+        lastUpdated: new Date().toISOString()
       });
     }
 

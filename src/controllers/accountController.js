@@ -1,6 +1,8 @@
 const { User, Wallet } = require('../models');
 const alpacaService = require('../services/alpacaService');
 const exchangeService = require('../services/exchangeService');
+const ms = require('../services/mystocksService');
+const { ensureMyStocksSubAccount } = require('../utils/ensureMyStocksAccount');
 const logger = require('../utils/logger');
 
 const getAccountInfo = async (req, res) => {
@@ -23,9 +25,44 @@ const getAccountInfo = async (req, res) => {
     const localCashUsd = localUsdBalance + (localKesBalance / exchangeRate);
 
     if (!user || !user.alpaca_account_id) {
-      return res.status(404).json({
-        success: false,
-        message: 'No trading account found. Complete onboarding to start trading.'
+      // No Alpaca account — return MyStocks wallet + local wallet for African-only users
+      let msWallet = null;
+      try {
+        const subAccountId = await ensureMyStocksSubAccount(req.user.id);
+        msWallet = await ms.getWallet(subAccountId);
+      } catch (_) {}
+
+      const apiBalance = parseFloat(msWallet?.wallet?.balance || msWallet?.balance || msWallet?.usdBalance || 0);
+      const storedBalance = parseFloat(user.mystocks_wallet_balance || 0);
+      const msUsdBalance = apiBalance > 0 ? apiBalance : storedBalance;
+      const totalUsd = localCashUsd + msUsdBalance;
+
+      const walletWithBalance = msWallet
+        ? { ...msWallet, wallet: { ...(msWallet.wallet || {}), balance: msUsdBalance } }
+        : null;
+
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        account: {
+          alpacaAccount: null,
+          localWallet: {
+            kesBalance: localKesBalance,
+            usdBalance: localUsdBalance,
+            totalUsd: localCashUsd
+          },
+          myStocksWallet: walletWithBalance,
+          tradingInfo: {
+            canTrade: true,
+            canTransfer: true,
+            africanMarketsEnabled: true,
+            usMarketsEnabled: false
+          },
+          exchangeRate,
+          totalEquity: totalUsd,
+          totalEquityKES: totalUsd * exchangeRate,
+          lastUpdated: new Date().toISOString()
+        }
       });
     }
 
@@ -276,6 +313,54 @@ const updateAccountConfigurations = async (req, res) => {
 const getTradeHistory = async (req, res) => {
   try {
     const { symbol, limit = 50, after, until } = req.query;
+    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
+    const user = await User.findByPk(req.user.id, { attributes: ['id', 'alpaca_account_id', 'mystocks_sub_account_id'] });
+
+    // African-only user — fetch from MyStocks orders
+    if (!user?.alpaca_account_id) {
+      const subAccountId = user?.mystocks_sub_account_id;
+      const data = await ms.getOrders(subAccountId, { symbol, limit: Math.min(parseInt(limit), 100) });
+      const orders = Array.isArray(data) ? data : (Array.isArray(data?.orders) ? data.orders : []);
+
+      const trades = orders.map(o => ({
+        id: o.orderId || o.id,
+        symbol: o.symbol,
+        side: (o.type || o.side || '').toLowerCase(),
+        quantity: parseFloat(o.quantity || o.qty || 0),
+        price: parseFloat(o.localPrice || o.price || 0),
+        usdPrice: parseFloat(o.usdPrice || 0),
+        value: parseFloat(o.gross || 0),
+        valueKES: parseFloat(o.gross || 0) * exchangeRate,
+        fee: parseFloat(o.fee || 0),
+        totalCost: parseFloat(o.totalCost || 0),
+        status: o.status,
+        currency: o.currency || 'KES',
+        transactionTime: o.createdAt || o.date || null,
+        provider: 'mystocks'
+      }));
+
+      const buys = trades.filter(t => t.side === 'buy');
+      const sells = trades.filter(t => t.side === 'sell');
+
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        trades,
+        summary: {
+          totalTrades: trades.length,
+          totalVolume: trades.reduce((s, t) => s + t.quantity, 0),
+          totalValue: trades.reduce((s, t) => s + t.value, 0),
+          totalValueKES: trades.reduce((s, t) => s + t.valueKES, 0),
+          buyTrades: buys.length,
+          sellTrades: sells.length,
+          avgTradeSize: trades.length > 0 ? trades.reduce((s, t) => s + t.value, 0) / trades.length : 0
+        },
+        count: trades.length,
+        filters: { symbol: symbol || 'all', limit: parseInt(limit) },
+        exchangeRate
+      });
+    }
 
     const activities = await alpacaService.getAccountActivities({
       activity_types: 'FILL',
@@ -287,8 +372,6 @@ const getTradeHistory = async (req, res) => {
     const filteredActivities = symbol
       ? activities.filter(activity => activity.symbol === symbol.toUpperCase())
       : activities;
-
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     const trades = filteredActivities.map(activity => ({
       id: activity.id,
@@ -319,11 +402,7 @@ const getTradeHistory = async (req, res) => {
       trades,
       summary,
       count: trades.length,
-      filters: {
-        symbol: symbol || 'all',
-        limit: parseInt(limit),
-        dateRange: { after, until }
-      },
+      filters: { symbol: symbol || 'all', limit: parseInt(limit), dateRange: { after, until } },
       exchangeRate
     });
   } catch (error) {

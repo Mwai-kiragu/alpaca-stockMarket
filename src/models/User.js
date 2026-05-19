@@ -178,6 +178,11 @@ User.init({
     unique: true,
     allowNull: true
   },
+  mystocks_wallet_balance: {
+    type: DataTypes.DECIMAL(18, 8),
+    allowNull: true,
+    defaultValue: null
+  },
   role: {
     type: DataTypes.ENUM('user', 'admin', 'support'),
     defaultValue: 'user'
