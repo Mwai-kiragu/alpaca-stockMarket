@@ -271,16 +271,9 @@ const supportTicketValidation = [
 
 // Personal details validation - simplified format
 const personalDetailsValidation = [
-  body('dateOfBirth')
-    .isISO8601()
-    .withMessage('Valid date of birth is required (YYYY-MM-DD format)'),
-  body('gender')
-    .isIn(['Male', 'Female', 'Other', 'male', 'female', 'other'])
-    .withMessage('Gender must be Male, Female, or Other'),
-  body('country')
-    .trim()
-    .notEmpty()
-    .withMessage('Country is required'),
+  body('city').trim().notEmpty().withMessage('City is required'),
+  body('postalCode').trim().notEmpty().withMessage('Postal code is required'),
+  body('streetAddress').trim().notEmpty().withMessage('Street address is required'),
   handleValidationErrors
 ];
 

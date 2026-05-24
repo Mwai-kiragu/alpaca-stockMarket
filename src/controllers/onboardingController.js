@@ -97,13 +97,10 @@ const onboardingController = {
         lastName: user.last_name,
         email: user.email,
         phone: user.phone,
-        dateOfBirth: user.date_of_birth,
-        gender: user.gender,
         address: user.address ? JSON.parse(user.address) : null,
         city: user.city,
-        county: user.county,
         postalCode: user.postal_code,
-        citizenship: user.citizenship,
+        streetAddress: user.address ? JSON.parse(user.address)?.streetAddress : null,
         occupation: user.occupation,
         kycStatus: user.kyc_status,
         registrationStep: user.registration_step,
@@ -136,9 +133,6 @@ const onboardingController = {
       }
 
       const {
-        dateOfBirth,
-        gender,
-        country,
         city,
         postalCode,
         apartment,
@@ -174,9 +168,7 @@ const onboardingController = {
       const employmentStepLevel = stepHierarchy['employment_info'];
       const nextStep = currentStepLevel <= employmentStepLevel ? 'employment_info' : user.registration_step;
 
-      // Store address data as JSON for compatibility
       const addressData = {
-        country,
         city,
         postalCode,
         apartment: apartment || null,
@@ -184,12 +176,9 @@ const onboardingController = {
       };
 
       await user.update({
-        date_of_birth: new Date(dateOfBirth),
-        gender: gender.toLowerCase(),
         address: JSON.stringify(addressData),
-        city: city,
+        city,
         postal_code: postalCode,
-        citizenship: country,
         registration_step: nextStep,
         registration_status: currentStepLevel <= employmentStepLevel ? 'email_verified' : user.registration_status
       });
