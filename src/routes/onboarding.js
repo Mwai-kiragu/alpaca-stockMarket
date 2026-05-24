@@ -6,39 +6,10 @@ const { auth } = require('../middleware/auth');
 const router = express.Router();
 
 const personalDetailsValidation = [
-  body('dateOfBirth')
-    .isISO8601()
-    .withMessage('Date of birth must be a valid date')
-    .custom((value) => {
-      const date = new Date(value);
-      const now = new Date();
-      const age = now.getFullYear() - date.getFullYear();
-      if (age < 18) {
-        throw new Error('Must be at least 18 years old');
-      }
-      return true;
-    }),
-  body('gender')
-    .isIn(['Male', 'Female', 'Other'])
-    .withMessage('Gender must be Male, Female, or Other'),
-  body('country')
-    .trim()
-    .notEmpty()
-    .withMessage('Country is required'),
-  body('city')
-    .trim()
-    .notEmpty()
-    .withMessage('City is required'),
-  body('postalCode')
-    .trim()
-    .notEmpty()
-    .withMessage('Postal code is required'),
-  body('apartment')
-    .optional()
-    .trim(),
-  body('streetAddress')
-    .optional()
-    .trim()
+  body('city').trim().notEmpty().withMessage('City is required'),
+  body('postalCode').trim().notEmpty().withMessage('Postal code is required'),
+  body('streetAddress').trim().notEmpty().withMessage('Street address is required'),
+  body('apartment').optional().trim()
 ];
 
 const employmentDetailsValidation = [
