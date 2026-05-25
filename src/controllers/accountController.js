@@ -58,6 +58,9 @@ const getAccountInfo = async (req, res) => {
             africanMarketsEnabled: true,
             usMarketsEnabled: false
           },
+          account_mode: user?.account_mode || 'demo',
+          demo_balance: parseFloat(user?.demo_balance || 0),
+          isDemo: (user?.account_mode || 'demo') === 'demo',
           exchangeRate,
           totalEquity: totalUsd,
           totalEquityKES: totalUsd * exchangeRate,
@@ -167,6 +170,9 @@ const getAccountInfo = async (req, res) => {
           maxDayTradingBuyingPower: parseFloat(account.max_daytrading_buying_power || 0),
           withdrawalLimit: totalCash - parseFloat(account.pending_transfer_out || 0)
         },
+        account_mode: user?.account_mode || 'demo',
+        demo_balance: parseFloat(user?.demo_balance || 0),
+        isDemo: (user?.account_mode || 'demo') === 'demo',
         exchangeRate,
         lastUpdated: new Date().toISOString()
       }
@@ -516,6 +522,39 @@ const deleteAccount = async (req, res) => {
   }
 };
 
+const switchAccountMode = async (req, res) => {
+  try {
+    const { mode } = req.body;
+    if (!['demo', 'real'].includes(mode)) {
+      return res.status(400).json({ success: false, message: 'mode must be "demo" or "real"' });
+    }
+
+    const user = await User.findByPk(req.user.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    if (mode === 'real' && !user.is_onboarding_complete && user.kyc_status !== 'approved') {
+      return res.status(403).json({
+        success: false,
+        message: 'Complete your account setup to switch to live trading',
+        onboardingRequired: true,
+        currentKycStatus: user.kyc_status
+      });
+    }
+
+    await user.update({ account_mode: mode });
+    logger.info(`User ${user.id} switched to ${mode} mode`);
+
+    return res.json({
+      success: true,
+      message: `Switched to ${mode === 'demo' ? 'Paper Trading' : 'Live Trading'} mode`,
+      account_mode: mode
+    });
+  } catch (error) {
+    logger.error('Switch account mode error:', error);
+    res.status(500).json({ success: false, message: 'Failed to switch account mode' });
+  }
+};
+
 module.exports = {
   getAccountInfo,
   getAccountActivity,
@@ -524,5 +563,6 @@ module.exports = {
   getTradeHistory,
   getAccountDocuments,
   updateAccount,
-  deleteAccount
+  deleteAccount,
+  switchAccountMode
 };

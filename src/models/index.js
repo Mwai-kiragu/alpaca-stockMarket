@@ -18,6 +18,7 @@ const Post = require('./Post');
 const StaticPage = require('./StaticPage');
 const SocialLink = require('./SocialLink');
 const MsOrder = require('./MsOrder');
+const DemoOrder = require('./DemoOrder');
 
 // Define associations
 User.hasOne(Wallet, { foreignKey: 'user_id', as: 'wallet' });
@@ -103,4 +104,5 @@ module.exports = {
   StaticPage,
   SocialLink,
   MsOrder,
+  DemoOrder,
 };

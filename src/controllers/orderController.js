@@ -1,4 +1,4 @@
-const { Order, User, Wallet, Transaction, MsOrder } = require('../models');
+const { Order, User, Wallet, Transaction, MsOrder, DemoOrder } = require('../models');
 const alpacaService = require('../services/alpacaService');
 const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
@@ -13,6 +13,91 @@ const { ensureMyStocksSubAccount } = require('../utils/ensureMyStocksAccount');
 const createOrder = async (req, res) => {
   try {
     const { symbol, side, type: orderType, qty: quantity, limit_price: limitPrice, stop_price: stopPrice, time_in_force: timeInForce, currency = 'USD', exchange } = req.body;
+
+    const user = await User.findByPk(req.user.id);
+
+    // Demo mode — simulate trade locally, no real API calls
+    if (user?.account_mode === 'demo') {
+      const tradeType = (side || '').toUpperCase();
+      if (!['BUY', 'SELL'].includes(tradeType)) {
+        return res.status(400).json({ success: false, message: 'side must be BUY or SELL' });
+      }
+      const qty = parseFloat(quantity);
+      if (!qty || qty <= 0) return res.status(400).json({ success: false, message: 'qty must be a positive number' });
+
+      const sym = symbol.toUpperCase();
+      const demoBalance = parseFloat(user.demo_balance || 0);
+
+      let currentPrice = 0;
+      let stockCurrency = 'USD';
+      try {
+        if (isAfrican(exchange)) {
+          const stocks = await ms.getStocks({ search: sym });
+          const stock = Array.isArray(stocks) ? stocks[0] : stocks?.stocks?.[0];
+          currentPrice = parseFloat(stock?.usdPrice || stock?.price || 0);
+          stockCurrency = stock?.currency || 'KES';
+        } else {
+          const quote = await alpacaService.getLatestQuote(sym);
+          currentPrice = parseFloat(quote.ap || quote.bp || 0);
+          stockCurrency = 'USD';
+        }
+      } catch (_) {}
+
+      if (!currentPrice || currentPrice <= 0) {
+        return res.status(400).json({ success: false, message: 'Unable to fetch current price for demo trade' });
+      }
+
+      const gross = Math.round(qty * currentPrice * 100) / 100;
+      const fee = Math.round(gross * 0.01 * 100) / 100;
+
+      if (tradeType === 'BUY') {
+        const totalCost = gross + fee;
+        if (demoBalance < totalCost) {
+          return res.status(400).json({
+            success: false,
+            message: 'Insufficient demo balance',
+            available: demoBalance,
+            required: totalCost
+          });
+        }
+        const newBalance = Math.round((demoBalance - totalCost) * 100) / 100;
+        await DemoOrder.create({
+          user_id: req.user.id, symbol: sym, side: 'BUY', quantity: qty,
+          price_usd: currentPrice, gross_usd: gross, fee_usd: fee, total_cost_usd: totalCost,
+          currency: stockCurrency, exchange: exchange?.toUpperCase() || 'NSE',
+          balance_after: newBalance, status: 'FILLED', filled_at: new Date()
+        });
+        await user.update({ demo_balance: newBalance });
+        return res.status(201).json({
+          success: true, provider: 'demo',
+          order: { symbol: sym, side: 'BUY', quantity: qty, price: currentPrice, fee, totalCost, balanceAfter: newBalance }
+        });
+      } else {
+        // SELL — check held shares
+        const demoOrders = await DemoOrder.findAll({ where: { user_id: req.user.id, symbol: sym } });
+        let netQty = 0;
+        for (const o of demoOrders) {
+          if (o.side === 'BUY') netQty += parseFloat(o.quantity);
+          else netQty -= parseFloat(o.quantity);
+        }
+        if (netQty < qty) {
+          return res.status(400).json({ success: false, message: 'Insufficient shares for demo sell', available: parseFloat(netQty.toFixed(6)), required: qty });
+        }
+        const proceeds = Math.round((gross - fee) * 100) / 100;
+        const newBalance = Math.round((demoBalance + proceeds) * 100) / 100;
+        await DemoOrder.create({
+          user_id: req.user.id, symbol: sym, side: 'SELL', quantity: qty,
+          price_usd: currentPrice, gross_usd: gross, fee_usd: fee, total_cost_usd: proceeds,
+          currency: stockCurrency, exchange: exchange?.toUpperCase() || 'NSE',
+          balance_after: newBalance, status: 'FILLED', filled_at: new Date()
+        });
+        await user.update({ demo_balance: newBalance });
+        return res.status(201).json({
+          success: true, provider: 'demo',
+          order: { symbol: sym, side: 'SELL', quantity: qty, price: currentPrice, fee, proceeds, balanceAfter: newBalance }
+        });
+      }
+    }
 
     // African exchange → MyStocks trade
     if (isAfrican(exchange)) {
@@ -51,9 +136,6 @@ const createOrder = async (req, res) => {
       }
       return res.status(202).json({ success: true, provider: 'mystocks', data });
     }
-
-    // Get user
-    const user = await User.findByPk(req.user.id);
 
     if (!user || !user.alpaca_account_id) {
       return res.status(404).json({
@@ -341,6 +423,30 @@ const createOrder = async (req, res) => {
 const getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 20, status, symbol, side, exchange } = req.query;
+
+    // Demo mode — return demo_orders
+    const orderUser = await User.findByPk(req.user.id, { attributes: ['id', 'account_mode'] });
+    if (orderUser?.account_mode === 'demo') {
+      const whereClause = { user_id: req.user.id };
+      if (symbol) whereClause.symbol = symbol.toUpperCase();
+      if (side) whereClause.side = side.toUpperCase();
+      const demoOrders = await DemoOrder.findAll({
+        where: whereClause,
+        order: [['filled_at', 'DESC']],
+        limit: parseInt(limit),
+        offset: (parseInt(page) - 1) * parseInt(limit)
+      });
+      return res.json({
+        success: true, provider: 'demo',
+        orders: demoOrders.map(o => ({
+          id: o.id, symbol: o.symbol, side: o.side,
+          quantity: parseFloat(o.quantity), price: parseFloat(o.price_usd || 0),
+          fee: parseFloat(o.fee_usd || 0), totalCost: parseFloat(o.total_cost_usd || 0),
+          balanceAfter: parseFloat(o.balance_after || 0),
+          exchange: o.exchange, status: o.status, filledAt: o.filled_at
+        }))
+      });
+    }
 
     // African exchange → MyStocks orders
     if (isAfrican(exchange)) {
