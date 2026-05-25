@@ -35,12 +35,22 @@ class ExchangeService {
       }
     ];
 
-    // Current USD/KES approximate rate for fallback (updated with real market rates)
+    // Seed fallbacks — overwritten at runtime whenever a live fetch succeeds,
+    // so these only matter on first boot before any live call has returned.
     this.fallbackRates = {
-      'USD_KES': 129.24, // 1 USD = 129.24 KES (real rate as of Sept 29, 2025)
-      'KES_USD': 1 / 129.24, // 1 KES = ~0.0077 USD
-      'EUR_KES': 139.20, // 1 EUR = ~139.20 KES
-      'GBP_KES': 173.25, // 1 GBP = ~173.25 KES
+      'USD_KES': 129.24,  'KES_USD': 1 / 129.24,
+      'USD_NGN': 1600,    'NGN_USD': 1 / 1600,
+      'USD_ZAR': 18.5,    'ZAR_USD': 1 / 18.5,
+      'USD_GHS': 15.5,    'GHS_USD': 1 / 15.5,
+      'USD_XOF': 610,     'XOF_USD': 1 / 610,
+      'USD_ZMW': 27,      'ZMW_USD': 1 / 27,
+      'USD_MUR': 46,      'MUR_USD': 1 / 46,
+      'USD_BWP': 13.5,    'BWP_USD': 1 / 13.5,
+      'USD_EGP': 50,      'EGP_USD': 1 / 50,
+      'EUR_USD': 1.08,    'USD_EUR': 1 / 1.08,
+      'GBP_USD': 1.27,    'USD_GBP': 1 / 1.27,
+      'EUR_KES': 139.20,
+      'GBP_KES': 173.25,
     };
   }
 
@@ -58,11 +68,8 @@ class ExchangeService {
       const rate = await this.fetchFromMultipleProviders(from, to);
 
       if (rate) {
-        this.cache.set(cacheKey, {
-          rate,
-          timestamp: Date.now()
-        });
-
+        this.cache.set(cacheKey, { rate, timestamp: Date.now() });
+        this.fallbackRates[cacheKey] = rate; // keep fallback current
         logger.info(`Live exchange rate fetched: ${from}/${to} = ${rate}`);
         return rate;
       }
@@ -230,10 +237,36 @@ class ExchangeService {
   async getCurrentRates() {
     try {
       const pairs = [
+        // KES (Kenya - NSE)
         { from: 'USD', to: 'KES' },
         { from: 'KES', to: 'USD' },
-        { from: 'EUR', to: 'KES' },
-        { from: 'GBP', to: 'KES' }
+        // NGN (Nigeria - NGX)
+        { from: 'USD', to: 'NGN' },
+        { from: 'NGN', to: 'USD' },
+        // ZAR (South Africa - JSE)
+        { from: 'USD', to: 'ZAR' },
+        { from: 'ZAR', to: 'USD' },
+        // GHS (Ghana - GSE)
+        { from: 'USD', to: 'GHS' },
+        { from: 'GHS', to: 'USD' },
+        // XOF (West Africa - BRVM)
+        { from: 'USD', to: 'XOF' },
+        { from: 'XOF', to: 'USD' },
+        // ZMW (Zambia - LUSE)
+        { from: 'USD', to: 'ZMW' },
+        { from: 'ZMW', to: 'USD' },
+        // MUR (Mauritius - SEM)
+        { from: 'USD', to: 'MUR' },
+        { from: 'MUR', to: 'USD' },
+        // BWP (Botswana - BSE)
+        { from: 'USD', to: 'BWP' },
+        { from: 'BWP', to: 'USD' },
+        // EGP (Egypt - EGX)
+        { from: 'USD', to: 'EGP' },
+        { from: 'EGP', to: 'USD' },
+        // EUR & GBP (global)
+        { from: 'EUR', to: 'USD' },
+        { from: 'GBP', to: 'USD' }
       ];
 
       const rates = {};
