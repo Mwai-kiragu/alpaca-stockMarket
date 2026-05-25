@@ -1180,6 +1180,65 @@ const getPortfolioAllocation = async (req, res) => {
     const localUsdBalance = parseFloat(wallet.usd_balance) || 0;
     const localCashUsd = localUsdBalance + (localKesBalance / exchangeRate);
 
+    if (user?.account_mode === 'demo') {
+      const demoBalance = parseFloat(user?.demo_balance || 0);
+      const positions = await buildDemoPositions(req.user.id, exchangeRate);
+      const marketValue = positions.reduce((s, p) => s + p.marketValue, 0);
+      const portfolioValue = demoBalance + marketValue;
+
+      const byStock = positions.map(p => ({
+        symbol: p.symbol, name: p.symbol,
+        value: parseFloat(p.marketValue.toFixed(2)),
+        valueKES: parseFloat(p.marketValueKES.toFixed(2)),
+        percentage: portfolioValue > 0 ? parseFloat(((p.marketValue / portfolioValue) * 100).toFixed(2)) : 0,
+        quantity: p.quantity, currentPrice: p.currentPrice,
+        unrealizedPL: parseFloat(p.unrealizedPL.toFixed(2)),
+        unrealizedPLPercent: p.unrealizedPLPercent,
+        exchange: p.exchange
+      })).sort((a, b) => b.value - a.value);
+
+      const byExchange = Object.values(
+        positions.reduce((acc, p) => {
+          const exch = p.exchange || 'NSE';
+          if (!acc[exch]) acc[exch] = { name: exch, value: 0, valueKES: 0, count: 0 };
+          acc[exch].value += p.marketValue;
+          acc[exch].valueKES += p.marketValueKES;
+          acc[exch].count++;
+          return acc;
+        }, {})
+      ).map(e => ({ ...e, value: parseFloat(e.value.toFixed(2)), valueKES: parseFloat(e.valueKES.toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((e.value / portfolioValue) * 100).toFixed(2)) : 0 }));
+
+      const cashEntry = demoBalance > 0 ? [{
+        name: 'Demo Cash', value: parseFloat(demoBalance.toFixed(2)),
+        valueKES: parseFloat((demoBalance * exchangeRate).toFixed(2)),
+        percentage: portfolioValue > 0 ? parseFloat(((demoBalance / portfolioValue) * 100).toFixed(2)) : 100,
+        count: 0, stocks: []
+      }] : [];
+
+      return res.json({
+        success: true, provider: 'demo', isDemo: true,
+        allocation: {
+          byAssetClass: [
+            ...cashEntry,
+            ...(marketValue > 0 ? [{ name: 'Stocks', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((marketValue / portfolioValue) * 100).toFixed(2)) : 0, count: positions.length, stocks: byStock.map(s => s.symbol) }] : [])
+          ],
+          bySector: [],
+          byStock,
+          byExchange
+        },
+        summary: {
+          portfolioValue: parseFloat(portfolioValue.toFixed(2)),
+          portfolioValueKES: parseFloat((portfolioValue * exchangeRate).toFixed(2)),
+          cash: parseFloat(demoBalance.toFixed(2)),
+          cashKES: parseFloat((demoBalance * exchangeRate).toFixed(2)),
+          marketValue: parseFloat(marketValue.toFixed(2)),
+          marketValueKES: parseFloat((marketValue * exchangeRate).toFixed(2)),
+          totalPositions: positions.length, exchangeRate
+        },
+        lastUpdated: new Date().toISOString()
+      });
+    }
+
     if (!user || !user.alpaca_account_id) {
       // African-only user — build allocation from MyStocks portfolio + wallet
       let holdings = [];
