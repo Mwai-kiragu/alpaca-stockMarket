@@ -293,6 +293,16 @@ User.init({
   referrals_count: {
     type: DataTypes.INTEGER,
     defaultValue: 0
+  },
+  account_mode: {
+    type: DataTypes.ENUM('demo', 'real'),
+    defaultValue: 'demo',
+    allowNull: false
+  },
+  demo_balance: {
+    type: DataTypes.DECIMAL(15, 2),
+    defaultValue: 10000.00,
+    allowNull: false
   }
 
 }, {

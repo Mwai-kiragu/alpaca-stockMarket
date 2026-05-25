@@ -7,7 +7,8 @@ const {
   getTradeHistory,
   getAccountDocuments,
   updateAccount,
-  deleteAccount
+  deleteAccount,
+  switchAccountMode
 } = require('../controllers/accountController');
 const { auth } = require('../middleware/auth');
 
@@ -21,5 +22,6 @@ router.get('/configurations', auth, getAccountConfigurations);
 router.patch('/configurations', auth, updateAccountConfigurations);
 router.get('/trades', auth, getTradeHistory);
 router.get('/documents', auth, getAccountDocuments);
+router.patch('/mode', auth, switchAccountMode);
 
 module.exports = router;
