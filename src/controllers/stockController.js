@@ -2,8 +2,9 @@ const alpacaService = require('../services/alpacaService');
 const ms = require('../services/mystocksService');
 const logger = require('../utils/logger');
 const { mapConditionCodes } = require('../utils/conditionCodes');
-const { Watchlist, User } = require('../models');
+const { Watchlist, User, MsOrder, DemoOrder } = require('../models');
 const Order = require('../models/Order');
+const exchangeService = require('../services/exchangeService');
 const axios = require('axios');
 const { sequelize } = require('../config/database');
 
@@ -196,6 +197,80 @@ const getBars = async (req, res) => {
       }
 
       const sliced = bars.slice(-limitNum);
+
+      // Check real + paper positions for this symbol
+      let ownership = { hasPosition: false };
+      try {
+        const sym = symbol.toUpperCase();
+        const [[realOrders, paperOrders], usdToLocal] = await Promise.all([
+          Promise.all([
+            MsOrder.findAll({ where: { user_id: req.user.id, symbol: sym } }),
+            DemoOrder.findAll({ where: { user_id: req.user.id, symbol: sym } })
+          ]),
+          exchangeService.getExchangeRate('USD', stockSnapshot?.currency || 'KES').catch(() => null)
+        ]);
+
+        let realQty = 0;
+        for (const o of realOrders) {
+          if (o.side === 'BUY') realQty += parseFloat(o.quantity);
+          else realQty -= parseFloat(o.quantity);
+        }
+
+        let paperQty = 0;
+        for (const o of paperOrders) {
+          if (o.side === 'BUY') paperQty += parseFloat(o.quantity);
+          else paperQty -= parseFloat(o.quantity);
+        }
+
+        const currentPrice = stockSnapshot?.price ? parseFloat(stockSnapshot.price) : 0;
+
+        // Real orders: local_price is already in local currency (KES); fallback to usd_price * rate
+        let avgRealPrice = 0;
+        if (realQty > 0.00001 && realOrders.length > 0) {
+          const buyOrders = realOrders.filter(o => o.side === 'BUY');
+          const totalCost = buyOrders.reduce((sum, o) => {
+            const qty = parseFloat(o.quantity);
+            const price = o.local_price
+              ? parseFloat(o.local_price)
+              : (parseFloat(o.usd_price || 0) * (usdToLocal || 1));
+            return sum + price * qty;
+          }, 0);
+          const totalQty = buyOrders.reduce((sum, o) => sum + parseFloat(o.quantity), 0);
+          avgRealPrice = totalQty > 0 ? totalCost / totalQty : 0;
+        }
+
+        // Paper orders: price_usd stored in USD — convert to local currency
+        let avgPaperPrice = 0;
+        if (paperQty > 0.00001 && paperOrders.length > 0) {
+          const buyOrders = paperOrders.filter(o => o.side === 'BUY');
+          const totalCost = buyOrders.reduce((sum, o) => {
+            const qty = parseFloat(o.quantity);
+            const price = parseFloat(o.price_usd || 0) * (usdToLocal || 1);
+            return sum + price * qty;
+          }, 0);
+          const totalQty = buyOrders.reduce((sum, o) => sum + parseFloat(o.quantity), 0);
+          avgPaperPrice = totalQty > 0 ? totalCost / totalQty : 0;
+        }
+
+        ownership = {
+          hasPosition: realQty > 0.00001 || paperQty > 0.00001,
+          realPosition: realQty > 0.00001 ? {
+            quantity: parseFloat(realQty.toFixed(6)),
+            averageEntryPrice: parseFloat(avgRealPrice.toFixed(4)),
+            currentPrice,
+            unrealizedPL: currentPrice > 0 ? parseFloat(((currentPrice - avgRealPrice) * realQty).toFixed(4)) : null,
+            unrealizedPLPercent: currentPrice > 0 && avgRealPrice > 0 ? parseFloat((((currentPrice - avgRealPrice) / avgRealPrice) * 100).toFixed(2)) : null
+          } : null,
+          paperPosition: paperQty > 0.00001 ? {
+            quantity: parseFloat(paperQty.toFixed(6)),
+            averageEntryPrice: parseFloat(avgPaperPrice.toFixed(4)),
+            currentPrice,
+            unrealizedPL: currentPrice > 0 ? parseFloat(((currentPrice - avgPaperPrice) * paperQty).toFixed(4)) : null,
+            unrealizedPLPercent: currentPrice > 0 && avgPaperPrice > 0 ? parseFloat((((currentPrice - avgPaperPrice) / avgPaperPrice) * 100).toFixed(2)) : null
+          } : null
+        };
+      } catch (_) {}
+
       return res.json({
         success: true,
         provider: 'mystocks',
@@ -205,7 +280,7 @@ const getBars = async (req, res) => {
         timeframe,
         bars: sliced,
         count: sliced.length,
-        ownership: null
+        ownership
       });
     }
 
