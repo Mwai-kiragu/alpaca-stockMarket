@@ -39,6 +39,7 @@ const callbackRoutes = require('./routes/callback');
 const productionCallbackRoutes = require('./routes/productionCallback');
 const waitlistRoutes = require('./routes/waitlist');
 const referralRoutes = require('./routes/referral');
+const paperTradingRoutes = require('./routes/paperTrading');
 
 // MyStocks Africa routes (wallet, bonds/funds, webhooks)
 const msWalletRoutes = require('./routes/mystocks/msWallet');
@@ -146,6 +147,7 @@ app.use('/api/v1/kcb', kcbRoutes);
 app.use('/api/v1/orders', orderRoutes);
 app.use('/api/v1/stocks', stockRoutes);
 app.use('/api/v1/portfolio', portfolioRoutes);
+app.use('/api/v1/paper-trading', paperTradingRoutes);
 app.use('/api/v1/assets', assetRoutes);
 app.use('/api/v1/account', accountRoutes);
 app.use('/api/v1/updates', updatesRoutes);

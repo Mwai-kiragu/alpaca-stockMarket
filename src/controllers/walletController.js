@@ -36,28 +36,6 @@ const getWallet = async (req, res) => {
     const frozenKes = parseFloat(wallet.frozen_kes) || 0;
     const frozenUsd = parseFloat(wallet.frozen_usd) || 0;
 
-    // Demo mode — primary balance is demo_balance
-    if (user?.account_mode === 'demo') {
-      const demoBalance = parseFloat(user?.demo_balance || 0);
-      return res.json({
-        success: true,
-        isDemo: true,
-        wallet: {
-          demoBalance: demoBalance.toFixed(2),
-          demoBalanceKes: (demoBalance / exchangeRate).toFixed(2),
-          kesBalance: kesBalance.toFixed(2),
-          usdBalance: usdBalance.toFixed(2),
-          availableKes: (kesBalance - frozenKes).toFixed(2),
-          availableUsd: (usdBalance - frozenUsd).toFixed(2),
-          frozenKes: frozenKes.toFixed(2),
-          frozenUsd: frozenUsd.toFixed(2),
-          totalValueUsd: demoBalance.toFixed(2),
-          totalValueKes: (demoBalance / exchangeRate).toFixed(2),
-          exchangeRate
-        }
-      });
-    }
-
     // MyStocks balance — try live API first, fall back to last saved balance
     let msUsdBalance = 0;
     let msWalletData = null;
