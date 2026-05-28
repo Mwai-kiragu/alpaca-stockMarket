@@ -69,6 +69,43 @@ const getPortfolio = async (req, res) => {
     // Get exchange rate early - needed for both cases
     const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
+    // Demo mode: return demo portfolio (same logic as paper trading)
+    const isDemo = user?.account_mode === 'demo' || process.env.NODE_ENV === 'development';
+    if (isDemo) {
+      const demoBalance = parseFloat(user?.demo_balance || 10000);
+      const demoPositions = await buildDemoPositions(req.user.id, exchangeRate).catch(() => []);
+      const demoMarketValue = demoPositions.reduce((s, p) => s + (p.marketValue || 0), 0);
+      const totalEquity = demoBalance + demoMarketValue;
+      return res.json({
+        success: true,
+        provider: 'demo',
+        accountMode: 'demo',
+        portfolio: {
+          summary: {
+            totalEquity,
+            totalEquityKES: totalEquity * exchangeRate,
+            dayChange: 0,
+            dayChangeKES: 0,
+            dayChangePercent: 0,
+            buyingPower: demoBalance,
+            buyingPowerKES: demoBalance * exchangeRate,
+            cash: demoBalance,
+            cashKES: demoBalance * exchangeRate,
+            portfolioValue: totalEquity,
+            portfolioValueKES: totalEquity * exchangeRate,
+            demoBalance,
+            demoBalanceKES: demoBalance * exchangeRate,
+            lastUpdated: new Date().toISOString()
+          },
+          positions: demoPositions,
+          positionsCount: demoPositions.length,
+          exchangeRate,
+          account: null,
+          localWallet: { kesBalance: localKesBalance, usdBalance: localUsdBalance }
+        }
+      });
+    }
+
     if (!user || !user.alpaca_account_id) {
       // African-only user — fetch MyStocks portfolio + wallet
       let msPortfolio = null;
