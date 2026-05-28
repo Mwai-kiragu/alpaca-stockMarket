@@ -2233,6 +2233,160 @@ const getCompanyInfo = async (req, res) => {
 
     const upperSymbol = symbol.toUpperCase();
 
+    // African stocks — served entirely from MyStocks
+    if (isAfricanSymbol(upperSymbol)) {
+      const ticker = upperSymbol.includes('.') ? upperSymbol.split('.')[0] : upperSymbol;
+      const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+
+      // Fetch stock snapshot + slug detail + pulse in parallel
+      let stockSnapshot = null;
+      let slugData = null;
+      let pulseData = null;
+      try {
+        const snap = await ms.getStocks({ search: ticker });
+        const stocks = Array.isArray(snap) ? snap : (Array.isArray(snap?.stocks) ? snap.stocks : []);
+        stockSnapshot = stocks.find(s => s.symbol?.toUpperCase() === upperSymbol) || stocks[0] || null;
+
+        if (stockSnapshot?.name && stockSnapshot?.exchange) {
+          const [slugResult, pulseResult] = await Promise.allSettled([
+            ms.getStockBySlug(ms.buildStockSlug(stockSnapshot.name, stockSnapshot.exchange)),
+            ms.getStockPulse(upperSymbol)
+          ]);
+          if (slugResult.status === 'fulfilled') slugData = slugResult.value;
+          if (pulseResult.status === 'fulfilled') pulseData = pulseResult.value;
+        }
+      } catch (_) {}
+
+      if (!stockSnapshot) {
+        return res.status(404).json({ success: false, message: 'Symbol not found' });
+      }
+
+      const currentPrice = parseFloat(stockSnapshot.price || 0);
+      const previousClose = parseFloat(stockSnapshot.previousClose || stockSnapshot.prevClose || 0);
+      const priceChange = previousClose > 0 ? currentPrice - previousClose : null;
+      const priceChangePercent = previousClose > 0 ? parseFloat(((priceChange / previousClose) * 100).toFixed(2)) : null;
+      const logo = slugData?.logo?.imageUrl || `/api/v1/assets/logo/${upperSymbol}`;
+
+      // Build position from MsOrder + DemoOrder
+      let yourPosition = null;
+      const userId = req.user?.id;
+      if (userId) {
+        try {
+          const [[realOrders, paperOrders], usdToLocal] = await Promise.all([
+            Promise.all([
+              MsOrder.findAll({ where: { user_id: userId, symbol: upperSymbol } }),
+              DemoOrder.findAll({ where: { user_id: userId, symbol: upperSymbol } })
+            ]),
+            exchangeService.getExchangeRate('USD', stockSnapshot.currency || 'KES').catch(() => exchangeRate)
+          ]);
+
+          const calcPosition = (orders, priceField) => {
+            let qty = 0, cost = 0;
+            for (const o of orders) {
+              const q = parseFloat(o.quantity);
+              const p = o[priceField] ? parseFloat(o[priceField]) * (priceField === 'price_usd' ? usdToLocal : 1) : 0;
+              if (o.side === 'BUY') { qty += q; cost += q * p; }
+              else { qty -= q; cost -= q * p; }
+            }
+            if (qty <= 0.00001) return null;
+            const avgCost = cost / qty;
+            const marketValue = qty * currentPrice;
+            const totalReturn = marketValue - (qty * avgCost);
+            return {
+              shares: parseFloat(qty.toFixed(6)),
+              marketValue: parseFloat(marketValue.toFixed(4)),
+              avgCost: parseFloat(avgCost.toFixed(4)),
+              portfolioDiversity: null,
+              todayReturn: { amount: 0, percent: 0 },
+              totalReturn: {
+                amount: parseFloat(totalReturn.toFixed(4)),
+                percent: avgCost > 0 ? parseFloat((((currentPrice - avgCost) / avgCost) * 100).toFixed(2)) : 0
+              },
+              side: 'long',
+              currentPrice,
+              lastDayPrice: previousClose || null
+            };
+          };
+
+          const realPos = calcPosition(realOrders, 'local_price');
+          const paperPos = calcPosition(paperOrders, 'price_usd');
+
+          if (realPos || paperPos) {
+            yourPosition = {
+              ...(realPos || paperPos),
+              source: realPos ? 'mystocks' : 'demo',
+              realPosition: realPos,
+              paperPosition: paperPos
+            };
+          }
+        } catch (_) {}
+      }
+
+      return res.json({
+        success: true,
+        company: {
+          symbol: upperSymbol,
+          name: stockSnapshot.name || upperSymbol,
+          exchange: stockSnapshot.exchange || upperSymbol.split('.')[1] || 'NSE',
+          assetClass: 'african_equity',
+          status: 'active',
+          tradable: true,
+          currency: stockSnapshot.currency || 'KES',
+          currentPrice,
+          currentPriceUSD: stockSnapshot.usdPrice ? parseFloat(stockSnapshot.usdPrice) : parseFloat((currentPrice / exchangeRate).toFixed(6)),
+          priceChange,
+          priceChangePercent,
+          about: {
+            description: slugData?.description || stockSnapshot.description || `${stockSnapshot.name} is listed on the ${stockSnapshot.exchange || 'NSE'}.`,
+            sector: stockSnapshot.sector || slugData?.sector || null,
+            industry: stockSnapshot.industry || slugData?.industry || null,
+            website: stockSnapshot.website || slugData?.website || null,
+            headquarters: stockSnapshot.country || null,
+            ceo: null,
+            employees: null
+          },
+          financials: (() => {
+            // Merge fields from all three sources: stockSnapshot, slugData, pulseData
+            const src = [stockSnapshot, slugData, pulseData].filter(Boolean);
+            const pick = (...keys) => {
+              for (const s of src) {
+                for (const k of keys) {
+                  const v = s?.[k];
+                  if (v !== undefined && v !== null && v !== '') return v;
+                }
+              }
+              return null;
+            };
+            return {
+              marketCap: pick('marketCap', 'market_cap', 'marketCapitalization', 'market_capitalization'),
+              peRatio: pick('peRatio', 'pe_ratio', 'pe', 'priceToEarnings', 'price_to_earnings'),
+              dividendYield: pick('dividendYield', 'dividend_yield', 'dividendYieldTtm'),
+              eps: pick('eps', 'earningsPerShare', 'earnings_per_share'),
+              beta: pick('beta'),
+              revenue: pick('revenue', 'totalRevenue', 'total_revenue'),
+              profitMargin: pick('profitMargin', 'profit_margin', 'netProfitMargin'),
+              high52Week: pick('high52Week', 'fiftyTwoWeekHigh', 'week52High', 'yearHigh', 'high_52_week'),
+              low52Week: pick('low52Week', 'fiftyTwoWeekLow', 'week52Low', 'yearLow', 'low_52_week'),
+              volume: pick('volume', 'avgVolume', 'averageVolume'),
+              note: 'Financial data sourced from MyStocks Africa'
+            };
+          })(),
+          tradingInfo: {
+            marginable: false,
+            shortable: false,
+            easyToBorrow: false,
+            fractionable: false,
+            maintenanceMarginRequirement: null
+          },
+          recentNews: [],
+          yourPosition,
+          logo,
+          provider: 'mystocks',
+          lastUpdated: new Date().toISOString()
+        }
+      });
+    }
+
     // Get asset details from Alpaca
     const asset = await alpacaService.getAsset(upperSymbol);
 
