@@ -2269,16 +2269,19 @@ const getCompanyInfo = async (req, res) => {
 
       // Build position from MsOrder + DemoOrder
       let yourPosition = null;
+      let isWatchlisted = false;
       const userId = req.user?.id;
       if (userId) {
         try {
-          const [[realOrders, paperOrders], usdToLocal] = await Promise.all([
+          const [[realOrders, paperOrders], usdToLocal, watchlist] = await Promise.all([
             Promise.all([
               MsOrder.findAll({ where: { user_id: userId, symbol: upperSymbol } }),
               DemoOrder.findAll({ where: { user_id: userId, symbol: upperSymbol } })
             ]),
-            exchangeService.getExchangeRate('USD', stockSnapshot.currency || 'KES').catch(() => exchangeRate)
+            exchangeService.getExchangeRate('USD', stockSnapshot.currency || 'KES').catch(() => exchangeRate),
+            Watchlist.findOne({ where: { user_id: userId } }).catch(() => null)
           ]);
+          isWatchlisted = watchlist?.symbols?.includes(upperSymbol) ?? false;
 
           const calcPosition = (orders, priceField) => {
             let qty = 0, cost = 0;
@@ -2380,6 +2383,7 @@ const getCompanyInfo = async (req, res) => {
           },
           recentNews: [],
           yourPosition,
+          isWatchlisted,
           logo,
           provider: 'mystocks',
           lastUpdated: new Date().toISOString()
@@ -2519,6 +2523,14 @@ const getCompanyInfo = async (req, res) => {
       // Continue without position data - user may not have a position
     }
 
+    let isWatchlisted = false;
+    if (userId) {
+      try {
+        const watchlist = await Watchlist.findOne({ where: { user_id: userId } });
+        isWatchlisted = watchlist?.symbols?.includes(upperSymbol) ?? false;
+      } catch (_) {}
+    }
+
     // Get latest quote for current price
     let currentPrice = null;
     let priceChange = null;
@@ -2611,6 +2623,7 @@ const getCompanyInfo = async (req, res) => {
       // User's position (null if user has no position in this stock)
       yourPosition: userPosition,
 
+      isWatchlisted,
       logo: alpacaService.getCompanyLogo(upperSymbol),
       lastUpdated: new Date().toISOString()
     };
