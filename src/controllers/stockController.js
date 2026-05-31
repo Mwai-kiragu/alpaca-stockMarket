@@ -2652,63 +2652,137 @@ const getCompanyInfo = async (req, res) => {
 
 const searchStocks = async (req, res) => {
   try {
-    const { q } = req.query;
-    if (!q || !q.trim()) {
-      return res.status(400).json({ success: false, message: 'Search query (q) is required.' });
+    const { q, category, sort, exchange } = req.query;
+    const limit = Math.min(parseInt(req.query.limit) || 20, 20);
+    const query = q?.trim() || null;
+    const exch = exchange?.toUpperCase() || null;
+
+    if (!query && !category && !sort && !exch) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide at least one of: q, category, sort, or exchange.'
+      });
     }
 
-    const limit = Math.min(parseInt(req.query.limit) || 20, 20);
-    const query = q.trim();
+    const AFRICAN_EXCHANGES = new Set(['NSE', 'JSE', 'NGX', 'USE', 'DSE', 'GSE', 'BRVM']);
+    const isAfricanExch = exch ? AFRICAN_EXCHANGES.has(exch) : false;
+    const isUSExch = exch ? !AFRICAN_EXCHANGES.has(exch) : false;
 
-    const [msRaw, alpacaRaw] = await Promise.allSettled([
-      ms.getStocks({ search: query }),
-      alpacaService.searchAssets(query)
-    ]);
+    // Normalize a MyStocks raw response to the shared result shape
+    const normMs = (raw) => {
+      const stocks = Array.isArray(raw) ? raw : (Array.isArray(raw?.stocks) ? raw.stocks : []);
+      return stocks.map(s => ({
+        symbol: s.symbol,
+        name: s.name || s.symbol,
+        exchange: s.exchange || (isAfricanExch ? exch : 'NSE'),
+        logo: `/api/v1/assets/logo/${s.symbol}`,
+        currentPrice: parseFloat(s.price || 0),
+        priceChangePercent: parseFloat(s.changePct) || 0,
+        currency: s.currency || 'KES'
+      }));
+    };
 
-    const africanResults = msRaw.status === 'fulfilled'
-      ? (() => {
-          const stocks = Array.isArray(msRaw.value)
-            ? msRaw.value
-            : (Array.isArray(msRaw.value?.stocks) ? msRaw.value.stocks : []);
-          return stocks.map(s => ({
+    // Normalize an Alpaca asset list to the shared result shape, enriching with quotes
+    const normAlpaca = async (assets) => {
+      const sliced = assets.slice(0, limit);
+      const quotes = await Promise.allSettled(sliced.map(a => alpacaService.getLatestQuote(a.symbol)));
+      return sliced.map((a, i) => {
+        const quote = quotes[i].status === 'fulfilled' ? quotes[i].value : null;
+        return {
+          symbol: a.symbol,
+          name: a.name || a.symbol,
+          exchange: a.exchange || null,
+          logo: alpacaService.getCompanyLogo(a.symbol, a.name),
+          currentPrice: quote ? parseFloat(quote.ap || quote.bp || 0) : null,
+          priceChangePercent: null,
+          currency: 'USD'
+        };
+      });
+    };
+
+    // Scope flags: derived from category + exchange
+    const scopeAfrican = category === 'african_equity' || isAfricanExch;
+    const scopeUS = ['us_equity', 'etf', 'ipo'].includes(category) || isUSExch;
+
+    let results = [];
+
+    if (category === 'ipo') {
+      // Best-effort: scan recent news for IPO mentions, return those symbols
+      const news = await alpacaService.getNews([], 20).catch(() => []);
+      const ipoSymbols = [...new Set(
+        news
+          .filter(a => /\bipo\b/i.test(a.headline || ''))
+          .flatMap(a => a.symbols || [])
+          .filter(Boolean)
+      )].slice(0, limit);
+      if (ipoSymbols.length > 0) {
+        const assetResults = await Promise.allSettled(ipoSymbols.map(s => alpacaService.getAsset(s)));
+        const validAssets = assetResults.filter(r => r.status === 'fulfilled').map(r => r.value);
+        results = await normAlpaca(validAssets);
+      }
+
+    } else if (scopeAfrican && !scopeUS) {
+      // African market only
+      const raw = await ms.getStocks({
+        exchange: isAfricanExch ? exch : undefined,
+        search: query || undefined
+      }).catch(() => []);
+      results = normMs(raw);
+
+    } else if (scopeUS && !scopeAfrican) {
+      // US market only
+      const assetClass = category === 'etf' ? 'us_etf' : 'us_equity';
+      if (query) {
+        const assets = await alpacaService.searchAssets(query).catch(() => []);
+        results = await normAlpaca(assets);
+      } else {
+        const assets = await alpacaService.getAssets('active', assetClass, isUSExch ? exch : null).catch(() => []);
+        results = await normAlpaca(assets);
+      }
+
+    } else if (query) {
+      // Free-text, no scope constraint → dual source
+      const [msRaw, alpacaRaw] = await Promise.allSettled([
+        ms.getStocks({ search: query }),
+        alpacaService.searchAssets(query)
+      ]);
+      const africanResults = msRaw.status === 'fulfilled' ? normMs(msRaw.value) : [];
+      const usResults = alpacaRaw.status === 'fulfilled' ? await normAlpaca(alpacaRaw.value || []) : [];
+      results = [...africanResults, ...usResults];
+
+    } else {
+      // sort-only with no category/exchange → fetch movers from both markets
+      const [moversRes, nseRes] = await Promise.allSettled([
+        alpacaService.getTopMovers(limit),
+        ms.getStocks({ exchange: 'NSE' })
+      ]);
+      const usMovers = moversRes.status === 'fulfilled'
+        ? [...(moversRes.value.gainers || []), ...(moversRes.value.losers || [])].map(s => ({
             symbol: s.symbol,
             name: s.name || s.symbol,
-            exchange: s.exchange || 'NSE',
-            logo: `/api/v1/assets/logo/${s.symbol}`,
+            exchange: null,
+            logo: alpacaService.getCompanyLogo(s.symbol),
             currentPrice: parseFloat(s.price || 0),
-            priceChangePercent: s.changePct != null ? parseFloat(s.changePct) : 0,
-            currency: s.currency || 'KES'
-          }));
-        })()
-      : [];
+            priceChangePercent: parseFloat(s.changePercent || 0),
+            currency: 'USD'
+          }))
+        : [];
+      const africanMovers = nseRes.status === 'fulfilled' ? normMs(nseRes.value) : [];
+      results = [...africanMovers, ...usMovers];
+    }
 
-    const usResults = alpacaRaw.status === 'fulfilled'
-      ? await (async () => {
-          const assets = (alpacaRaw.value || []).slice(0, limit);
-          const enriched = await Promise.allSettled(
-            assets.map(a => alpacaService.getLatestQuote(a.symbol))
-          );
-          return assets.map((a, i) => {
-            const quote = enriched[i].status === 'fulfilled' ? enriched[i].value : null;
-            return {
-              symbol: a.symbol,
-              name: a.name || a.symbol,
-              exchange: a.exchange || null,
-              logo: alpacaService.getCompanyLogo(a.symbol, a.name),
-              currentPrice: quote ? parseFloat(quote.ap || quote.bp || 0) : null,
-              priceChangePercent: null,
-              currency: 'USD'
-            };
-          });
-        })()
-      : [];
+    if (sort === 'top_gainers') {
+      results.sort((a, b) => (b.priceChangePercent || 0) - (a.priceChangePercent || 0));
+    } else if (sort === 'top_losers') {
+      results.sort((a, b) => (a.priceChangePercent || 0) - (b.priceChangePercent || 0));
+    }
 
     const seen = new Set();
-    const results = [...africanResults, ...usResults]
-      .filter(r => { if (seen.has(r.symbol)) return false; seen.add(r.symbol); return true; })
+    const final = results
+      .filter(r => r.symbol && !seen.has(r.symbol) && seen.add(r.symbol))
       .slice(0, limit);
 
-    res.json({ success: true, results });
+    res.json({ success: true, results: final });
   } catch (error) {
     logger.error('Search stocks error:', error);
     res.status(500).json({ success: false, message: 'Failed to search stocks.' });
