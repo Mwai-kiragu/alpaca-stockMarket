@@ -2651,7 +2651,68 @@ const getCompanyInfo = async (req, res) => {
 };
 
 const searchStocks = async (req, res) => {
-  res.json({ success: true, results: [] });
+  try {
+    const { q } = req.query;
+    if (!q || !q.trim()) {
+      return res.status(400).json({ success: false, message: 'Search query (q) is required.' });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit) || 20, 20);
+    const query = q.trim();
+
+    const [msRaw, alpacaRaw] = await Promise.allSettled([
+      ms.getStocks({ search: query }),
+      alpacaService.searchAssets(query)
+    ]);
+
+    const africanResults = msRaw.status === 'fulfilled'
+      ? (() => {
+          const stocks = Array.isArray(msRaw.value)
+            ? msRaw.value
+            : (Array.isArray(msRaw.value?.stocks) ? msRaw.value.stocks : []);
+          return stocks.map(s => ({
+            symbol: s.symbol,
+            name: s.name || s.symbol,
+            exchange: s.exchange || 'NSE',
+            logo: `/api/v1/assets/logo/${s.symbol}`,
+            currentPrice: parseFloat(s.price || 0),
+            priceChangePercent: parseFloat(s.changePct ?? s.change ?? 0),
+            currency: s.currency || 'KES'
+          }));
+        })()
+      : [];
+
+    const usResults = alpacaRaw.status === 'fulfilled'
+      ? await (async () => {
+          const assets = alpacaRaw.value || [];
+          const enriched = await Promise.allSettled(
+            assets.map(a => alpacaService.getLatestQuote(a.symbol))
+          );
+          return assets.map((a, i) => {
+            const quote = enriched[i].status === 'fulfilled' ? enriched[i].value : null;
+            return {
+              symbol: a.symbol,
+              name: a.name || a.symbol,
+              exchange: a.exchange || null,
+              logo: alpacaService.getCompanyLogo(a.symbol, a.name),
+              currentPrice: quote ? parseFloat(quote.ap || quote.bp || 0) : null,
+              priceChangePercent: null,
+              currency: 'USD'
+            };
+          });
+        })()
+      : [];
+
+    const seen = new Set();
+    const results = [...africanResults, ...usResults]
+      .filter(r => { if (seen.has(r.symbol)) return false; seen.add(r.symbol); return true; })
+      .slice(0, limit);
+
+    res.json({ success: true, results });
+  } catch (error) {
+    logger.error('Search stocks error:', error);
+    res.status(500).json({ success: false, message: 'Failed to search stocks.' });
+  }
 };
 
 const getTrending = async (req, res) => {
