@@ -2740,12 +2740,12 @@ const getTrending = async (req, res) => {
             : (Array.isArray(nseResult.value?.stocks) ? nseResult.value.stocks : []);
           return stocks
             .filter(s => s.changePct != null)
-            .sort((a, b) => parseFloat(b.changePct) - parseFloat(a.changePct))
+            .sort((a, b) => (parseFloat(b.changePct) || 0) - (parseFloat(a.changePct) || 0))
             .slice(0, 3)
             .map(s => ({
               symbol: s.symbol,
               name: s.name || s.symbol,
-              priceChangePercent: parseFloat(s.changePct),
+              priceChangePercent: parseFloat(s.changePct) || 0,
               currentPrice: parseFloat(s.price ?? 0),
               currency: s.currency || 'KES'
             }));
