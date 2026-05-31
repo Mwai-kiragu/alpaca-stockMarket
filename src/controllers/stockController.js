@@ -2716,7 +2716,63 @@ const searchStocks = async (req, res) => {
 };
 
 const getTrending = async (req, res) => {
-  res.json({ success: true, trendingStocks: [], trendingTopics: [] });
+  try {
+    const [moversResult, nseResult, newsResult] = await Promise.allSettled([
+      alpacaService.getTopMovers(10),
+      ms.getStocks({ exchange: 'NSE' }),
+      alpacaService.getNews([], 5)
+    ]);
+
+    const usGainers = moversResult.status === 'fulfilled'
+      ? (moversResult.value.gainers || []).slice(0, 5).map(s => ({
+          symbol: s.symbol,
+          name: s.name || s.symbol,
+          priceChangePercent: parseFloat(s.changePercent ?? 0),
+          currentPrice: parseFloat(s.price ?? 0),
+          currency: 'USD'
+        }))
+      : [];
+
+    const nseGainers = nseResult.status === 'fulfilled'
+      ? (() => {
+          const stocks = Array.isArray(nseResult.value)
+            ? nseResult.value
+            : (Array.isArray(nseResult.value?.stocks) ? nseResult.value.stocks : []);
+          return stocks
+            .filter(s => s.changePct != null)
+            .sort((a, b) => parseFloat(b.changePct) - parseFloat(a.changePct))
+            .slice(0, 3)
+            .map(s => ({
+              symbol: s.symbol,
+              name: s.name || s.symbol,
+              priceChangePercent: parseFloat(s.changePct),
+              currentPrice: parseFloat(s.price ?? 0),
+              currency: s.currency || 'KES'
+            }));
+        })()
+      : [];
+
+    // Interleave NSE and US: NSE#1, US#1, NSE#2, US#2, NSE#3, US#3, US#4, US#5
+    const interleaved = [];
+    const maxLen = Math.max(nseGainers.length, usGainers.length);
+    for (let i = 0; i < maxLen; i++) {
+      if (i < nseGainers.length) interleaved.push(nseGainers[i]);
+      if (i < usGainers.length) interleaved.push(usGainers[i]);
+    }
+    const trendingStocks = interleaved.map((s, i) => ({ rank: i + 1, ...s }));
+
+    const trendingTopics = newsResult.status === 'fulfilled'
+      ? (newsResult.value || []).map((article, i) => ({
+          rank: i + 1,
+          title: article.headline || article.title || ''
+        }))
+      : [];
+
+    res.json({ success: true, trendingStocks, trendingTopics });
+  } catch (error) {
+    logger.error('Get trending error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch trending data.' });
+  }
 };
 
 module.exports = {
