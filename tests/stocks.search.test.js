@@ -48,6 +48,7 @@ describe('GET /api/v1/stocks/search', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.results[0].symbol).toBe('ABSA.KE');
     expect(res.body.results[0].currency).toBe('KES');
+    expect(res.body.results[0].priceChangePercent).toBe(1.2);
     expect(res.body.results[1].symbol).toBe('AAPL');
     expect(res.body.results[1].currentPrice).toBe(178.5);
     expect(res.body.results[1].currency).toBe('USD');
@@ -90,5 +91,22 @@ describe('GET /api/v1/stocks/search', () => {
       .set('Authorization', 'Bearer test');
 
     expect(res.body.results).toHaveLength(5);
+  });
+
+  it('handles wrapped { stocks: [...] } response from MyStocks', async () => {
+    ms.getStocks.mockResolvedValue({
+      stocks: [
+        { symbol: 'EQTY.KE', name: 'Equity Group', exchange: 'NSE', price: 52.0, changePct: 0.8, currency: 'KES' }
+      ]
+    });
+    alpacaService.searchAssets.mockResolvedValue([]);
+
+    const res = await request(app)
+      .get('/api/v1/stocks/search?q=equity')
+      .set('Authorization', 'Bearer test');
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toHaveLength(1);
+    expect(res.body.results[0].symbol).toBe('EQTY.KE');
   });
 });

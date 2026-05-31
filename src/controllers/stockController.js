@@ -2676,7 +2676,7 @@ const searchStocks = async (req, res) => {
             exchange: s.exchange || 'NSE',
             logo: `/api/v1/assets/logo/${s.symbol}`,
             currentPrice: parseFloat(s.price || 0),
-            priceChangePercent: parseFloat(s.changePct ?? s.change ?? 0),
+            priceChangePercent: s.changePct != null ? parseFloat(s.changePct) : 0,
             currency: s.currency || 'KES'
           }));
         })()
@@ -2684,7 +2684,7 @@ const searchStocks = async (req, res) => {
 
     const usResults = alpacaRaw.status === 'fulfilled'
       ? await (async () => {
-          const assets = alpacaRaw.value || [];
+          const assets = (alpacaRaw.value || []).slice(0, limit);
           const enriched = await Promise.allSettled(
             assets.map(a => alpacaService.getLatestQuote(a.symbol))
           );
