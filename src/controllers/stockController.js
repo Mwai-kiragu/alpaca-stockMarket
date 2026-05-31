@@ -2650,6 +2650,14 @@ const getCompanyInfo = async (req, res) => {
   }
 };
 
+const searchStocks = async (req, res) => {
+  res.json({ success: true, results: [] });
+};
+
+const getTrending = async (req, res) => {
+  res.json({ success: true, trendingStocks: [], trendingTopics: [] });
+};
+
 module.exports = {
   getQuote,
   getLatestTrade,
@@ -2675,5 +2683,8 @@ module.exports = {
   // Charts
   getStockChart,
   // Company info & financials
-  getCompanyInfo
+  getCompanyInfo,
+  // Search & trending
+  searchStocks,
+  getTrending
 };
