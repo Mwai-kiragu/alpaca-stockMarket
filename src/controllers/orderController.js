@@ -16,9 +16,8 @@ const createOrder = async (req, res) => {
 
     const user = await User.findByPk(req.user.id);
 
-    // African exchange → MyStocks trade
+    // African exchange → MyStocks trade (or paper trade in demo mode)
     if (isAfrican(exchange)) {
-      await ensureMyStocksSubAccount(req.user.id);
       const tradeType = (side || orderType || '').toUpperCase();
       if (!['BUY', 'SELL'].includes(tradeType)) {
         return res.status(400).json({ success: false, message: 'side must be BUY or SELL for African exchanges' });
@@ -26,7 +25,51 @@ const createOrder = async (req, res) => {
       const qty = parseFloat(quantity);
       if (!qty || qty <= 0) return res.status(400).json({ success: false, message: 'qty must be a positive number' });
       const msSymbol = symbol.toUpperCase();
-      const data = await ms.placeTrade(null, { symbol: msSymbol, type: tradeType, quantity: qty });
+
+      // Demo mode: execute as paper trade using demo balance
+      const isDemo = user?.account_mode === 'demo' || process.env.NODE_ENV === 'development';
+      if (isDemo) {
+        const demoBalance = parseFloat(user?.demo_balance || 0);
+        const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+        let currentPrice = 0;
+        let stockCurrency = 'KES';
+        try {
+          const ticker = msSymbol.includes('.') ? msSymbol.split('.')[0] : msSymbol;
+          const snap = await ms.getStocks({ search: ticker });
+          const stocks = Array.isArray(snap) ? snap : (snap?.stocks || []);
+          const stock = stocks.find(s => s.symbol?.toUpperCase() === msSymbol) || stocks[0];
+          currentPrice = parseFloat(stock?.usdPrice || (stock?.price ? stock.price / exchangeRate : 0) || 0);
+          stockCurrency = stock?.currency || 'KES';
+        } catch (_) {}
+        if (!currentPrice || currentPrice <= 0) {
+          return res.status(400).json({ success: false, message: 'Unable to fetch current price for this stock' });
+        }
+        const gross = Math.round(qty * currentPrice * 100) / 100;
+        const fee = Math.round(gross * 0.01 * 100) / 100;
+        if (tradeType === 'BUY') {
+          const totalCost = gross + fee;
+          if (demoBalance < totalCost) {
+            return res.status(400).json({ success: false, message: 'Insufficient demo balance', available: parseFloat(demoBalance.toFixed(2)), required: parseFloat(totalCost.toFixed(2)) });
+          }
+          const newBalance = Math.round((demoBalance - totalCost) * 100) / 100;
+          await DemoOrder.create({ user_id: req.user.id, symbol: msSymbol, side: 'BUY', quantity: qty, price_usd: currentPrice, gross_usd: gross, fee_usd: fee, total_cost_usd: totalCost, currency: stockCurrency, exchange: exchange.toUpperCase(), balance_after: newBalance, status: 'FILLED', filled_at: new Date() });
+          await user.update({ demo_balance: newBalance });
+          return res.status(201).json({ success: true, provider: 'demo', order: { symbol: msSymbol, side: 'BUY', quantity: qty, price: currentPrice, gross, fee, totalCost, balanceAfter: newBalance } });
+        } else {
+          const existingOrders = await DemoOrder.findAll({ where: { user_id: req.user.id, symbol: msSymbol } });
+          let netQty = 0;
+          for (const o of existingOrders) { if (o.side === 'BUY') netQty += parseFloat(o.quantity); else netQty -= parseFloat(o.quantity); }
+          if (netQty < qty) return res.status(400).json({ success: false, message: 'Insufficient shares', available: parseFloat(netQty.toFixed(6)), required: qty });
+          const proceeds = Math.round((gross - fee) * 100) / 100;
+          const newBalance = Math.round((demoBalance + proceeds) * 100) / 100;
+          await DemoOrder.create({ user_id: req.user.id, symbol: msSymbol, side: 'SELL', quantity: qty, price_usd: currentPrice, gross_usd: gross, fee_usd: fee, total_cost_usd: proceeds, currency: stockCurrency, exchange: exchange.toUpperCase(), balance_after: newBalance, status: 'FILLED', filled_at: new Date() });
+          await user.update({ demo_balance: newBalance });
+          return res.status(201).json({ success: true, provider: 'demo', order: { symbol: msSymbol, side: 'SELL', quantity: qty, price: currentPrice, gross, fee, proceeds, balanceAfter: newBalance } });
+        }
+      }
+
+      const subAccountId = await ensureMyStocksSubAccount(req.user.id);
+      const data = await ms.placeTrade(subAccountId, { symbol: msSymbol, type: tradeType, quantity: qty });
       await MsOrder.create({
         user_id: req.user.id,
         order_id: data?.orderId || null,
