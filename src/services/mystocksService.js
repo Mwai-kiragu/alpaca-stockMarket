@@ -109,9 +109,9 @@ const getTransactions = async (subAccountId, { page, limit } = {}) => {
   return res.data;
 };
 
-const placeTrade = async (_subAccountId, { symbol, type, quantity }) => {
-  const res = await dataClient.post(
-    '/trade',
+const placeTrade = async (subAccountId, { symbol, type, quantity }) => {
+  const res = await client.post(
+    `/users/${subAccountId}/trade`,
     { symbol, type, quantity },
     { headers: { 'Idempotency-Key': idempotencyKey() } }
   );
