@@ -649,6 +649,244 @@ const adminController = {
       res.status(500).json({ success: false, message: 'Failed to load analytics' });
     }
   },
+
+  listUsers: async (req, res) => {
+    try {
+      const { page = 1, limit = 20, search, status } = req.query;
+      const offset = (page - 1) * limit;
+      const { Op } = require('sequelize');
+
+      const where = {};
+      if (status === 'deleted') {
+        where.is_active = false;
+      } else if (status && status !== 'all') {
+        where.is_active = true;
+        where.status = status;
+      } else {
+        where.is_active = true;
+      }
+
+      if (search && search.trim()) {
+        const term = `%${search.trim()}%`;
+        where[Op.or] = [
+          { first_name: { [Op.iLike]: term } },
+          { last_name: { [Op.iLike]: term } },
+          { email: { [Op.iLike]: term } },
+        ];
+      }
+
+      const { count, rows } = await User.findAndCountAll({
+        where,
+        attributes: { exclude: ['password', 'pin_hash', 'login_attempts', 'lock_until'] },
+        order: [['createdAt', 'DESC']],
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+      });
+
+      res.json({
+        success: true,
+        data: {
+          users: rows.map(u => ({
+            id: u.id,
+            firstName: u.first_name,
+            lastName: u.last_name,
+            email: u.email,
+            phone: u.phone,
+            kycStatus: u.kyc_status,
+            status: u.status,
+            role: u.role,
+            isActive: u.is_active,
+            createdAt: u.createdAt,
+          })),
+          pagination: {
+            total: count,
+            page: parseInt(page),
+            limit: parseInt(limit),
+            totalPages: Math.ceil(count / limit),
+          },
+        },
+      });
+    } catch (error) {
+      logger.error('List users error:', error);
+      res.status(500).json({ success: false, message: 'Failed to list users' });
+    }
+  },
+
+  getUserProfile: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const { Wallet, Order, MsOrder } = require('../models');
+
+      const user = await User.findByPk(userId, {
+        attributes: { exclude: ['password', 'pin_hash', 'login_attempts', 'lock_until'] },
+        include: [{ model: Wallet, as: 'wallet' }],
+      });
+
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+      const [alpacaOrders, msOrders, orderCount, msOrderCount] = await Promise.all([
+        Order.findAll({ where: { user_id: userId }, order: [['createdAt', 'DESC']], limit: 5, raw: true }),
+        MsOrder.findAll({ where: { user_id: userId }, order: [['created_at', 'DESC']], limit: 5, raw: true }),
+        Order.count({ where: { user_id: userId } }),
+        MsOrder.count({ where: { user_id: userId } }),
+      ]);
+
+      const recentOrders = [
+        ...alpacaOrders.map(o => ({
+          symbol: o.symbol,
+          side: o.side,
+          status: o.status,
+          market: 'US',
+          createdAt: o.createdAt,
+        })),
+        ...msOrders.map(o => ({
+          symbol: o.symbol,
+          side: (o.side || '').toLowerCase(),
+          status: o.status,
+          market: o.exchange || 'NSE',
+          createdAt: o.created_at,
+        })),
+      ]
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .slice(0, 5);
+
+      res.json({
+        success: true,
+        data: {
+          user: {
+            id: user.id,
+            firstName: user.first_name,
+            lastName: user.last_name,
+            email: user.email,
+            phone: user.phone,
+            role: user.role,
+            status: user.status,
+            kycStatus: user.kyc_status,
+            registrationStep: user.registration_step,
+            isActive: user.is_active,
+            mustChangePassword: user.must_change_password || false,
+            createdAt: user.createdAt,
+            lastLogin: user.last_login,
+            wallet: user.wallet
+              ? { kesBalance: parseFloat(user.wallet.kes_balance || 0), usdBalance: parseFloat(user.wallet.usd_balance || 0) }
+              : { kesBalance: 0, usdBalance: 0 },
+            orderCount: orderCount + msOrderCount,
+            recentOrders,
+          },
+        },
+      });
+    } catch (error) {
+      logger.error('Get user profile error:', error);
+      res.status(500).json({ success: false, message: 'Failed to get user profile' });
+    }
+  },
+
+  suspendUser: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const user = await User.findByPk(userId);
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+      if (!user.is_active) return res.status(400).json({ success: false, message: 'Cannot suspend a deleted user' });
+      await user.update({ status: 'suspended' });
+      logger.info(`User ${user.email} suspended by admin ${req.user.id}`);
+      res.json({ success: true, message: 'User suspended', data: { status: 'suspended' } });
+    } catch (error) {
+      logger.error('Suspend user error:', error);
+      res.status(500).json({ success: false, message: 'Failed to suspend user' });
+    }
+  },
+
+  activateUser: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const user = await User.findByPk(userId);
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+      if (!user.is_active) return res.status(400).json({ success: false, message: 'Cannot activate a deleted user' });
+      await user.update({ status: 'active' });
+      logger.info(`User ${user.email} activated by admin ${req.user.id}`);
+      res.json({ success: true, message: 'User activated', data: { status: 'active' } });
+    } catch (error) {
+      logger.error('Activate user error:', error);
+      res.status(500).json({ success: false, message: 'Failed to activate user' });
+    }
+  },
+
+  deleteUser: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      if (userId === req.user.id) return res.status(400).json({ success: false, message: 'Cannot delete your own account' });
+      const user = await User.findByPk(userId);
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+      await user.update({ is_active: false, deleted_at: new Date(), status: 'closed' });
+      logger.info(`User ${user.email} soft-deleted by admin ${req.user.id}`);
+      res.json({ success: true, message: 'User account deleted' });
+    } catch (error) {
+      logger.error('Delete user error:', error);
+      res.status(500).json({ success: false, message: 'Failed to delete user' });
+    }
+  },
+
+  updateUserRole: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const { role } = req.body;
+      if (!['user', 'support'].includes(role)) {
+        return res.status(400).json({ success: false, message: 'Role must be user or support' });
+      }
+      const user = await User.findByPk(userId);
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+      await user.update({ role });
+      logger.info(`User ${user.email} role changed to ${role} by admin ${req.user.id}`);
+      res.json({ success: true, message: `User role updated to ${role}`, data: { role } });
+    } catch (error) {
+      logger.error('Update user role error:', error);
+      res.status(500).json({ success: false, message: 'Failed to update user role' });
+    }
+  },
+
+  resetUserPassword: async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const user = await User.findByPk(userId);
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+      if (!user.is_active) return res.status(400).json({ success: false, message: 'Cannot reset password for deleted user' });
+
+      const crypto = require('crypto');
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      const bytes = crypto.randomBytes(10);
+      let tempPassword = '';
+      for (let i = 0; i < 10; i++) {
+        tempPassword += chars[bytes[i] % chars.length];
+      }
+
+      await user.update({ password: tempPassword, must_change_password: true });
+
+      const emailService = require('../services/emailService');
+      await emailService.sendEmail({
+        to: user.email,
+        subject: 'Your Riven account password has been reset',
+        html: `
+          <div style="font-family:sans-serif;max-width:480px;margin:auto">
+            <h2>Password Reset</h2>
+            <p>Hi ${user.first_name},</p>
+            <p>An admin has reset your Riven account password. Your temporary password is:</p>
+            <div style="background:#f5f5f5;border-radius:6px;padding:16px;text-align:center;font-size:24px;font-weight:bold;letter-spacing:4px;margin:20px 0">
+              ${tempPassword}
+            </div>
+            <p>Please log in with this password and you will be prompted to set a new one.</p>
+            <p>If you did not request this, contact support immediately.</p>
+          </div>
+        `,
+        text: `Hi ${user.first_name},\n\nYour temporary password is: ${tempPassword}\n\nPlease log in and set a new password.`,
+      });
+
+      logger.info(`Password reset for user ${user.email} by admin ${req.user.id}`);
+      res.json({ success: true, message: 'Password reset email sent' });
+    } catch (error) {
+      logger.error('Reset user password error:', error);
+      res.status(500).json({ success: false, message: 'Failed to reset password' });
+    }
+  },
 };
 
 module.exports = adminController;
