@@ -1,5 +1,5 @@
 const { User, Transaction, Order, MsOrder } = require('../models');
-const { Op, fn, col } = require('sequelize');
+const { Op, fn, col, literal } = require('sequelize');
 const logger = require('../utils/logger');
 
 const adminController = {
@@ -514,12 +514,12 @@ const adminController = {
         User.count({ where: { createdAt: { [Op.gte]: startOfToday } } }),
         User.findAll({
           attributes: [
-            [fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD'), 'date'],
+            [literal(`TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD')`), 'date'],
             [fn('COUNT', col('id')), 'count'],
           ],
           where: { createdAt: { [Op.gte]: thirtyDaysAgo } },
-          group: [fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD')],
-          order: [[fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD'), 'ASC']],
+          group: [literal(`TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD')`)],
+          order: [[literal(`TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD')`), 'ASC']],
           raw: true,
         }),
         User.count({ where: { is_email_verified: true } }),
@@ -548,22 +548,22 @@ const adminController = {
         MsOrder.count({ where: { created_at: { [Op.gte]: thirtyDaysAgo } } }),
         Order.findAll({
           attributes: [
-            [fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD'), 'date'],
+            [literal(`TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD')`), 'date'],
             [fn('COUNT', col('id')), 'count'],
           ],
           where: { createdAt: { [Op.gte]: sevenDaysAgo } },
-          group: [fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD')],
-          order: [[fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD'), 'ASC']],
+          group: [literal(`TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD')`)],
+          order: [[literal(`TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD')`), 'ASC']],
           raw: true,
         }),
         MsOrder.findAll({
           attributes: [
-            [fn('TO_CHAR', col('created_at'), 'YYYY-MM-DD'), 'date'],
+            [literal(`TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')`), 'date'],
             [fn('COUNT', col('id')), 'count'],
           ],
           where: { created_at: { [Op.gte]: sevenDaysAgo } },
-          group: [fn('TO_CHAR', col('created_at'), 'YYYY-MM-DD')],
-          order: [[fn('TO_CHAR', col('created_at'), 'YYYY-MM-DD'), 'ASC']],
+          group: [literal(`TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')`)],
+          order: [[literal(`TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD')`), 'ASC']],
           raw: true,
         }),
         MsOrder.count({ where: { exchange: 'NSE', created_at: { [Op.gte]: thirtyDaysAgo } } }),
@@ -598,10 +598,12 @@ const adminController = {
       const nseCount = val(msNseTotal, 0) || 0;
       const otherCount = val(msOtherTotal, 0) || 0;
       const totalOrders = usCount + nseCount + otherCount || 1;
+      const nse = Math.round((nseCount / totalOrders) * 100);
+      const us = Math.round((usCount / totalOrders) * 100);
       const marketSplit = {
-        nse: Math.round((nseCount / totalOrders) * 100),
-        us: Math.round((usCount / totalOrders) * 100),
-        other: Math.round((otherCount / totalOrders) * 100),
+        nse,
+        us,
+        other: 100 - nse - us,
       };
 
       res.json({
