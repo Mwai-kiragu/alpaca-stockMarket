@@ -9,6 +9,13 @@ const {
   syncKYCFromAlpaca,
   bulkSyncKYCFromAlpaca,
   getAnalytics,
+  listUsers,
+  getUserProfile,
+  suspendUser,
+  activateUser,
+  deleteUser,
+  updateUserRole,
+  resetUserPassword,
 } = require('../controllers/adminController');
 
 const router = express.Router();
@@ -19,6 +26,15 @@ router.use(adminAuth);
 
 // Analytics
 router.get('/analytics', getAnalytics);
+
+// User Management Routes
+router.get('/users', listUsers);
+router.get('/users/:userId', getUserProfile);
+router.put('/users/:userId/suspend', suspendUser);
+router.put('/users/:userId/activate', activateUser);
+router.put('/users/:userId/delete', deleteUser);
+router.put('/users/:userId/role', updateUserRole);
+router.post('/users/:userId/reset-password', resetUserPassword);
 
 // KYC Management Routes
 router.get('/kyc/pending', getPendingKYC);

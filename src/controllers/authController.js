@@ -213,6 +213,7 @@ const login = async (req, res) => {
         email: user.email,
         phone: user.phone,
         role: user.role,
+        mustChangePassword: user.must_change_password || false,
         requiresVerification,
         onboardingComplete,
         registrationStep: user.registration_step,
