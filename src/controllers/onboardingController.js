@@ -1739,7 +1739,8 @@ const onboardingController = {
       }
 
       
-      if (!filename.startsWith(`${userId}-`)) {
+      const isAdmin = req.user.role === 'admin' || req.user.role === 'support';
+      if (!isAdmin && !filename.startsWith(`${userId}-`)) {
         return res.status(403).json(
           ApiResponse.Error('Access denied. You can only access your own documents.', 403)
         );
