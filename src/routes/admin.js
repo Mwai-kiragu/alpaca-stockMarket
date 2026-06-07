@@ -16,6 +16,10 @@ const {
   deleteUser,
   updateUserRole,
   resetUserPassword,
+  listOrders,
+  cancelOrder,
+  flagOrder,
+  resolveOrder,
 } = require('../controllers/adminController');
 
 const router = express.Router();
@@ -35,6 +39,12 @@ router.put('/users/:userId/activate', activateUser);
 router.put('/users/:userId/delete', deleteUser);
 router.put('/users/:userId/role', updateUserRole);
 router.post('/users/:userId/reset-password', resetUserPassword);
+
+// Orders Management Routes
+router.get('/orders', listOrders);
+router.put('/orders/:orderId/cancel', cancelOrder);
+router.put('/orders/:orderId/flag', flagOrder);
+router.put('/orders/:orderId/resolve', resolveOrder);
 
 // KYC Management Routes
 router.get('/kyc/pending', getPendingKYC);
