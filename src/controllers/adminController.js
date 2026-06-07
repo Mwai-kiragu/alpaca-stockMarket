@@ -1,4 +1,5 @@
-const { User } = require('../models');
+const { User, Transaction, Order, MsOrder } = require('../models');
+const { Op, fn, col } = require('sequelize');
 const logger = require('../utils/logger');
 
 const adminController = {
@@ -478,7 +479,175 @@ const adminController = {
         message: 'Failed to request additional KYC information'
       });
     }
-  }
+  },
+
+  getAnalytics: async (req, res) => {
+    try {
+      const now = new Date();
+      const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+      const fillDates = (rows, days) => {
+        const map = {};
+        rows.forEach(r => { map[r.date] = parseInt(r.count); });
+        const result = [];
+        for (let i = days - 1; i >= 0; i--) {
+          const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+          const key = d.toISOString().slice(0, 10);
+          result.push({ date: key, count: map[key] || 0 });
+        }
+        return result;
+      };
+
+      const [
+        totalUsers, todayUsers, registrations30dRaw,
+        emailVerified, docsUploaded, kycApproved,
+        kycPending, kycRejected, kycUnderReview,
+        recentKycActivity,
+        alpacaOrders30d, msOrders30d,
+        alpacaVolume7dRaw, msVolume7dRaw,
+        alpacaTotal, msNseTotal, msOtherTotal,
+        depositTotal, depositToday,
+      ] = await Promise.allSettled([
+        User.count(),
+        User.count({ where: { createdAt: { [Op.gte]: startOfToday } } }),
+        User.findAll({
+          attributes: [
+            [fn('DATE', col('"createdAt"')), 'date'],
+            [fn('COUNT', col('id')), 'count'],
+          ],
+          where: { createdAt: { [Op.gte]: thirtyDaysAgo } },
+          group: [fn('DATE', col('"createdAt"'))],
+          order: [[fn('DATE', col('"createdAt"')), 'ASC']],
+          raw: true,
+        }),
+        User.count({ where: { is_email_verified: true } }),
+        User.count({
+          where: {
+            registration_step: {
+              [Op.in]: [
+                'documents_id_front', 'documents_id_back', 'documents_proof_address',
+                'agreements', 'kyc_pending', 'kyc_under_review', 'completed', 'initial_completed',
+              ],
+            },
+          },
+        }),
+        User.count({ where: { kyc_status: 'approved' } }),
+        User.count({ where: { kyc_status: 'pending' } }),
+        User.count({ where: { kyc_status: 'rejected' } }),
+        User.count({ where: { kyc_status: 'under_review' } }),
+        User.findAll({
+          where: { kyc_status: { [Op.in]: ['submitted', 'approved', 'rejected', 'under_review'] } },
+          order: [['updatedAt', 'DESC']],
+          limit: 5,
+          attributes: ['id', 'first_name', 'last_name', 'kyc_status', 'updatedAt'],
+          raw: true,
+        }),
+        Order.count({ where: { createdAt: { [Op.gte]: thirtyDaysAgo } } }),
+        MsOrder.count({ where: { created_at: { [Op.gte]: thirtyDaysAgo } } }),
+        Order.findAll({
+          attributes: [
+            [fn('DATE', col('"createdAt"')), 'date'],
+            [fn('COUNT', col('id')), 'count'],
+          ],
+          where: { createdAt: { [Op.gte]: sevenDaysAgo } },
+          group: [fn('DATE', col('"createdAt"'))],
+          order: [[fn('DATE', col('"createdAt"')), 'ASC']],
+          raw: true,
+        }),
+        MsOrder.findAll({
+          attributes: [
+            [fn('DATE', col('created_at')), 'date'],
+            [fn('COUNT', col('id')), 'count'],
+          ],
+          where: { created_at: { [Op.gte]: sevenDaysAgo } },
+          group: [fn('DATE', col('created_at'))],
+          order: [[fn('DATE', col('created_at')), 'ASC']],
+          raw: true,
+        }),
+        Order.count({ where: { createdAt: { [Op.gte]: thirtyDaysAgo } } }),
+        MsOrder.count({ where: { exchange: 'NSE', created_at: { [Op.gte]: thirtyDaysAgo } } }),
+        MsOrder.count({
+          where: { exchange: { [Op.notIn]: ['NSE'] }, created_at: { [Op.gte]: thirtyDaysAgo } },
+        }),
+        Transaction.sum('amount', {
+          where: { type: 'deposit', currency: 'KES', status: 'completed' },
+        }),
+        Transaction.sum('amount', {
+          where: {
+            type: 'deposit', currency: 'KES', status: 'completed',
+            createdAt: { [Op.gte]: startOfToday },
+          },
+        }),
+      ]);
+
+      const val = (p, fallback = null) => p.status === 'fulfilled' ? p.value : fallback;
+
+      const alpacaVol = val(alpacaVolume7dRaw, []);
+      const msVol = val(msVolume7dRaw, []);
+      const volMap = {};
+      [...alpacaVol, ...msVol].forEach(r => {
+        volMap[r.date] = (volMap[r.date] || 0) + parseInt(r.count);
+      });
+      const volume7d = fillDates(
+        Object.entries(volMap).map(([date, count]) => ({ date, count })),
+        7
+      );
+
+      const usCount = val(alpacaTotal, 0) || 0;
+      const nseCount = val(msNseTotal, 0) || 0;
+      const otherCount = val(msOtherTotal, 0) || 0;
+      const totalOrders = usCount + nseCount + otherCount || 1;
+      const marketSplit = {
+        nse: Math.round((nseCount / totalOrders) * 100),
+        us: Math.round((usCount / totalOrders) * 100),
+        other: Math.round((otherCount / totalOrders) * 100),
+      };
+
+      res.json({
+        success: true,
+        data: {
+          users: {
+            total: val(totalUsers, 0),
+            todayCount: val(todayUsers, 0),
+            registrations30d: fillDates(val(registrations30dRaw, []), 30),
+          },
+          funnel: {
+            registered: val(totalUsers, 0),
+            emailVerified: val(emailVerified, 0),
+            docsUploaded: val(docsUploaded, 0),
+            kycApproved: val(kycApproved, 0),
+          },
+          kyc: {
+            pending: val(kycPending, 0),
+            approved: val(kycApproved, 0),
+            rejected: val(kycRejected, 0),
+            underReview: val(kycUnderReview, 0),
+            recentActivity: (val(recentKycActivity, [])).map(u => ({
+              userId: u.id,
+              fullName: `${u.first_name} ${u.last_name}`,
+              kycStatus: u.kyc_status,
+              updatedAt: u.updatedAt,
+            })),
+          },
+          trading: {
+            activeTraders30d: null,
+            orders30d: (val(alpacaOrders30d, 0) || 0) + (val(msOrders30d, 0) || 0),
+            volume7d,
+            marketSplit,
+          },
+          deposits: {
+            totalKes: val(depositTotal, null),
+            todayKes: val(depositToday, null),
+          },
+        },
+      });
+    } catch (error) {
+      logger.error('Get analytics error:', error);
+      res.status(500).json({ success: false, message: 'Failed to load analytics' });
+    }
+  },
 };
 
 module.exports = adminController;
