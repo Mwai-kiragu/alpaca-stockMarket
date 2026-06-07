@@ -507,19 +507,19 @@ const adminController = {
         recentKycActivity,
         alpacaOrders30d, msOrders30d,
         alpacaVolume7dRaw, msVolume7dRaw,
-        alpacaTotal, msNseTotal, msOtherTotal,
+        msNseTotal, msOtherTotal,
         depositTotal, depositToday,
       ] = await Promise.allSettled([
         User.count(),
         User.count({ where: { createdAt: { [Op.gte]: startOfToday } } }),
         User.findAll({
           attributes: [
-            [fn('DATE', col('"createdAt"')), 'date'],
+            [fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD'), 'date'],
             [fn('COUNT', col('id')), 'count'],
           ],
           where: { createdAt: { [Op.gte]: thirtyDaysAgo } },
-          group: [fn('DATE', col('"createdAt"'))],
-          order: [[fn('DATE', col('"createdAt"')), 'ASC']],
+          group: [fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD')],
+          order: [[fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD'), 'ASC']],
           raw: true,
         }),
         User.count({ where: { is_email_verified: true } }),
@@ -548,25 +548,24 @@ const adminController = {
         MsOrder.count({ where: { created_at: { [Op.gte]: thirtyDaysAgo } } }),
         Order.findAll({
           attributes: [
-            [fn('DATE', col('"createdAt"')), 'date'],
+            [fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD'), 'date'],
             [fn('COUNT', col('id')), 'count'],
           ],
           where: { createdAt: { [Op.gte]: sevenDaysAgo } },
-          group: [fn('DATE', col('"createdAt"'))],
-          order: [[fn('DATE', col('"createdAt"')), 'ASC']],
+          group: [fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD')],
+          order: [[fn('TO_CHAR', col('"createdAt"'), 'YYYY-MM-DD'), 'ASC']],
           raw: true,
         }),
         MsOrder.findAll({
           attributes: [
-            [fn('DATE', col('created_at')), 'date'],
+            [fn('TO_CHAR', col('created_at'), 'YYYY-MM-DD'), 'date'],
             [fn('COUNT', col('id')), 'count'],
           ],
           where: { created_at: { [Op.gte]: sevenDaysAgo } },
-          group: [fn('DATE', col('created_at'))],
-          order: [[fn('DATE', col('created_at')), 'ASC']],
+          group: [fn('TO_CHAR', col('created_at'), 'YYYY-MM-DD')],
+          order: [[fn('TO_CHAR', col('created_at'), 'YYYY-MM-DD'), 'ASC']],
           raw: true,
         }),
-        Order.count({ where: { createdAt: { [Op.gte]: thirtyDaysAgo } } }),
         MsOrder.count({ where: { exchange: 'NSE', created_at: { [Op.gte]: thirtyDaysAgo } } }),
         MsOrder.count({
           where: { exchange: { [Op.notIn]: ['NSE'] }, created_at: { [Op.gte]: thirtyDaysAgo } },
@@ -595,7 +594,7 @@ const adminController = {
         7
       );
 
-      const usCount = val(alpacaTotal, 0) || 0;
+      const usCount = val(alpacaOrders30d, 0) || 0;
       const nseCount = val(msNseTotal, 0) || 0;
       const otherCount = val(msOtherTotal, 0) || 0;
       const totalOrders = usCount + nseCount + otherCount || 1;
@@ -638,8 +637,8 @@ const adminController = {
             marketSplit,
           },
           deposits: {
-            totalKes: val(depositTotal, null),
-            todayKes: val(depositToday, null),
+            totalKes: val(depositTotal, 0) ?? 0,
+            todayKes: val(depositToday, 0) ?? 0,
           },
         },
       });
