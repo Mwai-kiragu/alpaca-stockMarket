@@ -7,7 +7,8 @@ const {
   rejectKYC,
   requestKYCInfo,
   syncKYCFromAlpaca,
-  bulkSyncKYCFromAlpaca
+  bulkSyncKYCFromAlpaca,
+  getAnalytics,
 } = require('../controllers/adminController');
 
 const router = express.Router();
@@ -15,6 +16,9 @@ const router = express.Router();
 // All admin routes require authentication and admin privileges
 router.use(auth);
 router.use(adminAuth);
+
+// Analytics
+router.get('/analytics', getAnalytics);
 
 // KYC Management Routes
 router.get('/kyc/pending', getPendingKYC);
