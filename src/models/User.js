@@ -211,6 +211,10 @@ User.init({
     type: DataTypes.BOOLEAN,
     defaultValue: false
   },
+  must_change_password: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
   two_factor_enabled: {
     type: DataTypes.BOOLEAN,
     defaultValue: false
