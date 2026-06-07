@@ -212,6 +212,7 @@ const login = async (req, res) => {
         fullName: `${user.first_name} ${user.last_name}`,
         email: user.email,
         phone: user.phone,
+        role: user.role,
         requiresVerification,
         onboardingComplete,
         registrationStep: user.registration_step,
