@@ -894,7 +894,7 @@ const adminController = {
       const { Order, MsOrder, User } = require('../models');
 
       // Market routing — mirrors ASSET_CATEGORIES in assetController
-      const ALPACA_MARKETS = ['us_equity', 'us_etf', 'crypto'];
+      const ALPACA_MARKETS = ['us_equity', 'us_etf', 'crypto', 'us'];
       const MYSTOCKS_EXCHANGES = ['NSE', 'JSE', 'NGX', 'GSE', 'BRVM', 'LUSE', 'SEM', 'BSE', 'EGX'];
 
       const shouldQueryAlpaca = source !== 'mystocks' && (!market || market === 'all' || ALPACA_MARKETS.includes(market));
@@ -940,15 +940,15 @@ const adminController = {
 
       const pageNum = parseInt(page);
       const limitNum = parseInt(limit);
-      const fetchLimit = pageNum * limitNum;
+      const FETCH_CAP = 500; // paginate in memory from capped result set
 
       const queries = [
         shouldQueryAlpaca
-          ? Order.findAll({ where: alpacaWhere, include: [{ model: User, as: 'user', attributes: ['id', 'first_name', 'last_name', 'email'], required: false }], order: [['createdAt', 'DESC']], limit: fetchLimit })
+          ? Order.findAll({ where: alpacaWhere, include: [{ model: User, as: 'user', attributes: ['id', 'first_name', 'last_name', 'email'], required: false }], order: [['createdAt', 'DESC']], limit: FETCH_CAP })
           : Promise.resolve([]),
         shouldQueryAlpaca ? Order.count({ where: alpacaWhere }) : Promise.resolve(0),
         shouldQueryMystocks
-          ? MsOrder.findAll({ where: msWhere, order: [['created_at', 'DESC']], limit: fetchLimit, raw: true })
+          ? MsOrder.findAll({ where: msWhere, order: [['created_at', 'DESC']], limit: FETCH_CAP, raw: true })
           : Promise.resolve([]),
         shouldQueryMystocks ? MsOrder.count({ where: msWhere }) : Promise.resolve(0),
         Order.count({ where: { flagged: true } }),
@@ -1062,6 +1062,8 @@ const adminController = {
       const { Order, MsOrder } = require('../models');
       if (!note || !note.trim())
         return res.status(400).json({ success: false, message: 'Flag note is required' });
+      if (source !== 'alpaca' && source !== 'mystocks')
+        return res.status(400).json({ success: false, message: 'source must be alpaca or mystocks' });
       const model = source === 'alpaca' ? Order : MsOrder;
       const order = await model.findByPk(orderId);
       if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
@@ -1079,6 +1081,8 @@ const adminController = {
       const { orderId } = req.params;
       const { source } = req.body;
       const { Order, MsOrder } = require('../models');
+      if (source !== 'alpaca' && source !== 'mystocks')
+        return res.status(400).json({ success: false, message: 'source must be alpaca or mystocks' });
       const model = source === 'alpaca' ? Order : MsOrder;
       const order = await model.findByPk(orderId);
       if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
