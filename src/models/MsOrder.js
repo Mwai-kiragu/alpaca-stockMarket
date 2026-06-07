@@ -73,6 +73,15 @@ MsOrder.init({
     type: DataTypes.DATE,
     allowNull: true,
     defaultValue: DataTypes.NOW
+  },
+  flagged: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  flag_note: {
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 }, {
   sequelize,
