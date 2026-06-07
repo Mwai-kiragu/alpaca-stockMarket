@@ -887,6 +887,209 @@ const adminController = {
       res.status(500).json({ success: false, message: 'Failed to reset password' });
     }
   },
+
+  listOrders: async (req, res) => {
+    try {
+      const { page = 1, limit = 20, market, status, flagged, search, source } = req.query;
+      const { Order, MsOrder, User } = require('../models');
+
+      // Market routing — mirrors ASSET_CATEGORIES in assetController
+      const ALPACA_MARKETS = ['us_equity', 'us_etf', 'crypto'];
+      const MYSTOCKS_EXCHANGES = ['NSE', 'JSE', 'NGX', 'GSE', 'BRVM', 'LUSE', 'SEM', 'BSE', 'EGX'];
+
+      const shouldQueryAlpaca = source !== 'mystocks' && (!market || market === 'all' || ALPACA_MARKETS.includes(market));
+      const shouldQueryMystocks = source !== 'alpaca' && (!market || market === 'all' || MYSTOCKS_EXCHANGES.includes(market));
+      const msExchangeFilter = market && MYSTOCKS_EXCHANGES.includes(market) ? market : null;
+
+      // User search: find matching user IDs first
+      let searchUserIds = [];
+      if (search && search.trim()) {
+        const term = `%${search.trim()}%`;
+        const matchingUsers = await User.findAll({
+          where: {
+            [Op.or]: [
+              { first_name: { [Op.iLike]: term } },
+              { last_name: { [Op.iLike]: term } },
+              { email: { [Op.iLike]: term } },
+            ]
+          },
+          attributes: ['id'],
+          raw: true,
+        });
+        searchUserIds = matchingUsers.map(u => u.id);
+      }
+
+      const buildWhere = () => {
+        const w = {};
+        if (search && search.trim()) {
+          const term = `%${search.trim()}%`;
+          const orClauses = [{ symbol: { [Op.iLike]: term } }];
+          if (searchUserIds.length) orClauses.push({ user_id: { [Op.in]: searchUserIds } });
+          w[Op.or] = orClauses;
+        }
+        if (flagged === 'true') w.flagged = true;
+        return w;
+      };
+
+      const alpacaWhere = { ...buildWhere() };
+      if (status && status !== 'all') alpacaWhere.status = status;
+
+      const msWhere = { ...buildWhere() };
+      if (status && status !== 'all') msWhere.status = { [Op.iLike]: status };
+      if (msExchangeFilter) msWhere.exchange = msExchangeFilter;
+
+      const pageNum = parseInt(page);
+      const limitNum = parseInt(limit);
+      const fetchLimit = pageNum * limitNum;
+
+      const queries = [
+        shouldQueryAlpaca
+          ? Order.findAll({ where: alpacaWhere, include: [{ model: User, as: 'user', attributes: ['id', 'first_name', 'last_name', 'email'], required: false }], order: [['createdAt', 'DESC']], limit: fetchLimit })
+          : Promise.resolve([]),
+        shouldQueryAlpaca ? Order.count({ where: alpacaWhere }) : Promise.resolve(0),
+        shouldQueryMystocks
+          ? MsOrder.findAll({ where: msWhere, order: [['created_at', 'DESC']], limit: fetchLimit, raw: true })
+          : Promise.resolve([]),
+        shouldQueryMystocks ? MsOrder.count({ where: msWhere }) : Promise.resolve(0),
+        Order.count({ where: { flagged: true } }),
+        MsOrder.count({ where: { flagged: true } }),
+      ];
+
+      const [alpacaOrders, alpacaTotal, msOrders, msTotal, alpacaFlagged, msFlagged] = await Promise.all(queries);
+
+      // Batch-fetch users for MsOrder results
+      const msUserIds = [...new Set(msOrders.map(o => o.user_id))];
+      const msUsers = msUserIds.length
+        ? await User.findAll({ where: { id: { [Op.in]: msUserIds } }, attributes: ['id', 'first_name', 'last_name', 'email'], raw: true })
+        : [];
+      const msUserMap = Object.fromEntries(msUsers.map(u => [u.id, u]));
+
+      const normalizeAlpaca = (o) => ({
+        id: o.id, source: 'alpaca',
+        userId: o.user_id,
+        userName: o.user ? `${o.user.first_name} ${o.user.last_name}` : 'Unknown',
+        userEmail: o.user ? o.user.email : '',
+        symbol: o.symbol, side: o.side, orderType: o.order_type,
+        quantity: parseFloat(o.quantity),
+        limitPrice: o.limit_price ? parseFloat(o.limit_price) : null,
+        averagePrice: o.average_price ? parseFloat(o.average_price) : null,
+        status: o.status, market: 'US',
+        value: parseFloat(o.order_value), currency: o.currency,
+        exchangeRate: o.exchange_rate ? parseFloat(o.exchange_rate) : null,
+        brokerId: o.alpaca_order_id,
+        flagged: o.flagged || false, flagNote: o.flag_note || null,
+        createdAt: o.createdAt,
+      });
+
+      const normalizeMystocks = (o) => {
+        const user = msUserMap[o.user_id];
+        return {
+          id: o.id, source: 'mystocks',
+          userId: o.user_id,
+          userName: user ? `${user.first_name} ${user.last_name}` : 'Unknown',
+          userEmail: user ? user.email : '',
+          symbol: o.symbol, side: (o.side || '').toLowerCase(), orderType: 'market',
+          quantity: parseFloat(o.quantity),
+          limitPrice: null,
+          averagePrice: o.local_price ? parseFloat(o.local_price) : null,
+          status: o.status, market: o.exchange || 'NSE',
+          value: o.gross_usd ? parseFloat(o.gross_usd) : 0,
+          currency: o.currency || 'KES',
+          exchangeRate: null, brokerId: o.order_id || null,
+          flagged: o.flagged || false, flagNote: o.flag_note || null,
+          createdAt: o.created_at,
+        };
+      };
+
+      const merged = [
+        ...alpacaOrders.map(normalizeAlpaca),
+        ...msOrders.map(normalizeMystocks),
+      ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+      const paginated = merged.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+      const total = (alpacaTotal || 0) + (msTotal || 0);
+
+      res.json({
+        success: true,
+        data: {
+          orders: paginated,
+          pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+          flaggedCount: (alpacaFlagged || 0) + (msFlagged || 0),
+        },
+      });
+    } catch (error) {
+      logger.error('List orders error:', error);
+      res.status(500).json({ success: false, message: 'Failed to list orders' });
+    }
+  },
+
+  cancelOrder: async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const { source } = req.body;
+      const { Order, MsOrder } = require('../models');
+      const NON_CANCELLABLE = ['filled', 'cancelled', 'canceled', 'expired', 'rejected', 'FILLED', 'CANCELLED', 'CANCELED'];
+
+      if (source === 'alpaca') {
+        const order = await Order.findByPk(orderId);
+        if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+        if (NON_CANCELLABLE.includes(order.status))
+          return res.status(400).json({ success: false, message: `Cannot cancel order with status: ${order.status}` });
+        await order.update({ status: 'cancelled' });
+        logger.info(`Order ${orderId} cancelled by admin ${req.user.id}`);
+        return res.json({ success: true, message: 'Order cancelled', data: { status: 'cancelled' } });
+      }
+      if (source === 'mystocks') {
+        const order = await MsOrder.findByPk(orderId);
+        if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+        if (NON_CANCELLABLE.includes(order.status))
+          return res.status(400).json({ success: false, message: `Cannot cancel order with status: ${order.status}` });
+        await order.update({ status: 'CANCELLED' });
+        logger.info(`MsOrder ${orderId} cancelled by admin ${req.user.id}`);
+        return res.json({ success: true, message: 'Order cancelled', data: { status: 'CANCELLED' } });
+      }
+      return res.status(400).json({ success: false, message: 'source must be alpaca or mystocks' });
+    } catch (error) {
+      logger.error('Cancel order error:', error);
+      res.status(500).json({ success: false, message: 'Failed to cancel order' });
+    }
+  },
+
+  flagOrder: async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const { source, note } = req.body;
+      const { Order, MsOrder } = require('../models');
+      if (!note || !note.trim())
+        return res.status(400).json({ success: false, message: 'Flag note is required' });
+      const model = source === 'alpaca' ? Order : MsOrder;
+      const order = await model.findByPk(orderId);
+      if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+      await order.update({ flagged: true, flag_note: note.trim() });
+      logger.info(`Order ${orderId} (${source}) flagged by admin ${req.user.id}`);
+      res.json({ success: true, message: 'Order flagged', data: { flagged: true, flagNote: note.trim() } });
+    } catch (error) {
+      logger.error('Flag order error:', error);
+      res.status(500).json({ success: false, message: 'Failed to flag order' });
+    }
+  },
+
+  resolveOrder: async (req, res) => {
+    try {
+      const { orderId } = req.params;
+      const { source } = req.body;
+      const { Order, MsOrder } = require('../models');
+      const model = source === 'alpaca' ? Order : MsOrder;
+      const order = await model.findByPk(orderId);
+      if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+      await order.update({ flagged: false, flag_note: null });
+      logger.info(`Order ${orderId} (${source}) resolved by admin ${req.user.id}`);
+      res.json({ success: true, message: 'Order resolved', data: { flagged: false, flagNote: null } });
+    } catch (error) {
+      logger.error('Resolve order error:', error);
+      res.status(500).json({ success: false, message: 'Failed to resolve order' });
+    }
+  },
 };
 
 module.exports = adminController;
