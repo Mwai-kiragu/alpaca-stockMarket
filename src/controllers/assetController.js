@@ -74,17 +74,25 @@ const getAssets = async (req, res) => {
 
     // African exchange → MyStocks stocks list
     if (africanExchange) {
-      const exchange = africanExchange; // shadow outer for consistency below
-      // MyStocks ignores `search` when `exchange` is also provided — fetch by search only
-      // then filter by exchange client-side, or fetch by exchange when no search term.
-      const data = search
-        ? await ms.getStocks({ search })
-        : await ms.getStocks({ exchange: exchange.toUpperCase(), sector });
-      let all = Array.isArray(data) ? data : (Array.isArray(data?.stocks) ? data.stocks : []);
-      if (search) {
-        const exch = exchange.toUpperCase();
-        all = all.filter(a => a.exchange === exch || (a.symbol || '').toUpperCase().endsWith(`.${exch.slice(0, 2)}`));
+      const exchange = africanExchange;
+      let all = [];
+      let serviceUnavailable = false;
+
+      try {
+        const data = search
+          ? await ms.getStocks({ search })
+          : await ms.getStocks({ exchange: exchange.toUpperCase(), sector });
+        all = Array.isArray(data) ? data : (Array.isArray(data?.stocks) ? data.stocks : []);
+        if (search) {
+          const exch = exchange.toUpperCase();
+          all = all.filter(a => a.exchange === exch || (a.symbol || '').toUpperCase().endsWith(`.${exch.slice(0, 2)}`));
+        }
+      } catch (msError) {
+        const status = msError?.response?.status || msError?.status;
+        logger.warn(`MyStocks ${exchange} fetch failed (${status}): ${msError.message}`);
+        serviceUnavailable = status === 503 || status === 502 || status === 504;
       }
+
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
       const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
       const start = (pageNum - 1) * limitNum;
@@ -100,7 +108,10 @@ const getAssets = async (req, res) => {
         total: all.length,
         page: pageNum,
         limit: limitNum,
-        totalPages: Math.ceil(all.length / limitNum)
+        totalPages: Math.ceil(all.length / limitNum),
+        ...(serviceUnavailable && {
+          warning: 'Market data is temporarily unavailable. Please try again shortly.'
+        })
       });
     }
 
