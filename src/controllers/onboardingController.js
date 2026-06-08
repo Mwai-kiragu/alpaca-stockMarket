@@ -2,26 +2,11 @@ const User = require('../models/User');
 const { validationResult } = require('express-validator');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs').promises;
 const logger = require('../utils/logger');
+const r2 = require('../services/r2Service');
 
-// Configure multer for individual file uploads
-const storage = multer.diskStorage({
-  destination: async (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../../uploads/kyc');
-    try {
-      await fs.mkdir(uploadDir, { recursive: true });
-      cb(null, uploadDir);
-    } catch (error) {
-      cb(error);
-    }
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const extension = path.extname(file.originalname);
-    cb(null, `${req.user.id}-${file.fieldname}-${uniqueSuffix}${extension}`);
-  }
-});
+// Keep files in memory — r2Service uploads directly from buffer
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   // Allow all common image formats and PDF
@@ -467,6 +452,8 @@ const onboardingController = {
       }
 
       const documentId = `${user.id}_tax_doc_${Date.now()}`;
+      const key = r2.buildKey(user.id, 'tax_doc', file.originalname);
+      const fileUrl = await r2.uploadFile(file.buffer, key, file.mimetype);
 
       const currentKycData = user.kyc_data || {};
       const updatedKycData = {
@@ -476,9 +463,8 @@ const onboardingController = {
           taxIdType,
           document: {
             documentId,
-            fileName: file.filename,
+            fileUrl,
             originalName: file.originalname,
-            path: file.path,
             uploadedAt: new Date(),
             status: 'uploaded',
             verificationStatus: 'pending'
@@ -493,7 +479,7 @@ const onboardingController = {
       });
 
       return res.status(200).json(
-        ApiResponse.SuccessWithData(documentId, 'Tax document uploaded successfully')
+        ApiResponse.SuccessWithData({ documentId, fileUrl }, 'Tax document uploaded successfully')
       );
 
     } catch (error) {
@@ -628,15 +614,16 @@ const onboardingController = {
       }
 
       const documentId = `${user.id}_id_front_${Date.now()}`;
+      const key = r2.buildKey(user.id, 'id_front', file.originalname);
+      const fileUrl = await r2.uploadFile(file.buffer, key, file.mimetype);
 
       const currentKycData = user.kyc_data || {};
       const updatedDocuments = {
         ...currentKycData.documents,
         idFront: {
           documentId,
-          fileName: file.filename,
+          fileUrl,
           originalName: file.originalname,
-          path: file.path,
           uploadedAt: new Date(),
           status: 'uploaded',
           verificationStatus: 'pending'
@@ -657,7 +644,7 @@ const onboardingController = {
       });
 
       return res.status(200).json(
-        ApiResponse.SuccessWithData(documentId, 'Document uploaded successfully')
+        ApiResponse.SuccessWithData({ documentId, fileUrl }, 'Document uploaded successfully')
       );
 
     } catch (error) {
@@ -683,15 +670,16 @@ const onboardingController = {
       }
 
       const documentId = `${user.id}_id_back_${Date.now()}`;
+      const key = r2.buildKey(user.id, 'id_back', file.originalname);
+      const fileUrl = await r2.uploadFile(file.buffer, key, file.mimetype);
 
       const currentKycData = user.kyc_data || {};
       const updatedDocuments = {
         ...currentKycData.documents,
         idBack: {
           documentId,
-          fileName: file.filename,
+          fileUrl,
           originalName: file.originalname,
-          path: file.path,
           uploadedAt: new Date(),
           status: 'uploaded',
           verificationStatus: 'pending'
@@ -712,7 +700,7 @@ const onboardingController = {
       });
 
       return res.status(200).json(
-        ApiResponse.SuccessWithData(documentId, 'Document uploaded successfully')
+        ApiResponse.SuccessWithData({ documentId, fileUrl }, 'Document uploaded successfully')
       );
 
     } catch (error) {
@@ -742,15 +730,16 @@ const onboardingController = {
       }
 
       const documentId = `${user.id}_proof_of_address_${Date.now()}`;
+      const key = r2.buildKey(user.id, 'proof_of_address', file.originalname);
+      const fileUrl = await r2.uploadFile(file.buffer, key, file.mimetype);
 
       const currentKycData = user.kyc_data || {};
       const updatedDocuments = {
         ...currentKycData.documents,
         proofOfAddress: {
           documentId,
-          fileName: file.filename,
+          fileUrl,
           originalName: file.originalname,
-          path: file.path,
           uploadedAt: new Date(),
           status: 'uploaded',
           verificationStatus: 'pending'
@@ -771,7 +760,7 @@ const onboardingController = {
       });
 
       return res.status(200).json(
-        ApiResponse.SuccessWithData(documentId, 'Document uploaded successfully')
+        ApiResponse.SuccessWithData({ documentId, fileUrl }, 'Document uploaded successfully')
       );
 
     } catch (error) {
@@ -1729,14 +1718,12 @@ const onboardingController = {
 
   getDocument: async (req, res) => {
     try {
-      const { filename } = req.params;
       const userId = req.user.id;
+      const user = await User.findByPk(userId);
+      if (!user) return res.status(404).json(ApiResponse.Error('User not found', 404));
 
-      if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
-        return res.status(400).json(
-          ApiResponse.Error('Invalid filename', 400)
-        );
-      }
+      const kycData = user.kyc_data || {};
+      const docs = kycData.documents || {};
 
       
       const isAdmin = req.user.role === 'admin' || req.user.role === 'support';
@@ -1745,48 +1732,25 @@ const onboardingController = {
           ApiResponse.Error('Access denied. You can only access your own documents.', 403)
         );
       }
+      const allUrls = [
+        docs.idFront?.fileUrl,
+        docs.idBack?.fileUrl,
+        docs.proofOfAddress?.fileUrl,
+        kycData.taxInfo?.document?.fileUrl
+      ].filter(Boolean);
 
-      // Construct the file path
-      const filePath = path.join(__dirname, '../../uploads/kyc', filename);
-
-      // Check if file exists
-      try {
-        await fs.access(filePath);
-      } catch (error) {
-        return res.status(404).json(
-          ApiResponse.Error('Document not found', 404)
-        );
-      }
-
-      // Determine content type based on file extension
-      const ext = path.extname(filename).toLowerCase();
-      const contentTypeMap = {
-        '.pdf': 'application/pdf',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.png': 'image/png',
-        '.gif': 'image/gif',
-        '.webp': 'image/webp',
-        '.bmp': 'image/bmp',
-        '.tiff': 'image/tiff',
-        '.tif': 'image/tiff',
-        '.svg': 'image/svg+xml',
-        '.heic': 'image/heic',
-        '.heif': 'image/heif'
-      };
-
-      const contentType = contentTypeMap[ext] || 'application/octet-stream';
-
-      // Set content type and send file
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-
-      return res.sendFile(filePath);
+      return res.status(200).json(ApiResponse.SuccessWithData({
+        idFront: docs.idFront?.fileUrl || null,
+        idBack: docs.idBack?.fileUrl || null,
+        proofOfAddress: docs.proofOfAddress?.fileUrl || null,
+        taxDocument: kycData.taxInfo?.document?.fileUrl || null,
+        count: allUrls.length
+      }, 'Documents retrieved successfully'));
 
     } catch (error) {
-      logger.error('Error serving document:', error);
+      logger.error('Error retrieving documents:', error);
       return res.status(500).json(
-        ApiResponse.Error('An error occurred while retrieving the document', 500)
+        ApiResponse.Error('An error occurred while retrieving documents', 500)
       );
     }
   }
