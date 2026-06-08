@@ -33,6 +33,7 @@ const createOrder = async (req, res) => {
         const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
         let currentPrice = 0;
         let stockCurrency = 'KES';
+        let priceError = null;
         try {
           const ticker = msSymbol.includes('.') ? msSymbol.split('.')[0] : msSymbol;
           const snap = await ms.getStocks({ search: ticker });
@@ -40,9 +41,18 @@ const createOrder = async (req, res) => {
           const stock = stocks.find(s => s.symbol?.toUpperCase() === msSymbol) || stocks[0];
           currentPrice = parseFloat(stock?.usdPrice || (stock?.price ? stock.price / exchangeRate : 0) || 0);
           stockCurrency = stock?.currency || 'KES';
-        } catch (_) {}
+        } catch (err) {
+          const status = err?.response?.status;
+          if (status === 503 || status === 502 || status === 504) {
+            priceError = 'Market data is temporarily unavailable. Please try again in a moment.';
+          } else if (err.message?.includes('timeout')) {
+            priceError = 'Market data request timed out. Please try again.';
+          } else {
+            priceError = 'Unable to fetch current price for this stock.';
+          }
+        }
         if (!currentPrice || currentPrice <= 0) {
-          return res.status(400).json({ success: false, message: 'Unable to fetch current price for this stock' });
+          return res.status(503).json({ success: false, message: priceError || 'Unable to fetch current price for this stock.' });
         }
         const gross = Math.round(qty * currentPrice * 100) / 100;
         const fee = Math.round(gross * 0.01 * 100) / 100;
