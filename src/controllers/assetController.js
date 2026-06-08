@@ -89,8 +89,9 @@ const getAssets = async (req, res) => {
         }
       } catch (msError) {
         const status = msError?.response?.status || msError?.status;
-        logger.warn(`MyStocks ${exchange} fetch failed (${status}): ${msError.message}`);
-        serviceUnavailable = status === 503 || status === 502 || status === 504;
+        const isTimeout = msError?.code === 'ECONNABORTED' || /timeout/i.test(msError?.message || '');
+        logger.warn(`MyStocks ${exchange} fetch failed (${status ?? 'timeout'}): ${msError.message}`);
+        serviceUnavailable = isTimeout || status === 503 || status === 502 || status === 504;
       }
 
       const pageNum = Math.max(1, parseInt(page, 10) || 1);

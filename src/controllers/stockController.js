@@ -2242,6 +2242,7 @@ const getCompanyInfo = async (req, res) => {
       let stockSnapshot = null;
       let slugData = null;
       let pulseData = null;
+      let marketDataUnavailable = false;
       try {
         const snap = await ms.getStocks({ search: ticker });
         const stocks = Array.isArray(snap) ? snap : (Array.isArray(snap?.stocks) ? snap.stocks : []);
@@ -2255,10 +2256,32 @@ const getCompanyInfo = async (req, res) => {
           if (slugResult.status === 'fulfilled') slugData = slugResult.value;
           if (pulseResult.status === 'fulfilled') pulseData = pulseResult.value;
         }
-      } catch (_) {}
+      } catch (msErr) {
+        const httpStatus = msErr?.response?.status || msErr?.status;
+        const isTimeout = msErr?.code === 'ECONNABORTED' || /timeout/i.test(msErr?.message || '');
+        if (isTimeout || httpStatus === 503 || httpStatus === 502 || httpStatus === 504) {
+          marketDataUnavailable = true;
+        } else {
+          logger.warn(`MyStocks company info failed for ${upperSymbol}: ${msErr.message}`);
+        }
+      }
 
+      // Build a minimal stub when service is down so the app still renders the page
       if (!stockSnapshot) {
-        return res.status(404).json({ success: false, message: 'Symbol not found' });
+        if (marketDataUnavailable) {
+          const exchangeSuffix = upperSymbol.includes('.') ? upperSymbol.split('.').pop() : 'KE';
+          const SUFFIX_TO_EXCHANGE = { KE: 'NSE', NG: 'NGX', ZA: 'JSE', GH: 'GSE', ZM: 'LUSE', EG: 'EGX', BW: 'BSE', MU: 'SEM', CI: 'BRVM' };
+          stockSnapshot = {
+            symbol: upperSymbol,
+            name: ticker,
+            exchange: SUFFIX_TO_EXCHANGE[exchangeSuffix] || exchangeSuffix,
+            currency: 'KES',
+            price: null,
+            previousClose: null
+          };
+        } else {
+          return res.status(404).json({ success: false, message: 'Symbol not found' });
+        }
       }
 
       const currentPrice = parseFloat(stockSnapshot.price || 0);
@@ -2327,6 +2350,7 @@ const getCompanyInfo = async (req, res) => {
 
       return res.json({
         success: true,
+        ...(marketDataUnavailable && { warning: 'Market data is temporarily unavailable. Please try again shortly.' }),
         company: {
           symbol: upperSymbol,
           name: stockSnapshot.name || upperSymbol,

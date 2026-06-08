@@ -1,6 +1,5 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
-const ms = require('../services/mystocksService');
 
 // Alpaca API credentials
 const ALPACA_API_KEY = process.env.ALPACA_PAPER_API_KEY;
@@ -35,32 +34,24 @@ const fetchLogoFromSources = async (symbol) => {
     return cached.data;
   }
 
-  // Source 0: MyStocks public API — best source for African exchange symbols
+  // Source 0: MyStocks CDN — derive logo URL directly from symbol, no API call needed
+  // Pattern: EVRD.KE → https://mystocks.africa/logos/evrd-ke.svg
   if (isAfricanSymbol(symbolUpper)) {
     try {
-      const ticker = symbolUpper.includes('.') ? symbolUpper.split('.')[0] : symbolUpper;
-      const snap = await ms.getStocks({ search: ticker });
-      const stocks = Array.isArray(snap) ? snap : (Array.isArray(snap?.stocks) ? snap.stocks : []);
-      const stock = stocks.find(s => s.symbol?.toUpperCase() === symbolUpper) || stocks[0];
-      if (stock?.name && stock?.exchange) {
-        const slug = ms.buildStockSlug(stock.name, stock.exchange);
-        const detail = await ms.getStockBySlug(slug);
-        const logoUrl = detail?.logo?.imageUrl;
-        if (logoUrl) {
-          const imgRes = await axios.get(logoUrl, { responseType: 'arraybuffer', timeout: 5000 });
-          if (imgRes.status === 200 && imgRes.data.length > 100) {
-            const result = {
-              data: imgRes.data,
-              contentType: imgRes.headers['content-type'] || 'image/svg+xml',
-              source: 'mystocks'
-            };
-            logoCache.set(symbolUpper, { data: result, timestamp: Date.now() });
-            return result;
-          }
-        }
+      const [ticker, suffix] = symbolUpper.split('.');
+      const logoUrl = `https://mystocks.africa/logos/${ticker.toLowerCase()}-${suffix.toLowerCase()}.svg`;
+      const imgRes = await axios.get(logoUrl, { responseType: 'arraybuffer', timeout: 5000, validateStatus: (s) => s < 500 });
+      if (imgRes.status === 200 && imgRes.data.length > 100) {
+        const result = {
+          data: imgRes.data,
+          contentType: imgRes.headers['content-type'] || 'image/svg+xml',
+          source: 'mystocks'
+        };
+        logoCache.set(symbolUpper, { data: result, timestamp: Date.now() });
+        return result;
       }
     } catch (e) {
-      logger.debug(`MyStocks logo failed for ${symbolUpper}: ${e.message}`);
+      logger.debug(`MyStocks CDN logo failed for ${symbolUpper}: ${e.message}`);
     }
   }
 
