@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 const { Op } = require('sequelize');
 const { User, EmailVerificationToken, PhoneVerificationToken, PasswordResetToken, sequelize } = require('../models');
 const emailService = require('../services/emailService');
@@ -168,6 +169,13 @@ const login = async (req, res) => {
           accountLocked: true
         });
       }
+    }
+
+    // Rehash in background if stored hash uses more rounds than current target
+    if (bcrypt.getRounds(user.password) > 10) {
+      bcrypt.hash(password, 10)
+        .then(hash => user.update({ password: hash }))
+        .catch(err => logger.error('Password rehash error:', err));
     }
 
     // Reset login attempts on successful login
