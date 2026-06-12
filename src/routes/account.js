@@ -5,17 +5,23 @@ const {
   getAccountConfigurations,
   updateAccountConfigurations,
   getTradeHistory,
-  getAccountDocuments
+  getAccountDocuments,
+  updateAccount,
+  deleteAccount,
+  switchAccountMode
 } = require('../controllers/accountController');
 const { auth } = require('../middleware/auth');
 
 const router = express.Router();
 
 router.get('/', auth, getAccountInfo);
+router.put('/', auth, updateAccount);  // Update account
+router.delete('/', auth, deleteAccount);  // Delete account
 router.get('/activity', auth, getAccountActivity);
 router.get('/configurations', auth, getAccountConfigurations);
 router.patch('/configurations', auth, updateAccountConfigurations);
 router.get('/trades', auth, getTradeHistory);
 router.get('/documents', auth, getAccountDocuments);
+router.patch('/mode', auth, switchAccountMode);
 
 module.exports = router;

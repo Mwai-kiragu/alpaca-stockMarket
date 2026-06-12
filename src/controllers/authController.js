@@ -1,7 +1,10 @@
 const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-const { User, Wallet, EmailVerificationToken } = require('../models');
+const { Op } = require('sequelize');
+const { User, EmailVerificationToken, PhoneVerificationToken, PasswordResetToken, sequelize } = require('../models');
 const emailService = require('../services/emailService');
+const brevoEmailService = require('../services/brevoEmailService');
+const notificationService = require('../services/notificationService');
+const mystocksService = require('../services/mystocksService');
 const logger = require('../utils/logger');
 
 const generateToken = (id) => {
@@ -10,79 +13,118 @@ const generateToken = (id) => {
   });
 };
 
+const generateVerificationCode = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+// Registration - Step 1 of onboarding process
 const register = async (req, res) => {
   try {
-    const { firstName, lastName, email, phone, password } = req.body;
+    const { fullName, email, password, phoneNumber, ref } = req.body;
+
+    // Check for existing email and phone
+    logger.info(`Registration attempt for email: ${email}`);
 
     const existingUser = await User.findOne({
       where: {
-        [User.sequelize.Sequelize.Op.or]: [
+        [Op.or]: [
           { email },
-          { phone }
+          { phone: phoneNumber }
         ]
       }
     });
 
     if (existingUser) {
-      return res.status(400).json({
-        success: false,
-        message: 'User with this email or phone already exists'
+      if (existingUser.email === email) {
+        logger.warn(`Registration failed - email already exists: ${email}`);
+        return res.status(400).json({
+          success: false,
+          message: 'This email is already registered with us. If this is your account, please try logging in or use the "Forgot Password" option to reset your password.'
+        });
+      }
+      if (existingUser.phone === phoneNumber) {
+        logger.warn(`Registration failed - phone already exists: ${phoneNumber}`);
+        return res.status(400).json({
+          success: false,
+          message: 'This phone number is already registered with us. If this is your account, please try logging in or contact support if you need assistance.'
+        });
+      }
+    }
+
+    logger.info(`Email and phone are unique, proceeding with registration: ${email}`);
+
+    // Split full name into first and last name
+    const nameParts = fullName.trim().split(' ');
+    const firstName = nameParts[0];
+    const lastName = nameParts.slice(1).join(' ') || firstName;
+
+    // Find referrer if referral code provided
+    let referrerId = null;
+    if (ref) {
+      const referrer = await User.findOne({
+        where: { referral_code: ref.toUpperCase() }
       });
+      if (referrer) {
+        referrerId = referrer.id;
+        logger.info(`User referred by: ${referrer.email}`);
+      }
     }
 
     const user = await User.create({
       first_name: firstName,
       last_name: lastName,
       email,
-      phone,
-      password
+      phone: phoneNumber,
+      password,
+      registration_step: 'personal_info',
+      kyc_status: 'not_started',
+      registration_status: 'started',
+      referred_by: referrerId
     });
 
-    const wallet = await Wallet.create({
-      user_id: user.id
-    });
-
-    // Create email verification token
+    // Generate verification token
+    const verificationCode = generateVerificationCode();
     const verificationToken = EmailVerificationToken.generateToken();
+
     await EmailVerificationToken.create({
       user_id: user.id,
-      token: verificationToken
+      token: verificationToken,
+      verification_code: verificationCode,
+      expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
     });
 
-    // Send welcome email with verification link
-    const emailResult = await emailService.sendWelcomeEmail(user, verificationToken);
-    if (!emailResult.success) {
-      logger.warn(`Failed to send welcome email to ${email}:`, emailResult.error);
-    }
+    // Log verification code (user will request it via /resend-verification endpoint)
+    logger.info(`VERIFICATION CODE for ${email}: ${verificationCode}`);
 
-    const token = generateToken(user.id);
+    // Send welcome email asynchronously (separate from verification email)
+    emailService.sendRegistrationWelcomeEmail(user)
+      .then(emailResult => {
+        if (emailResult.success) {
+          logger.info(`Welcome email sent successfully to ${email}`);
+        } else {
+          logger.warn(`Failed to send welcome email to ${email}: ${emailResult.error || emailResult.message}`);
+        }
+      })
+      .catch(emailError => {
+        logger.error(`Welcome email service error for ${email}:`, emailError.message);
+      });
 
     logger.info(`New user registered: ${email}`);
 
     res.status(201).json({
       success: true,
-      message: 'User registered successfully. Please check your email to verify your account.',
-      token,
-      user: {
-        id: user.id,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        email: user.email,
-        phone: user.phone,
-        kycStatus: user.kyc_status,
-        isEmailVerified: user.is_email_verified,
-        isPhoneVerified: user.is_phone_verified
-      }
+      message: 'Registration successful. Welcome to Riven! Please request a verification code to verify your account.'
     });
   } catch (error) {
     logger.error('Registration error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error during registration'
+      message: 'We encountered an issue while creating your account. Please try again in a moment. If the problem persists, contact our support team.'
     });
   }
 };
 
+// Login
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -92,16 +134,18 @@ const login = async (req, res) => {
     });
 
     if (!user) {
-      return res.status(400).json({
+      return res.status(401).json({
         success: false,
-        message: 'Invalid credentials'
+        message: 'We couldn\'t find an account with this email and password combination. Please check your credentials and try again.'
       });
     }
 
     if (user.isLocked) {
-      return res.status(423).json({
+      const lockTimeRemaining = Math.ceil((user.lock_until - new Date()) / 1000 / 60);
+      return res.status(429).json({
         success: false,
-        message: 'Account is temporarily locked due to too many failed login attempts'
+        message: `For your security, your account has been temporarily locked. Please try again in ${lockTimeRemaining} minutes, or reset your password to regain access immediately.`,
+        lockTimeRemaining: lockTimeRemaining
       });
     }
 
@@ -109,12 +153,24 @@ const login = async (req, res) => {
 
     if (!isMatch) {
       await user.incLoginAttempts();
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
+      const remainingAttempts = 5 - (user.login_attempts + 1);
+
+      if (remainingAttempts > 0) {
+        return res.status(401).json({
+          success: false,
+          message: `The password you entered is incorrect. You have ${remainingAttempts} ${remainingAttempts === 1 ? 'attempt' : 'attempts'} remaining before your account is temporarily locked.`,
+          remainingAttempts: remainingAttempts
+        });
+      } else {
+        return res.status(401).json({
+          success: false,
+          message: 'The password you entered is incorrect. Your account has been temporarily locked for 2 hours for security reasons. You can reset your password to regain access immediately.',
+          accountLocked: true
+        });
+      }
     }
 
+    // Reset login attempts on successful login
     if (user.login_attempts > 0) {
       await user.update({
         login_attempts: 0,
@@ -122,333 +178,1226 @@ const login = async (req, res) => {
       });
     }
 
+    // Generate referral code for existing users who don't have one
+    if (!user.referral_code) {
+      let code;
+      let exists = true;
+      let attempts = 0;
+      while (exists && attempts < 10) {
+        code = User.generateReferralCode();
+        const existing = await User.findOne({ where: { referral_code: code } });
+        exists = !!existing;
+        attempts++;
+      }
+      user.referral_code = code;
+      logger.info(`Generated referral code for existing user ${user.email}: ${code}`);
+    }
+
     user.last_login = new Date();
     await user.save();
 
     const token = generateToken(user.id);
 
+    // Determine onboarding status (only check email verification)
+    const requiresVerification = !user.is_email_verified;
+    const onboardingComplete = user.registration_status === 'completed';
+
     logger.info(`User logged in: ${email}`);
 
-    res.json({
+    res.status(200).json({
       success: true,
-      message: 'Login successful',
       token,
       user: {
         id: user.id,
-        firstName: user.first_name,
-        lastName: user.last_name,
+        fullName: `${user.first_name} ${user.last_name}`,
         email: user.email,
         phone: user.phone,
-        kycStatus: user.kyc_status,
-        isEmailVerified: user.is_email_verified,
-        isPhoneVerified: user.is_phone_verified,
-        role: user.role
+        role: user.role,
+        mustChangePassword: user.must_change_password || false,
+        requiresVerification,
+        onboardingComplete,
+        registrationStep: user.registration_step,
+        // Security setup — app uses these to decide whether to prompt biometric/PIN
+        biometricEnabled: user.biometric_enabled,
+        pinEnabled: user.pin_enabled,
+        // Referral info
+        referralCode: user.referral_code,
+        referralLink: `https://www.rivenapp.com/signup?ref=${user.referral_code}`,
+        referralsCount: user.referrals_count
       }
     });
   } catch (error) {
     logger.error('Login error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error during login'
+      message: 'We encountered an issue while signing you in. Please try again in a moment. If the problem persists, contact our support team.'
     });
   }
 };
 
+// Request verification code
+const requestVerification = async (req, res) => {
+  try {
+    const { verificationType } = req.body;
+    const user = await User.findByPk(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find your account. Please make sure you\'re logged in and try again.'
+      });
+    }
+
+    if (verificationType === 'email') {
+      if (user.is_email_verified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Your email is already verified. You can proceed with the next step.'
+        });
+      }
+
+      // Generate verification token
+      const verificationCode = generateVerificationCode();
+      const verificationToken = EmailVerificationToken.generateToken();
+
+      // Invalidate old tokens
+      await EmailVerificationToken.update(
+        { used: true },
+        { where: { user_id: user.id, used: false } }
+      );
+
+      await EmailVerificationToken.create({
+        user_id: user.id,
+        token: verificationToken,
+        verification_code: verificationCode,
+        expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+      });
+
+      // Send verification email asynchronously (don't block the response)
+      emailService.sendVerificationCodeEmail(user, verificationCode)
+        .then(emailResult => {
+          if (emailResult.success) {
+            logger.info(`Verification code sent to ${user.email}`);
+          } else {
+            logger.warn(`Failed to send verification email to ${user.email}: ${emailResult.error || emailResult.message}`);
+          }
+        })
+        .catch(emailError => {
+          logger.error(`Email service error for ${user.email}:`, emailError);
+        });
+
+      // Respond immediately
+      res.status(200).json({
+        success: true,
+        message: 'Verification code sent successfully.'
+      });
+    } else if (verificationType === 'phone') {
+      if (user.is_phone_verified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Your phone number is already verified. You can proceed with the next step.'
+        });
+      }
+
+      // Generate phone verification code
+      const phoneCode = generateVerificationCode();
+
+      // Invalidate old tokens
+      await PhoneVerificationToken.update(
+        { used: true },
+        { where: { user_id: user.id, used: false } }
+      );
+
+      await PhoneVerificationToken.create({
+        user_id: user.id,
+        verification_code: phoneCode,
+        expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+      });
+
+      // Send SMS verification code via TestSMS
+      try {
+        const smsResult = await notificationService.sendPhoneVerificationCode(user.id, phoneCode);
+
+        if (smsResult.success) {
+          logger.info(`SMS verification code sent successfully to ${user.phone}`);
+        } else {
+          logger.warn(`SMS sending failed for ${user.phone}:`, smsResult.error);
+          // Continue anyway and log the code for testing
+          logger.info(`PHONE VERIFICATION CODE for ${user.phone}: ${phoneCode}`);
+        }
+      } catch (smsError) {
+        logger.error('SMS service error:', smsError);
+        // Log verification code for testing when SMS fails
+        logger.info(`PHONE VERIFICATION CODE for ${user.phone}: ${phoneCode}`);
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Verification code sent successfully.'
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: 'Please specify whether you want to verify your email or phone number.'
+      });
+    }
+  } catch (error) {
+    logger.error('Request verification error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue while sending your verification code. Please try again in a moment.'
+    });
+  }
+};
+
+// Verify code (generic)
+const verifyCode = async (req, res) => {
+  try {
+    const { verificationCode, email } = req.body;
+
+    // TEMPORARY: Since auth is removed, find user by email
+    const user = req.user ?
+      await User.findByPk(req.user.id) :
+      await User.findOne({ where: { email } });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: email ? 'We couldn\'t find an account with this email address. Please check the email and try again.' : 'We need your email address to verify your account. Please provide it and try again.'
+      });
+    }
+
+    // Email verification with database tokens
+    const emailToken = await EmailVerificationToken.findOne({
+      where: {
+        user_id: user.id,
+        verification_code: verificationCode,
+        used: false
+      }
+    });
+
+    if (emailToken && !emailToken.isExpired()) {
+      await user.update({
+        is_email_verified: true,
+        registration_step: 'personal_info' // Move to first onboarding step
+      });
+      await emailToken.update({ used: true });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Account verified successfully.'
+      });
+    }
+
+    // Check if token exists but is expired
+    if (emailToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification code has expired. Please request a new one.'
+      });
+    }
+
+    // Phone verification with database tokens
+    const phoneToken = await PhoneVerificationToken.findOne({
+      where: {
+        user_id: user.id,
+        verification_code: verificationCode,
+        used: false
+      }
+    });
+
+    if (phoneToken && !phoneToken.isExpired()) {
+      await user.update({
+        is_phone_verified: true
+      });
+      await phoneToken.update({ used: true });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Phone verified successfully.'
+      });
+    }
+
+    // Invalid or already used code
+    res.status(400).json({
+      success: false,
+      message: 'Invalid or expired verification code. Please check the code or request a new one.'
+    });
+
+  } catch (error) {
+    logger.error('Verify code error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue while verifying your code. Please try again in a moment.'
+    });
+  }
+};
+
+// Get Alpaca terms and privacy policy
+const getAlpacaTerms = async (req, res) => {
+  try {
+    const axios = require('axios');
+    const cheerio = require('cheerio');
+
+    const urls = {
+      terms: 'https://alpaca.markets/disclosures', // Will extract Terms & Conditions from disclosures page
+      privacy: 'https://alpaca.markets/disclosures', // Will extract Privacy Notice from disclosures page
+      disclosures: 'https://alpaca.markets/disclosures'
+    };
+
+    const fetchDocument = async (url, type) => {
+      try {
+        const response = await axios.get(url, {
+          timeout: 10000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; Trading-Platform/1.0)'
+          }
+        });
+
+        const $ = cheerio.load(response.data);
+
+        // Extract title based on document type
+        let title, content;
+
+        if (type === 'terms') {
+          title = 'Alpaca Terms & Conditions';
+          // Look for Terms & Conditions links in the disclosures page
+          const termsLink = $('a[href*="terms"], a:contains("Terms"), a:contains("Conditions")').first();
+          if (termsLink.length > 0) {
+            content = `Please review the complete Terms & Conditions document.\n\nKey Points from Alpaca Disclosures:\n\n${$('body').text().substring(0, 2000)}...`;
+          } else {
+            content = 'Please visit https://alpaca.markets/disclosures to access the complete Terms & Conditions document.';
+          }
+        } else if (type === 'privacy') {
+          title = 'Alpaca Privacy Notice';
+          // Look for Privacy Notice links
+          const privacyLink = $('a[href*="privacy"], a:contains("Privacy")').first();
+          if (privacyLink.length > 0) {
+            content = `Please review the complete Privacy Notice document.\n\nKey Points from Alpaca Disclosures:\n\n${$('body').text().substring(0, 2000)}...`;
+          } else {
+            content = 'Please visit https://alpaca.markets/disclosures to access the complete Privacy Notice document.';
+          }
+        } else {
+          // For disclosures, extract full content
+          title = $('title').text().trim() || 'Alpaca Disclosures and Agreements';
+
+          // Extract main content - try different selectors
+          const contentSelectors = [
+            'main',
+            '.content',
+            '.document-content',
+            '.legal-content',
+            'article',
+            '.container .row',
+            'body'
+          ];
+
+          for (const selector of contentSelectors) {
+            const element = $(selector);
+            if (element.length > 0) {
+              content = element.text().trim();
+              if (content.length > 500) break; // Use if substantial content found
+            }
+          }
+
+          // Clean up content
+          content = content
+            .replace(/\s+/g, ' ')
+            .replace(/\n+/g, '\n')
+            .trim()
+            .substring(0, 10000); // Limit to 10KB
+        }
+
+        // Extract last modified date from meta tags or content
+        let lastUpdated = $('meta[name="last-modified"]').attr('content') ||
+                         $('meta[property="article:modified_time"]').attr('content') ||
+                         new Date().toISOString().split('T')[0];
+
+        return {
+          title,
+          url,
+          content: content || 'Content could not be extracted from this document.',
+          lastUpdated: lastUpdated.split('T')[0], // Format as YYYY-MM-DD
+          fetchedAt: new Date().toISOString()
+        };
+
+      } catch (fetchError) {
+        logger.error(`Error fetching ${type} from ${url}:`, fetchError.message);
+        return {
+          title: `Alpaca ${type.charAt(0).toUpperCase() + type.slice(1)}`,
+          url,
+          content: `Unable to fetch content. Please visit ${url} directly.`,
+          lastUpdated: new Date().toISOString().split('T')[0],
+          fetchedAt: new Date().toISOString(),
+          error: 'Content fetch failed'
+        };
+      }
+    };
+
+    logger.info('Fetching Alpaca legal documents...');
+
+    // Fetch all documents in parallel
+    const [terms, privacy, disclosures] = await Promise.all([
+      fetchDocument(urls.terms, 'terms'),
+      fetchDocument(urls.privacy, 'privacy'),
+      fetchDocument(urls.disclosures, 'disclosures')
+    ]);
+
+    const alpacaTerms = {
+      terms,
+      privacy,
+      disclosures
+    };
+
+    logger.info('Successfully fetched Alpaca legal documents');
+
+    res.json({
+      success: true,
+      data: alpacaTerms,
+      fetchedAt: new Date().toISOString()
+    });
+
+  } catch (error) {
+    logger.error('Get Alpaca terms error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Alpaca terms and privacy policy',
+      error: error.message
+    });
+  }
+};
+
+// Accept terms and privacy policy
+const acceptTermsAndPrivacy = async (req, res) => {
+  try {
+    const { termsAccepted, privacyAccepted } = req.body;
+    const user = await User.findByPk(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find your account. Please make sure you\'re logged in and try again.'
+      });
+    }
+
+    if (typeof termsAccepted !== 'boolean' || typeof privacyAccepted !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        message: 'Please confirm your acceptance of both the terms and privacy policy.'
+      });
+    }
+
+    if (!termsAccepted || !privacyAccepted) {
+      return res.status(400).json({
+        success: false,
+        message: 'To continue, please accept both our Terms of Service and Privacy Policy.'
+      });
+    }
+
+    const now = new Date();
+    await user.update({
+      terms_accepted: termsAccepted,
+      privacy_accepted: privacyAccepted,
+      terms_accepted_at: now,
+      privacy_accepted_at: now
+    });
+
+    logger.info(`Terms and privacy accepted by user: ${user.email}`);
+
+    res.json({
+      success: true,
+      message: 'Terms and privacy policy accepted successfully',
+      user: {
+        id: user.id,
+        termsAccepted: user.terms_accepted,
+        privacyAccepted: user.privacy_accepted,
+        termsAcceptedAt: user.terms_accepted_at,
+        privacyAcceptedAt: user.privacy_accepted_at
+      }
+    });
+  } catch (error) {
+    logger.error('Accept terms and privacy error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue while processing your acceptance. Please try again in a moment.'
+    });
+  }
+};
+
+// Get user profile
 const getMe = async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id, {
-      include: [{ model: Wallet, as: 'wallet' }]
+      attributes: { exclude: ['password', 'pin_hash', 'login_attempts', 'lock_until'] }
     });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'We couldn\'t find your profile. Please try logging in again.'
+      });
+    }
 
     res.json({
       success: true,
       user: {
         id: user.id,
-        firstName: user.first_name,
-        lastName: user.last_name,
+        fullName: `${user.first_name} ${user.last_name}`,
         email: user.email,
         phone: user.phone,
         kycStatus: user.kyc_status,
         isEmailVerified: user.is_email_verified,
         isPhoneVerified: user.is_phone_verified,
-        role: user.role,
-        wallet: {
-          kesBalance: user.wallet?.kes_balance || 0,
-          usdBalance: user.wallet?.usd_balance || 0,
-          availableKes: user.wallet?.availableKes || 0,
-          availableUsd: user.wallet?.availableUsd || 0
-        }
+        registrationStatus: user.registration_status,
+        onboardingComplete: user.registration_status === 'completed',
+        termsAccepted: user.terms_accepted,
+        privacyAccepted: user.privacy_accepted,
+        alpacaAccountId: user.alpaca_account_id,
+        tradingEnabled: user.kyc_status === 'approved'
       }
     });
   } catch (error) {
     logger.error('Get user profile error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'We encountered an issue while loading your profile. Please try again in a moment.'
     });
   }
 };
 
-const updateProfile = async (req, res) => {
+// Check KYC status from Alpaca
+const checkKYCStatus = async (req, res) => {
   try {
-    const { firstName, lastName, phone } = req.body;
+    const user = await User.findByPk(req.user.id);
 
-    const user = await User.findById(req.user.id);
-
-    if (firstName) user.firstName = firstName;
-    if (lastName) user.lastName = lastName;
-    if (phone && phone !== user.phone) {
-      const phoneExists = await User.findOne({ phone, _id: { $ne: user._id } });
-      if (phoneExists) {
-        return res.status(400).json({
-          success: false,
-          message: 'Phone number already in use'
-        });
-      }
-      user.phone = phone;
-      user.isPhoneVerified = false;
-    }
-
-    await user.save();
-
-    logger.info(`User profile updated: ${user.email}`);
-
-    res.json({
-      success: true,
-      message: 'Profile updated successfully',
-      user: {
-        id: user._id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        phone: user.phone,
-        kycStatus: user.kycStatus,
-        isEmailVerified: user.isEmailVerified,
-        isPhoneVerified: user.isPhoneVerified
-      }
-    });
-  } catch (error) {
-    logger.error('Update profile error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error'
-    });
-  }
-};
-
-const submitKYC = async (req, res) => {
-  try {
-    const { idNumber, idType, dateOfBirth, address, occupation } = req.body;
-
-    const user = await User.findById(req.user.id);
-
-    if (user.kycStatus === 'approved') {
-      return res.status(400).json({
-        success: false,
-        message: 'KYC already approved'
-      });
-    }
-
-    user.kycData = {
-      idNumber,
-      idType,
-      dateOfBirth: new Date(dateOfBirth),
-      address,
-      occupation
-    };
-    user.kycStatus = 'submitted';
-
-    await user.save();
-
-    logger.info(`KYC submitted by user: ${user.email}`);
-
-    res.json({
-      success: true,
-      message: 'KYC information submitted successfully. Under review.',
-      kycStatus: user.kycStatus
-    });
-  } catch (error) {
-    logger.error('KYC submission error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error during KYC submission'
-    });
-  }
-};
-
-const changePassword = async (req, res) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-
-    const user = await User.findById(req.user.id).select('+password');
-
-    const isMatch = await user.comparePassword(currentPassword);
-    if (!isMatch) {
-      return res.status(400).json({
-        success: false,
-        message: 'Current password is incorrect'
-      });
-    }
-
-    user.password = newPassword;
-    await user.save();
-
-    logger.info(`Password changed for user: ${user.email}`);
-
-    res.json({
-      success: true,
-      message: 'Password changed successfully'
-    });
-  } catch (error) {
-    logger.error('Change password error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error'
-    });
-  }
-};
-
-const forgotPassword = async (req, res) => {
-  try {
-    const { email } = req.body;
-
-    const user = await User.findOne({ email });
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: 'User not found'
+        message: 'We couldn\'t find your account. Please make sure you\'re logged in and try again.'
       });
     }
 
-    const resetToken = crypto.randomBytes(32).toString('hex');
+    if (!user.alpaca_account_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Your trading account is not yet set up. Please complete the onboarding process first.',
+        kycStatus: user.kyc_status
+      });
+    }
 
-    logger.info(`Password reset requested for user: ${email}`);
+    // Get fresh status from Alpaca
+    try {
+      const alpacaService = require('../services/alpacaService');
+      const alpacaStatus = await alpacaService.getAccountStatus(user.alpaca_account_id);
 
-    res.json({
-      success: true,
-      message: 'Password reset instructions sent to your email',
-      resetToken
-    });
+      // Update local status if different
+      if (alpacaStatus.kycStatus !== user.kyc_status) {
+        const currentKycData = user.kyc_data || {};
+        const updatedKycData = {
+          ...currentKycData,
+          alpacaSync: {
+            lastSynced: new Date(),
+            alpacaStatus: alpacaStatus.status,
+            tradingEnabled: alpacaStatus.tradingEnabled,
+            syncSource: 'user_check'
+          }
+        };
+
+        await user.update({
+          kyc_status: alpacaStatus.kycStatus,
+          kyc_data: updatedKycData,
+          account_status: alpacaStatus.tradingEnabled ? 'active' : 'pending'
+        });
+
+        logger.info(`KYC status updated for user ${user.email}: ${user.kyc_status} -> ${alpacaStatus.kycStatus}`);
+      }
+
+      res.json({
+        success: true,
+        data: {
+          kycStatus: alpacaStatus.kycStatus,
+          alpacaStatus: alpacaStatus.status,
+          tradingEnabled: alpacaStatus.tradingEnabled,
+          accountId: alpacaStatus.accountId,
+          lastChecked: new Date(),
+          statusUpdated: alpacaStatus.kycStatus !== user.kyc_status
+        }
+      });
+
+    } catch (alpacaError) {
+      logger.error('Failed to check Alpaca status:', alpacaError);
+
+      // Return current local status if Alpaca is unavailable
+      res.json({
+        success: true,
+        data: {
+          kycStatus: user.kyc_status,
+          tradingEnabled: user.kyc_status === 'approved',
+          lastChecked: new Date(),
+          note: 'Using cached status - Alpaca unavailable',
+          error: 'Could not fetch live status from Alpaca'
+        }
+      });
+    }
+
   } catch (error) {
-    logger.error('Forgot password error:', error);
+    logger.error('Check KYC status error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'We encountered an issue while checking your verification status. Please try again in a moment.'
     });
   }
 };
 
-const verifyEmail = async (req, res) => {
-  try {
-    const { token } = req.query;
+// Standardized API Response Helper (matching Rivenapp pattern)
+const ApiResponse = {
+  SuccessWithData: (data, message = "Success", statusCode = 200) => ({
+    success: true,
+    message,
+    data,
+    statusCode
+  }),
+  SuccessNoData: (message = "Success", statusCode = 200) => ({
+    success: true,
+    message,
+    statusCode
+  }),
+  Error: (message, statusCode = 400, errors = null) => ({
+    success: false,
+    message,
+    statusCode,
+    errors
+  })
+};
 
-    if (!token) {
-      return res.status(400).json({
-        success: false,
-        message: 'Verification token is required'
-      });
+// Request password reset (matching Rivenapp pattern)
+const requestPasswordReset = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    logger.info(`Started requesting password reset at ${new Date()}`);
+
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json(
+        ApiResponse.Error('Please provide your email address to reset your password.', 400)
+      );
     }
 
-    const verificationToken = await EmailVerificationToken.findOne({
+    // Find user by email
+    const user = await User.findOne({ where: { email } });
+
+    // Always return success message for security (don't reveal if email exists)
+    const successMessage = 'Password reset request sent successfully';
+
+    if (!user) {
+      logger.warn(`Password reset requested for non-existent email: ${email}`);
+      const duration = Date.now() - startTime;
+      logger.info(`Completed password reset request in ${duration}ms`);
+      return res.status(200).json(
+        ApiResponse.SuccessNoData(successMessage, 200)
+      );
+    }
+
+    // Generate reset token
+    const resetToken = PasswordResetToken.generateToken();
+
+    // Invalidate old tokens
+    await PasswordResetToken.update(
+      { used: true },
+      { where: { user_id: user.id, used: false } }
+    );
+
+    // Create new reset token
+    await PasswordResetToken.create({
+      user_id: user.id,
+      token: resetToken,
+      expires_at: new Date(Date.now() + 60 * 60 * 1000) // 1 hour expiration
+    });
+
+    // Send password reset email
+    try {
+      await emailService.sendPasswordResetEmail(user, resetToken);
+
+      logger.info(`Password reset email sent successfully to ${email}`);
+    } catch (emailError) {
+      logger.error(`Failed to send password reset email to ${email}:`, emailError);
+      // Continue with success response even if email fails
+    }
+
+    const duration = Date.now() - startTime;
+    logger.info(`Completed password reset request in ${duration}ms`);
+
+    return res.status(200).json(
+      ApiResponse.SuccessNoData(successMessage, 200)
+    );
+
+  } catch (error) {
+    logger.error('Password reset request error:', error);
+    return res.status(500).json(
+      ApiResponse.Error('We encountered an issue while processing your password reset request. Please try again in a moment.', 500)
+    );
+  }
+};
+
+// Reset password (matching Rivenapp pattern)
+const resetPassword = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    logger.info(`Started resetting password at ${new Date()}`);
+
+    const { token, newPassword, confirmPassword } = req.body;
+
+    if (!token || !newPassword || !confirmPassword) {
+      return res.status(400).json(
+        ApiResponse.Error('Please provide your reset token and both password fields to continue.', 400)
+      );
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json(
+        ApiResponse.Error('The passwords you entered don\'t match. Please make sure both password fields are identical.', 400)
+      );
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json(
+        ApiResponse.Error('For your security, please choose a password that\'s at least 6 characters long.', 400)
+      );
+    }
+
+    // Find valid reset token
+    const resetToken = await PasswordResetToken.findOne({
       where: {
         token,
         used: false
       },
-      include: [{ model: User, as: 'user' }]
+      include: [{
+        model: User,
+        as: 'user'
+      }]
     });
 
-    if (!verificationToken) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid or expired verification token'
-      });
+    if (!resetToken) {
+      return res.status(400).json(
+        ApiResponse.Error('This password reset link is invalid or has already been used. Please request a new password reset.', 400)
+      );
     }
 
-    if (verificationToken.isExpired()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Verification token has expired'
-      });
+    if (resetToken.isExpired()) {
+      return res.status(400).json(
+        ApiResponse.Error('This password reset link has expired. For your security, please request a new one.', 400)
+      );
     }
 
-    // Mark user as verified
-    await verificationToken.user.update({
-      is_email_verified: true
+    const user = resetToken.user;
+
+    // Update password
+    await user.update({
+      password: newPassword, // Will be hashed by the beforeUpdate hook
+      login_attempts: 0, // Reset login attempts
+      lock_until: null // Remove account lock
     });
 
     // Mark token as used
-    await verificationToken.update({ used: true });
+    await resetToken.update({ used: true });
 
-    logger.info(`Email verified for user: ${verificationToken.user.email}`);
+    logger.info(`Password reset successfully for user: ${user.email}`);
 
-    res.json({
+    // Send password reset confirmation email
+    try {
+      await emailService.sendPasswordResetConfirmationEmail(user);
+    } catch (emailError) {
+      logger.error(`Failed to send password reset confirmation email to ${user.email}:`, emailError);
+    }
+
+    const duration = Date.now() - startTime;
+    logger.info(`Completed password reset in ${duration}ms`);
+
+    return res.status(200).json(
+      ApiResponse.SuccessNoData('Password reset successfully', 200)
+    );
+
+  } catch (error) {
+    logger.error('Password reset error:', error);
+    return res.status(500).json(
+      ApiResponse.Error('We encountered an issue while resetting your password. Please try again in a moment or request a new reset link.', 500)
+    );
+  }
+};
+
+// Get current user (matching Rivenapp pattern)
+const getCurrentUser = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    logger.info(`Started getting current user at ${new Date()}`);
+
+    const user = await User.findByPk(req.user.id, {
+      attributes: { exclude: ['password', 'pin_hash', 'login_attempts', 'lock_until'] }
+    });
+
+    if (!user) {
+      return res.status(404).json(
+        ApiResponse.Error('We couldn\'t find your account details. Please try logging in again.', 404)
+      );
+    }
+
+    const userData = {
+      id: user.id,
+      firstName: user.first_name,
+      lastName: user.last_name,
+      fullName: `${user.first_name} ${user.last_name}`,
+      email: user.email,
+      phone: user.phone,
+      dateOfBirth: user.date_of_birth,
+      gender: user.gender,
+      address: user.address,
+      city: user.city,
+      county: user.county,
+      postalCode: user.postal_code,
+      citizenship: user.citizenship,
+      occupation: user.occupation,
+      registrationStep: user.registration_step,
+      registrationStatus: user.registration_status,
+      kycStatus: user.kyc_status,
+      accountStatus: user.account_status,
+      alpacaAccountId: user.alpaca_account_id,
+      role: user.role,
+      status: user.status,
+      isEmailVerified: user.is_email_verified,
+      isPhoneVerified: user.is_phone_verified,
+      biometricEnabled: user.biometric_enabled,
+      twoFactorEnabled: user.two_factor_enabled,
+      autoConvertDeposits: user.auto_convert_deposits,
+      securityPreferences: user.security_preferences,
+      termsAccepted: user.terms_accepted,
+      privacyAccepted: user.privacy_accepted,
+      termsAcceptedAt: user.terms_accepted_at,
+      privacyAcceptedAt: user.privacy_accepted_at,
+      quizAnswers: user.quiz_answers,
+      quizCompletedAt: user.quiz_completed_at,
+      kycData: user.kyc_data,
+      lastLogin: user.last_login,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+      // Computed fields
+      onboardingComplete: user.registration_status === 'completed',
+      tradingEnabled: user.kyc_status === 'approved' && user.account_status === 'active',
+      requiresVerification: !user.is_email_verified || !user.is_phone_verified
+    };
+
+    const duration = Date.now() - startTime;
+    logger.info(`Completed getting current user in ${duration}ms`);
+
+    return res.status(200).json(
+      ApiResponse.SuccessWithData(userData, 'Current user fetched successfully', 200)
+    );
+
+  } catch (error) {
+    logger.error('Get current user error:', error);
+    return res.status(500).json(
+      ApiResponse.Error('We encountered an issue while loading your account. Please try again in a moment.', 500)
+    );
+  }
+};
+
+// Delete account (soft delete)
+const deleteAccount = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    logger.info(`Started account deletion at ${new Date()}`);
+
+    const { password, reason } = req.body;
+    const userId = req.user.id;
+
+    if (!password) {
+      return res.status(400).json(
+        ApiResponse.Error('For your security, please enter your password to confirm account deletion.', 400)
+      );
+    }
+
+    // Find user and verify password
+    const user = await User.findByPk(userId);
+
+    if (!user) {
+      return res.status(404).json(
+        ApiResponse.Error('We couldn\'t find your account. Please try logging in again.', 404)
+      );
+    }
+
+    // Verify password
+    const isPasswordValid = await user.comparePassword(password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json(
+        ApiResponse.Error('The password you entered is incorrect. Please try again.', 401)
+      );
+    }
+
+    // Soft delete the account
+    await user.update({
+      is_active: false,
+      deleted_at: new Date(),
+      account_status: 'closed',
+      status: 'closed'
+    });
+
+    // Log the deletion reason if provided
+    if (reason) {
+      logger.info(`Account deletion reason for user ${userId}: ${reason}`);
+    }
+
+    const deletionDate = new Date();
+    const recoveryDeadline = new Date();
+    recoveryDeadline.setDate(recoveryDeadline.getDate() + 30); // 30 days recovery period
+
+    const duration = Date.now() - startTime;
+    logger.info(`Completed account deletion in ${duration}ms`);
+
+    return res.status(200).json(
+      ApiResponse.SuccessWithData(
+        {
+          deletion_date: deletionDate,
+          recovery_deadline: recoveryDeadline
+        },
+        'Account marked for deletion. You have 30 days to recover your account.',
+        200
+      )
+    );
+
+  } catch (error) {
+    logger.error('Account deletion error:', error);
+    return res.status(500).json(
+      ApiResponse.Error('We encountered an issue while processing your account deletion. Please try again in a moment or contact support for assistance.', 500)
+    );
+  }
+};
+
+// Recover deleted account
+const recoverAccount = async (req, res) => {
+  try {
+    const startTime = Date.now();
+    logger.info(`Started account recovery at ${new Date()}`);
+
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json(
+        ApiResponse.Error('Please provide both your email address and password to recover your account.', 400)
+      );
+    }
+
+    // Find deleted user
+    const user = await User.findOne({
+      where: {
+        email,
+        is_active: false,
+        deleted_at: {
+          [sequelize.Sequelize.Op.ne]: null,
+          [sequelize.Sequelize.Op.gte]: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Within 30 days
+        }
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json(
+        ApiResponse.Error('We couldn\'t find a deleted account with this email, or the recovery period has expired. Accounts can only be recovered within 30 days of deletion.', 404)
+      );
+    }
+
+    // Verify password
+    const isPasswordValid = await user.comparePassword(password);
+
+    if (!isPasswordValid) {
+      return res.status(401).json(
+        ApiResponse.Error('The password you entered is incorrect. Please try again.', 401)
+      );
+    }
+
+    // Recover the account
+    await user.update({
+      is_active: true,
+      deleted_at: null,
+      account_status: 'active',
+      status: 'active'
+    });
+
+    const token = generateToken(user.id);
+
+    const duration = Date.now() - startTime;
+    logger.info(`Completed account recovery in ${duration}ms`);
+
+    return res.status(200).json(
+      ApiResponse.SuccessWithData(
+        {
+          token,
+          user: {
+            id: user.id,
+            email: user.email,
+            firstName: user.first_name,
+            lastName: user.last_name
+          }
+        },
+        'Account recovered successfully',
+        200
+      )
+    );
+
+  } catch (error) {
+    logger.error('Account recovery error:', error);
+    return res.status(500).json(
+      ApiResponse.Error('We encountered an issue while recovering your account. Please try again in a moment or contact support for assistance.', 500)
+    );
+  }
+};
+
+const registerV2 = async (req, res) => {
+  try {
+    const { fullName, email, password, phoneNumber, citizenship, dateOfBirth, gender, ref, termsAccepted } = req.body;
+
+    logger.info(`V2 registration attempt for email: ${email}`);
+
+    const existingUser = await User.findOne({
+      where: { [Op.or]: [{ email }, { phone: phoneNumber }] }
+    });
+
+    if (existingUser) {
+      if (existingUser.email === email) {
+        return res.status(400).json({
+          success: false,
+          message: 'This email is already registered. Please log in or use "Forgot Password".'
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        message: 'This phone number is already registered. Please log in or contact support.'
+      });
+    }
+
+    const nameParts = fullName.trim().split(' ');
+    const firstName = nameParts[0];
+    const lastName = nameParts.slice(1).join(' ') || firstName;
+
+    let referrerId = null;
+    if (ref) {
+      const referrer = await User.findOne({ where: { referral_code: ref.toUpperCase() } });
+      if (referrer) referrerId = referrer.id;
+    }
+
+    const now = new Date();
+    const user = await User.create({
+      first_name: firstName,
+      last_name: lastName,
+      email,
+      phone: phoneNumber,
+      password,
+      citizenship: citizenship || 'Kenya',
+      date_of_birth: dateOfBirth || null,
+      gender: gender ? gender.toLowerCase() : 'not_specified',
+      terms_accepted: termsAccepted === true,
+      privacy_accepted: termsAccepted === true,
+      terms_accepted_at: termsAccepted === true ? now : null,
+      privacy_accepted_at: termsAccepted === true ? now : null,
+      registration_step: 'email_verification',
+      registration_status: 'started',
+      kyc_status: 'not_started',
+      referred_by: referrerId
+    });
+
+    const verificationCode = generateVerificationCode();
+    const verificationToken = EmailVerificationToken.generateToken();
+
+    await EmailVerificationToken.create({
+      user_id: user.id,
+      token: verificationToken,
+      verification_code: verificationCode,
+      expires_at: new Date(Date.now() + 10 * 60 * 1000)
+    });
+
+    logger.info(`V2 VERIFICATION CODE for ${email}: ${verificationCode}`);
+
+    brevoEmailService.sendVerificationCodeEmail(user, verificationCode)
+      .then(result => {
+        if (result.success) logger.info(`V2 verification email sent to ${email}`);
+        else logger.warn(`V2 failed to send verification email to ${email}: ${result.error || result.message}`);
+      })
+      .catch(err => logger.error(`V2 email service error for ${email}:`, err));
+
+    res.status(201).json({
       success: true,
-      message: 'Email verified successfully'
+      message: 'Registration successful. A verification code has been sent to your email.',
+      data: { email }
     });
   } catch (error) {
-    logger.error('Email verification error:', error);
+    logger.error('V2 registration error:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error during email verification'
+      message: 'We encountered an issue creating your account. Please try again.'
     });
   }
 };
 
-const resendVerificationEmail = async (req, res) => {
+// Step 2: Verify OTP — returns JWT so the user is immediately logged in
+const verifyEmailV2 = async (req, res) => {
   try {
-    const user = await User.findByPk(req.user.id);
+    const { email, verificationCode } = req.body;
+
+    const user = await User.findOne({ where: { email } });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No account found with this email address.'
+      });
+    }
 
     if (user.is_email_verified) {
       return res.status(400).json({
         success: false,
-        message: 'Email is already verified'
+        message: 'This email is already verified. Please log in.'
       });
     }
 
-    // Invalidate old tokens
+    const emailToken = await EmailVerificationToken.findOne({
+      where: { user_id: user.id, verification_code: verificationCode, used: false }
+    });
+
+    if (!emailToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid verification code. Please check the code or request a new one.'
+      });
+    }
+
+    if (emailToken.isExpired()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Verification code has expired. Please request a new one.'
+      });
+    }
+
+    await user.update({
+      is_email_verified: true,
+      registration_step: 'initial_completed',
+      registration_status: 'email_verified',
+      last_login: new Date()
+    });
+    await emailToken.update({ used: true });
+
+    // Create MyStocks sub-account (fire and forget — don't block login)
+    mystocksService.createSubAccount({
+      externalId: user.id,
+      displayName: `${user.first_name} ${user.last_name}`,
+      email: user.email
+    }).then(async (subAccount) => {
+      const subAccountId = subAccount?.data?.subAccountId || subAccount?.subAccountId;
+      if (subAccountId) {
+        await user.update({ mystocks_sub_account_id: subAccountId });
+        logger.info(`MyStocks sub-account created for ${email}: ${subAccountId}`);
+      }
+    }).catch(err => {
+      logger.error(`Failed to create MyStocks sub-account for ${email}:`, err.message);
+    });
+
+    const token = generateToken(user.id);
+
+    logger.info(`V2 email verified, user logged in: ${email}`);
+
+    res.status(200).json({
+      success: true,
+      message: 'Email verified successfully.',
+      token,
+      user: {
+        id: user.id,
+        fullName: `${user.first_name} ${user.last_name}`,
+        email: user.email,
+        phone: user.phone,
+        citizenship: user.citizenship,
+        registrationStep: user.registration_step,
+        onboardingComplete: false,
+        referralCode: user.referral_code,
+        referralLink: `https://www.rivenapp.com/signup?ref=${user.referral_code}`,
+        referralsCount: user.referrals_count
+      }
+    });
+  } catch (error) {
+    logger.error('V2 verify email error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'We encountered an issue verifying your code. Please try again.'
+    });
+  }
+};
+
+// Resend OTP — no auth required since user hasn't received a JWT yet
+const resendVerificationV2 = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Email is required.' });
+    }
+
+    const user = await User.findOne({ where: { email } });
+
+    if (!user) {
+      // Don't reveal whether the account exists
+      return res.status(200).json({ success: true, message: 'If this email is registered, a new code has been sent.' });
+    }
+
+    if (user.is_email_verified) {
+      return res.status(400).json({ success: false, message: 'This email is already verified.' });
+    }
+
     await EmailVerificationToken.update(
       { used: true },
       { where: { user_id: user.id, used: false } }
     );
 
-    // Create new verification token
+    const verificationCode = generateVerificationCode();
     const verificationToken = EmailVerificationToken.generateToken();
+
     await EmailVerificationToken.create({
       user_id: user.id,
-      token: verificationToken
+      token: verificationToken,
+      verification_code: verificationCode,
+      expires_at: new Date(Date.now() + 10 * 60 * 1000)
     });
 
-    // Send verification email
-    const emailResult = await emailService.sendWelcomeEmail(user, verificationToken);
+    logger.info(`V2 RESEND VERIFICATION CODE for ${email}: ${verificationCode}`);
 
-    if (emailResult.success) {
-      res.json({
-        success: true,
-        message: 'Verification email sent successfully'
-      });
-    } else {
-      res.status(500).json({
-        success: false,
-        message: 'Failed to send verification email'
-      });
-    }
+    brevoEmailService.sendVerificationCodeEmail(user, verificationCode)
+      .then(result => {
+        if (result.success) logger.info(`V2 resend verification email sent to ${email}`);
+        else logger.warn(`V2 resend failed for ${email}: ${result.error || result.message}`);
+      })
+      .catch(err => logger.error(`V2 resend email error for ${email}:`, err));
+
+    res.status(200).json({ success: true, message: 'Verification code resent successfully.' });
   } catch (error) {
-    logger.error('Resend verification email error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error'
-    });
+    logger.error('V2 resend verification error:', error);
+    res.status(500).json({ success: false, message: 'We encountered an issue. Please try again.' });
   }
 };
 
 module.exports = {
   register,
   login,
+  requestVerification,
+  verifyCode,
+  getAlpacaTerms,
+  acceptTermsAndPrivacy,
   getMe,
-  updateProfile,
-  submitKYC,
-  changePassword,
-  forgotPassword,
-  verifyEmail,
-  resendVerificationEmail
+  checkKYCStatus,
+  // Rivenapp pattern endpoints
+  requestPasswordReset,
+  resetPassword,
+  getCurrentUser,
+  // Account management
+  deleteAccount,
+  recoverAccount,
+  // V2 signup flow
+  registerV2,
+  verifyEmailV2,
+  resendVerificationV2
 };

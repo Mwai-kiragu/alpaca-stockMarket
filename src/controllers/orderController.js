@@ -1,62 +1,256 @@
-const { Order, User, Wallet, Transaction } = require('../models');
+const { Order, User, Wallet, Transaction, MsOrder, DemoOrder } = require('../models');
 const alpacaService = require('../services/alpacaService');
+const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
 const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
 
+const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
+const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
+
+const { ensureMyStocksSubAccount } = require('../utils/ensureMyStocksAccount');
+
 const createOrder = async (req, res) => {
   try {
-    const { symbol, side, orderType, quantity, limitPrice, stopPrice, timeInForce, currency } = req.body;
+    const { symbol, side, type: orderType, qty: quantity, limit_price: limitPrice, stop_price: stopPrice, time_in_force: timeInForce, currency = 'USD', exchange } = req.body;
 
-    // Get user and wallet
     const user = await User.findByPk(req.user.id);
-    const wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
 
-    if (!wallet) {
+    // African exchange → MyStocks trade (or paper trade in demo mode)
+    if (isAfrican(exchange)) {
+      const tradeType = (side || orderType || '').toUpperCase();
+      if (!['BUY', 'SELL'].includes(tradeType)) {
+        return res.status(400).json({ success: false, message: 'side must be BUY or SELL for African exchanges' });
+      }
+      const qty = parseFloat(quantity);
+      if (!qty || qty <= 0) return res.status(400).json({ success: false, message: 'qty must be a positive number' });
+      const msSymbol = symbol.toUpperCase();
+
+      // Demo mode: execute as paper trade using demo balance
+      const isDemo = user?.account_mode === 'demo' || process.env.NODE_ENV === 'development';
+      if (isDemo) {
+        const demoBalance = parseFloat(user?.demo_balance || 0);
+        const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+        let currentPrice = 0;
+        let stockCurrency = 'KES';
+        let priceError = null;
+        try {
+          const ticker = msSymbol.includes('.') ? msSymbol.split('.')[0] : msSymbol;
+          const snap = await ms.getStocks({ search: ticker });
+          const stocks = Array.isArray(snap) ? snap : (snap?.stocks || []);
+          const stock = stocks.find(s => s.symbol?.toUpperCase() === msSymbol) || stocks[0];
+          currentPrice = parseFloat(stock?.usdPrice || (stock?.price ? stock.price / exchangeRate : 0) || 0);
+          stockCurrency = stock?.currency || 'KES';
+        } catch (err) {
+          const status = err?.response?.status;
+          if (status === 503 || status === 502 || status === 504) {
+            priceError = 'Market data is temporarily unavailable. Please try again in a moment.';
+          } else if (err.message?.includes('timeout')) {
+            priceError = 'Market data request timed out. Please try again.';
+          } else {
+            priceError = 'Unable to fetch current price for this stock.';
+          }
+        }
+        if (!currentPrice || currentPrice <= 0) {
+          return res.status(503).json({ success: false, message: priceError || 'Unable to fetch current price for this stock.' });
+        }
+        const gross = Math.round(qty * currentPrice * 100) / 100;
+        const fee = Math.round(gross * 0.01 * 100) / 100;
+        if (tradeType === 'BUY') {
+          const totalCost = gross + fee;
+          if (demoBalance < totalCost) {
+            return res.status(400).json({ success: false, message: 'Insufficient demo balance', available: parseFloat(demoBalance.toFixed(2)), required: parseFloat(totalCost.toFixed(2)) });
+          }
+          const newBalance = Math.round((demoBalance - totalCost) * 100) / 100;
+          await DemoOrder.create({ user_id: req.user.id, symbol: msSymbol, side: 'BUY', quantity: qty, price_usd: currentPrice, gross_usd: gross, fee_usd: fee, total_cost_usd: totalCost, currency: stockCurrency, exchange: exchange.toUpperCase(), balance_after: newBalance, status: 'FILLED', filled_at: new Date() });
+          await user.update({ demo_balance: newBalance });
+          return res.status(201).json({ success: true, provider: 'demo', order: { symbol: msSymbol, side: 'BUY', quantity: qty, price: currentPrice, gross, fee, totalCost, balanceAfter: newBalance } });
+        } else {
+          const existingOrders = await DemoOrder.findAll({ where: { user_id: req.user.id, symbol: msSymbol } });
+          let netQty = 0;
+          for (const o of existingOrders) { if (o.side === 'BUY') netQty += parseFloat(o.quantity); else netQty -= parseFloat(o.quantity); }
+          if (netQty < qty) return res.status(400).json({ success: false, message: 'Insufficient shares', available: parseFloat(netQty.toFixed(6)), required: qty });
+          const proceeds = Math.round((gross - fee) * 100) / 100;
+          const newBalance = Math.round((demoBalance + proceeds) * 100) / 100;
+          await DemoOrder.create({ user_id: req.user.id, symbol: msSymbol, side: 'SELL', quantity: qty, price_usd: currentPrice, gross_usd: gross, fee_usd: fee, total_cost_usd: proceeds, currency: stockCurrency, exchange: exchange.toUpperCase(), balance_after: newBalance, status: 'FILLED', filled_at: new Date() });
+          await user.update({ demo_balance: newBalance });
+          return res.status(201).json({ success: true, provider: 'demo', order: { symbol: msSymbol, side: 'SELL', quantity: qty, price: currentPrice, gross, fee, proceeds, balanceAfter: newBalance } });
+        }
+      }
+
+      const subAccountId = await ensureMyStocksSubAccount(req.user.id);
+      const data = await ms.placeTrade(subAccountId, { symbol: msSymbol, type: tradeType, quantity: qty });
+      await MsOrder.create({
+        user_id: req.user.id,
+        order_id: data?.orderId || null,
+        symbol: msSymbol,
+        side: tradeType,
+        quantity: qty,
+        local_price: data?.localPrice || null,
+        usd_price: data?.usdPrice || null,
+        gross_usd: data?.gross || null,
+        fee_usd: data?.fee || null,
+        total_cost_usd: data?.totalCost || null,
+        currency: data?.currency || 'KES',
+        status: data?.status || 'FILLED',
+        exchange: exchange?.toUpperCase() || 'NSE',
+        wallet_balance_after: data?.newWalletBalance || null,
+        filled_at: new Date()
+      });
+      if (data?.newWalletBalance != null) {
+        const [updated] = await User.update(
+          { mystocks_wallet_balance: data.newWalletBalance },
+          { where: { id: req.user.id } }
+        );
+        logger.info(`MyStocks wallet balance updated for user ${req.user.id}: ${data.newWalletBalance} (rows updated: ${updated})`);
+      }
+      return res.status(202).json({ success: true, provider: 'mystocks', data });
+    }
+
+    if (!user || !user.alpaca_account_id) {
       return res.status(404).json({
         success: false,
-        message: 'Wallet not found'
+        message: 'No trading account found. Complete onboarding to start trading.'
       });
     }
 
+    // Get Alpaca account to check available cash
+    const alpacaAccount = await alpacaService.getAccount(user.alpaca_account_id);
+    const alpacaCashOnly = parseFloat(alpacaAccount.cash || 0);
+
+    // Get local wallet balance to combine with Alpaca cash
+    let wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
+    if (!wallet) {
+      wallet = { kes_balance: 0, usd_balance: 0, frozen_kes: 0, frozen_usd: 0 };
+    }
+    const localUsdBalance = parseFloat(wallet.usd_balance) || 0;
+    const localKesBalance = parseFloat(wallet.kes_balance) || 0;
+
+    // Get exchange rate for KES to USD conversion
+    const kesExchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+    const localCashUsd = localUsdBalance + (localKesBalance / kesExchangeRate);
+
+    // Combined available cash = Alpaca cash + Local wallet (matching portfolio calculation)
+    const alpacaCash = alpacaCashOnly + localCashUsd;
+
     // Get current stock price for order value calculation
     const quote = await alpacaService.getLatestQuote(symbol);
-    const estimatedPrice = limitPrice || quote.ap || quote.bp; // Ask/Bid price fallback
-    const orderValue = quantity * estimatedPrice;
 
-    let finalOrderValue = orderValue;
-    let exchangeRate = 1;
-    let requiredBalance;
-    let walletCurrency;
+    // Validate and parse prices
+    let estimatedPrice = 0;
+    if (limitPrice) {
+      estimatedPrice = parseFloat(limitPrice);
+    } else if (quote.ap) {
+      estimatedPrice = parseFloat(quote.ap);
+    } else if (quote.bp) {
+      estimatedPrice = parseFloat(quote.bp);
+    }
 
-    // Handle currency conversion if needed
-    if (currency === 'KES') {
-      // Convert KES to USD for Alpaca
-      const conversion = await exchangeService.convertKEStoUSD(orderValue);
-      finalOrderValue = conversion.finalAmount;
-      exchangeRate = conversion.rate;
-      requiredBalance = orderValue;
-      walletCurrency = 'KES';
+    // Validate estimated price
+    if (!estimatedPrice || isNaN(estimatedPrice) || estimatedPrice <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unable to determine stock price. Please try again or use a limit order.',
+        error: 'Price unavailable'
+      });
+    }
 
-      // Check KES balance
-      if (side === 'buy' && wallet.availableKes < requiredBalance) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient KES balance. Required: ${requiredBalance}, Available: ${wallet.availableKes}`
-        });
-      }
-    } else {
-      // USD order
-      requiredBalance = orderValue;
-      walletCurrency = 'USD';
+    const parsedQuantity = parseFloat(quantity);
+    if (!parsedQuantity || isNaN(parsedQuantity) || parsedQuantity <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid quantity',
+        error: 'Quantity must be a positive number'
+      });
+    }
 
-      // Check USD balance
-      if (side === 'buy' && wallet.availableUsd < requiredBalance) {
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient USD balance. Required: ${requiredBalance}, Available: ${wallet.availableUsd}`
-        });
-      }
+    const orderValue = parsedQuantity * estimatedPrice;
+
+    // Broker limitation: minimum order value is $1
+    const MIN_ORDER_VALUE_USD = 1;
+    if (orderValue < MIN_ORDER_VALUE_USD) {
+      const minQuantity = Math.ceil((MIN_ORDER_VALUE_USD / estimatedPrice) * 10000) / 10000;
+      return res.status(400).json({
+        success: false,
+        message: 'Order value is below the minimum required',
+        error: {
+          type: 'minimum_order_value',
+          orderValue: `$${orderValue.toFixed(4)}`,
+          minimumRequired: `$${MIN_ORDER_VALUE_USD}`,
+          currentPrice: `$${estimatedPrice.toFixed(2)}`,
+          currentQuantity: parsedQuantity,
+          minimumQuantity: minQuantity,
+          suggestion: `Increase quantity to at least ${minQuantity} shares to meet the $${MIN_ORDER_VALUE_USD} minimum order value`
+        }
+      });
+    }
+
+    // Calculate commission (1% of order value in USD)
+    const COMMISSION_RATE = 0.01;
+    const commissionUsd = orderValue * COMMISSION_RATE;
+    const totalCostUsd = orderValue + commissionUsd;
+
+    // Reuse exchange rate from above (kesExchangeRate)
+    const exchangeRate = kesExchangeRate;
+
+    // Calculate values in KES for display
+    const orderValueKes = orderValue * exchangeRate;
+    const commissionKes = commissionUsd * exchangeRate;
+    const totalCostKes = totalCostUsd * exchangeRate;
+
+    // Check Alpaca buying power (all orders execute in USD on Alpaca)
+    if (side === 'buy' && alpacaCash < totalCostUsd) {
+      const shortfall = totalCostUsd - alpacaCash;
+      return res.status(400).json({
+        success: false,
+        message: 'Insufficient funds to place this order',
+        error: {
+          type: 'insufficient_funds',
+          currency: 'USD',
+          required: `$${totalCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          available: `$${alpacaCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          shortfall: `$${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          suggestions: [
+            `Deposit at least $${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} to complete this order`,
+            'Try a smaller order amount'
+          ]
+        }
+        // Old detailed response format (commented out):
+        // error: {
+        //   type: 'insufficient_funds',
+        //   required: {
+        //     usd: `$${totalCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        //     kes: `KES ${totalCostKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        //   },
+        //   available: {
+        //     usd: `$${alpacaCash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        //     kes: `KES ${(alpacaCash * exchangeRate).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        //   },
+        //   shortfall: {
+        //     usd: `$${shortfall.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        //     kes: `KES ${(shortfall * exchangeRate).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        //   },
+        //   breakdown: {
+        //     stockValue: {
+        //       usd: `$${orderValue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        //       kes: `KES ${orderValueKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        //     },
+        //     commission: {
+        //       usd: `$${commissionUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`,
+        //       kes: `KES ${commissionKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (1%)`
+        //     },
+        //     total: {
+        //       usd: `$${totalCostUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+        //       kes: `KES ${totalCostKes.toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        //     }
+        //   },
+        //   suggestions: [
+        //     'Deposit more funds to your trading account',
+        //     'Reduce the order quantity',
+        //     'Use a limit order for better price control'
+        //   ]
+        // }
+      });
     }
 
     // Create order in database first
@@ -65,39 +259,47 @@ const createOrder = async (req, res) => {
       symbol: symbol.toUpperCase(),
       side,
       order_type: orderType,
-      quantity,
-      limit_price: limitPrice,
-      stop_price: stopPrice,
+      quantity: parsedQuantity,
+      limit_price: limitPrice ? parseFloat(limitPrice) : null,
+      stop_price: stopPrice ? parseFloat(stopPrice) : null,
       time_in_force: timeInForce || 'day',
       order_value: orderValue,
-      currency,
+      currency: 'USD', // All orders execute in USD on Alpaca
       exchange_rate: exchangeRate,
       status: 'pending',
+      fees: {
+        commission: {
+          rate: COMMISSION_RATE,
+          percentage: '1%',
+          amountUsd: commissionUsd,
+          amountKes: commissionKes
+        },
+        totalCostUsd: totalCostUsd,
+        totalCostKes: totalCostKes,
+        stockValueUsd: orderValue,
+        stockValueKes: orderValueKes
+      },
       metadata: {
-        client_order_id: `ORDER_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        client_order_id: `ORDER_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
         estimated_price: estimatedPrice,
-        wallet_currency: walletCurrency
+        display_currency: currency // What currency user selected for display
       }
     });
 
     try {
-      // Freeze funds for buy orders
-      if (side === 'buy') {
-        await wallet.freezeFunds(requiredBalance, walletCurrency);
-      }
 
       // Prepare Alpaca order
       const alpacaOrderData = {
         symbol: symbol.toUpperCase(),
         side,
         orderType,
-        quantity,
+        quantity: parsedQuantity,
         timeInForce: timeInForce || 'day',
         clientOrderId: order.metadata.client_order_id
       };
 
-      if (limitPrice) alpacaOrderData.limitPrice = limitPrice;
-      if (stopPrice) alpacaOrderData.stopPrice = stopPrice;
+      if (limitPrice) alpacaOrderData.limitPrice = parseFloat(limitPrice);
+      if (stopPrice) alpacaOrderData.stopPrice = parseFloat(stopPrice);
 
       // Place order with Alpaca
       const alpacaOrder = await alpacaService.createOrder(alpacaOrderData);
@@ -141,16 +343,27 @@ const createOrder = async (req, res) => {
           orderValue: order.order_value,
           currency: order.currency,
           exchangeRate: order.exchange_rate,
+          fees: order.fees,
           createdAt: order.createdAt
+        },
+        costBreakdown: {
+          stockValue: {
+            usd: order.fees.stockValueUsd,
+            kes: order.fees.stockValueKes
+          },
+          commission: {
+            usd: order.fees.commission.amountUsd,
+            kes: order.fees.commission.amountKes,
+            rate: order.fees.commission.percentage
+          },
+          totalCost: {
+            usd: order.fees.totalCostUsd,
+            kes: order.fees.totalCostKes
+          }
         }
       });
 
     } catch (alpacaError) {
-      // Unfreeze funds if Alpaca order failed
-      if (side === 'buy') {
-        await wallet.unfreezeFunds(requiredBalance, walletCurrency);
-      }
-
       // Update order status to failed
       await order.update({
         status: 'rejected',
@@ -167,21 +380,32 @@ const createOrder = async (req, res) => {
     }
 
   } catch (error) {
-    logger.error('Create order error:', error);
-    res.status(500).json({
+    logger.error('Create order error:', error.message);
+    const msMessage = error.response?.data?.error || error.response?.data?.message;
+    const status = error.response?.status || 500;
+    res.status(status).json({
       success: false,
-      message: 'Server error during order creation'
+      message: msMessage || error.message || 'Server error during order creation'
     });
   }
 };
 
 const getOrders = async (req, res) => {
   try {
-    const { page = 1, limit = 20, status, symbol, side } = req.query;
+    const { page = 1, limit = 20, status, symbol, side, exchange } = req.query;
+
+    // African exchange → MyStocks orders
+    if (isAfrican(exchange)) {
+      const subAccountId = await ensureMyStocksSubAccount(req.user.id);
+      const data = await ms.getOrders(subAccountId, { symbol, status, page, limit });
+      return res.json({ success: true, provider: 'mystocks', data });
+    }
+
     const offset = (page - 1) * limit;
 
     const whereClause = { user_id: req.user.id };
-    if (status) whereClause.status = status;
+    // Only add status filter if it's not "all"
+    if (status && status.toLowerCase() !== 'all') whereClause.status = status;
     if (symbol) whereClause.symbol = symbol.toUpperCase();
     if (side) whereClause.side = side;
 
@@ -198,6 +422,7 @@ const getOrders = async (req, res) => {
         id: order.id,
         alpacaOrderId: order.alpaca_order_id,
         symbol: order.symbol,
+        logo: alpacaService.getCompanyLogo(order.symbol),
         side: order.side,
         orderType: order.order_type,
         quantity: order.quantity,
@@ -265,6 +490,7 @@ const getOrder = async (req, res) => {
         id: order.id,
         alpacaOrderId: order.alpaca_order_id,
         symbol: order.symbol,
+        logo: alpacaService.getCompanyLogo(order.symbol),
         side: order.side,
         orderType: order.order_type,
         quantity: order.quantity,
@@ -405,59 +631,74 @@ const syncOrdersWithAlpaca = async (req, res) => {
 };
 
 // Helper function to handle order fills
+// Note: Balance is managed by Alpaca directly, we just track transactions for records
 const handleOrderFill = async (order) => {
   try {
-    const wallet = await Wallet.findOne({ where: { user_id: order.user_id } });
     const user = await User.findByPk(order.user_id);
+    const wallet = await Wallet.findOne({ where: { user_id: order.user_id } });
 
-    if (order.side === 'buy') {
-      // Unfreeze any remaining funds
-      const remainingFrozen = order.order_value - (order.filled_quantity * order.average_price);
-      if (remainingFrozen > 0) {
-        await wallet.unfreezeFunds(remainingFrozen, order.currency);
+    // Get commission from order fees (in USD)
+    const commissionUsd = order.fees?.commission?.amountUsd || 0;
+    const actualStockCost = order.filled_quantity * order.average_price;
+
+    // Create transaction record for the trade (for tracking purposes)
+    if (wallet) {
+      await Transaction.create({
+        wallet_id: wallet.id,
+        type: order.side === 'buy' ? 'trade_buy' : 'trade_sell',
+        amount: order.side === 'buy' ? -actualStockCost : actualStockCost,
+        currency: 'USD',
+        status: 'completed',
+        reference: `ORDER_${order.id}`,
+        alpaca_order_id: order.alpaca_order_id,
+        exchange_rate: order.exchange_rate,
+        description: `${order.side.toUpperCase()} ${order.filled_quantity} ${order.symbol} @ $${order.average_price}`,
+        metadata: {
+          symbol: order.symbol,
+          quantity: order.filled_quantity,
+          price: order.average_price,
+          order_id: order.id
+        }
+      });
+
+      // Create separate transaction record for commission (platform revenue)
+      if (commissionUsd > 0) {
+        await Transaction.create({
+          wallet_id: wallet.id,
+          type: 'fee',
+          amount: -commissionUsd,
+          currency: 'USD',
+          status: 'completed',
+          reference: `FEE_${order.id}`,
+          exchange_rate: order.exchange_rate,
+          description: `Platform commission (1%) for ${order.side.toUpperCase()} ${order.symbol}`,
+          metadata: {
+            order_id: order.id,
+            symbol: order.symbol,
+            fee_type: 'commission',
+            commission_rate: '1%',
+            stock_value: actualStockCost,
+            commission_amount_usd: commissionUsd
+          }
+        });
+
+        logger.info(`Commission collected for order ${order.id}: $${commissionUsd.toFixed(2)}`);
       }
-
-      // Deduct the actual filled amount
-      const actualCost = order.filled_quantity * order.average_price;
-      await wallet.updateBalance(actualCost, order.currency, 'subtract');
-
-    } else if (order.side === 'sell') {
-      // Credit the sale proceeds
-      const saleProceeds = order.filled_quantity * order.average_price;
-      await wallet.updateBalance(saleProceeds, order.currency, 'add');
     }
-
-    // Create transaction record
-    await Transaction.create({
-      wallet_id: wallet.id,
-      type: order.side === 'buy' ? 'trade_buy' : 'trade_sell',
-      amount: order.side === 'buy' ? -order.filled_quantity * order.average_price : order.filled_quantity * order.average_price,
-      currency: order.currency,
-      status: 'completed',
-      reference: `ORDER_${order.id}`,
-      alpaca_order_id: order.alpaca_order_id,
-      exchange_rate: order.exchange_rate,
-      description: `${order.side.toUpperCase()} ${order.filled_quantity} ${order.symbol} @ ${order.average_price}`,
-      metadata: {
-        symbol: order.symbol,
-        quantity: order.filled_quantity,
-        price: order.average_price,
-        order_id: order.id
-      }
-    });
 
     // Send notification email
     try {
       await emailService.sendTransactionEmail(user, {
         type: 'order_filled',
-        amount: order.filled_quantity * order.average_price,
-        currency: order.currency,
+        amount: actualStockCost,
+        currency: 'USD',
         status: 'completed',
         reference: order.id,
         metadata: {
           symbol: order.symbol,
           quantity: order.filled_quantity,
-          price: order.average_price
+          price: order.average_price,
+          commission: commissionUsd
         }
       });
     } catch (emailError) {

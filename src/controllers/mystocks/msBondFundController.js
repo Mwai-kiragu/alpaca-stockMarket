@@ -1,0 +1,127 @@
+const ms = require('../../services/mystocksService');
+const { User } = require('../../models');
+const logger = require('../../utils/logger');
+
+const { ensureMyStocksSubAccount: getSubAccountId } = require('../../utils/ensureMyStocksAccount');
+
+const listBonds = async (req, res) => {
+  try {
+    const { type, currency, exchange } = req.query;
+    const data = await ms.getBonds({ type, currency, exchange });
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('MS listBonds error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch bonds' });
+  }
+};
+
+const getBond = async (req, res) => {
+  try {
+    const data = await ms.getBond(req.params.bondId);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('MS getBond error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch bond' });
+  }
+};
+
+const subscribeToBond = async (req, res) => {
+  try {
+    const subAccountId = await getSubAccountId(req.user.id);
+    const { bondId, units } = req.body;
+    if (!bondId || !units) {
+      return res.status(400).json({ success: false, message: 'bondId and units are required' });
+    }
+    const data = await ms.subscribeToBond(subAccountId, { bondId, units: Number(units) });
+    res.status(202).json({ success: true, data });
+  } catch (error) {
+    logger.error('MS subscribeToBond error:', error.message);
+    const status = error.message.includes('sub-account') ? 400 : 500;
+    res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+const listFunds = async (req, res) => {
+  try {
+    const { category, currency } = req.query;
+    const data = await ms.getFunds({ category, currency });
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('MS listFunds error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch funds' });
+  }
+};
+
+const getFund = async (req, res) => {
+  try {
+    const data = await ms.getFund(req.params.fundId);
+    res.json({ success: true, data });
+  } catch (error) {
+    logger.error('MS getFund error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch fund' });
+  }
+};
+
+const subscribeToFund = async (req, res) => {
+  try {
+    const subAccountId = await getSubAccountId(req.user.id);
+    const { fundId, units } = req.body;
+    if (!fundId || !units) {
+      return res.status(400).json({ success: false, message: 'fundId and units are required' });
+    }
+    const data = await ms.subscribeToFund(subAccountId, { fundId, units: Number(units) });
+    res.status(202).json({ success: true, data });
+  } catch (error) {
+    logger.error('MS subscribeToFund error:', error.message);
+    const status = error.message.includes('sub-account') ? 400 : 500;
+    res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+const redeemFund = async (req, res) => {
+  try {
+    const subAccountId = await getSubAccountId(req.user.id);
+    const { holdingId, units } = req.body;
+    if (!holdingId || !units) {
+      return res.status(400).json({ success: false, message: 'holdingId and units are required' });
+    }
+    const data = await ms.redeemFund(subAccountId, { holdingId, units: Number(units) });
+    res.status(202).json({ success: true, data });
+  } catch (error) {
+    logger.error('MS redeemFund error:', error.message);
+    const status = error.message.includes('sub-account') ? 400 : 500;
+    res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+const listMarketIntel = async (req, res) => {
+  try {
+    const { symbol, exchange, page = 1, limit = 20 } = req.query;
+    const data = await ms.getMarketIntel({ symbol, exchange, page: parseInt(page), limit: parseInt(limit) });
+    const items = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : (Array.isArray(data?.items) ? data.items : []));
+    res.json({
+      success: true,
+      provider: 'mystocks',
+      news: items,
+      count: items.length,
+      total: data?.total || data?.count || items.length,
+      page: parseInt(page),
+      limit: parseInt(limit)
+    });
+  } catch (error) {
+    logger.error('MS listMarketIntel error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch market intelligence feed' });
+  }
+};
+
+const getMarketIntelArticle = async (req, res) => {
+  try {
+    const data = await ms.getMarketIntelArticle(req.params.idOrSlug);
+    res.json({ success: true, provider: 'mystocks', article: data });
+  } catch (error) {
+    logger.error('MS getMarketIntelArticle error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch article' });
+  }
+};
+
+module.exports = { listBonds, getBond, subscribeToBond, listFunds, getFund, subscribeToFund, redeemFund, listMarketIntel, getMarketIntelArticle };

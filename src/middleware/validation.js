@@ -1,5 +1,12 @@
 const { body, param, query, validationResult } = require('express-validator');
 
+const AFRICAN_EXCHANGES_V = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
+const isAfricanBodyReq = (req) => {
+  const exchange = req.body?.exchange?.trim()?.toUpperCase();
+  const symbol = req.body?.symbol || '';
+  return (exchange && AFRICAN_EXCHANGES_V.has(exchange)) || /\.[A-Z]{2,3}$/i.test(symbol);
+};
+
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -12,34 +19,160 @@ const handleValidationErrors = (req, res, next) => {
   next();
 };
 
+// Kenya's 47 counties for validation
+const KENYA_COUNTIES = [
+  'Baringo County', 'Bomet County', 'Bungoma County', 'Busia County', 'Elgeyo-Marakwet County',
+  'Embu County', 'Garissa County', 'Homa Bay County', 'Isiolo County', 'Kajiado County',
+  'Kakamega County', 'Kericho County', 'Kiambu County', 'Kilifi County', 'Kirinyaga County',
+  'Kisii County', 'Kisumu County', 'Kitui County', 'Kwale County', 'Laikipia County',
+  'Lamu County', 'Machakos County', 'Makueni County', 'Mandera County', 'Marsabit County',
+  'Meru County', 'Migori County', 'Mombasa County', 'Murang\'a County', 'Nairobi County',
+  'Nakuru County', 'Nandi County', 'Narok County', 'Nyamira County', 'Nyandarua County',
+  'Nyeri County', 'Samburu County', 'Siaya County', 'Taita-Taveta County', 'Tana River County',
+  'Tharaka-Nithi County', 'Trans-Nzoia County', 'Turkana County', 'Uasin Gishu County',
+  'Vihiga County', 'Wajir County', 'West Pokot County'
+];
+
+// Major cities in Kenya for validation
+const KENYA_CITIES = [
+  'Nairobi', 'Mombasa', 'Kisumu', 'Nakuru', 'Eldoret', 'Thika', 'Malindi', 'Kitale',
+  'Garissa', 'Kakamega', 'Nyeri', 'Meru', 'Embu', 'Machakos', 'Kericho', 'Bomet',
+  'Homa Bay', 'Bungoma', 'Narok', 'Voi', 'Kilifi', 'Lamu', 'Isiolo', 'Nanyuki',
+  'Chuka', 'Wajir', 'Mandera', 'Marsabit', 'Moyale', 'Lodwar', 'Kapenguria', 'Kisii',
+  'Kerugoya', 'Murang\'a', 'Kiambu', 'Limuru', 'Ruiru'
+];
+
+// Flexible international address validation
+const validateInternationalAddress = (value) => {
+  if (!value || typeof value !== 'object') {
+    throw new Error('Address must be a valid object');
+  }
+
+  const { street, city, state, country, zipCode } = value;
+
+  // Required fields - basic validation only
+  if (!street || street.trim().length === 0) {
+    throw new Error('Street address is required');
+  }
+
+  if (!city || city.trim().length === 0) {
+    throw new Error('City is required');
+  }
+
+  if (!state || state.trim().length === 0) {
+    throw new Error('State/Province/County is required');
+  }
+
+  if (!country || country.trim().length === 0) {
+    throw new Error('Country is required');
+  }
+
+  // Optional: Validate postal code format based on country
+  if (zipCode) {
+    const countryLower = country.toLowerCase();
+
+    // Only validate postal codes for countries where we know the format
+    if (countryLower === 'kenya' && !/^\d{5}$/.test(zipCode)) {
+      throw new Error('Kenyan postal code should be 5 digits');
+    } else if (countryLower === 'usa' && !/^\d{5}(-\d{4})?$/.test(zipCode)) {
+      throw new Error('US zip code should be 5 digits or 5+4 format');
+    } else if (countryLower === 'uk' && !/^[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}$/i.test(zipCode)) {
+      throw new Error('UK postal code format is invalid');
+    }
+    // For other countries, accept any postal code format
+  }
+
+  // Validate that county is in the correct format for Kenya (helpful but not required)
+  if (country.toLowerCase() === 'kenya') {
+    const isValidCounty = KENYA_COUNTIES.some(county =>
+      county.toLowerCase() === state.toLowerCase()
+    );
+
+    if (!isValidCounty && !state.toLowerCase().includes('county')) {
+      console.log(`Note: ${state} doesn't match known Kenyan counties. Consider using format: "${state} County"`);
+    }
+  }
+
+  return true;
+};
+
 const registerValidation = [
-  body('firstName')
+  body('fullName')
     .trim()
     .isLength({ min: 2 })
-    .withMessage('First name must be at least 2 characters'),
-  body('lastName')
-    .trim()
-    .isLength({ min: 2 })
-    .withMessage('Last name must be at least 2 characters'),
+    .withMessage('Full name must be at least 2 characters'),
   body('email')
-    .isEmail()
-    .normalizeEmail()
+    .custom((value) => {
+      // Enhanced email validation to support Gmail aliases and testing
+      if (!value || value.trim().length === 0) {
+        throw new Error('Email is required');
+      }
+
+      // Gmail alias pattern: allows + symbol before @gmail.com
+      // Examples: user+tag@gmail.com, test+123@gmail.com
+      const gmailAliasRegex = /^[a-zA-Z0-9._%+-]+\+[a-zA-Z0-9._%-]*@gmail\.com$/;
+
+      // Standard email pattern (supports most valid emails)
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+      // Test email pattern for development
+      const testEmailRegex = /^[a-zA-Z0-9._%+-]+@test\.com$/;
+
+      if (gmailAliasRegex.test(value) || emailRegex.test(value) || testEmailRegex.test(value)) {
+        return true;
+      }
+
+      throw new Error('Please enter a valid email address');
+    })
     .withMessage('Valid email is required'),
-  body('phone')
+  body('phoneNumber')
     .isMobilePhone('any')
     .withMessage('Valid phone number is required'),
   body('password')
     .isLength({ min: 6 })
     .withMessage('Password must be at least 6 characters')
-    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
-    .withMessage('Password must contain at least one uppercase letter, one lowercase letter, and one number'),
+    .custom((value) => {
+      // More lenient password validation for testing
+      if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'testing') {
+        // In development, just require minimum length
+        return value && value.length >= 6;
+      }
+
+      // In production, enforce strong password
+      const strongPasswordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/;
+      if (!strongPasswordRegex.test(value)) {
+        throw new Error('Password must contain at least one uppercase letter, one lowercase letter, and one number');
+      }
+
+      return true;
+    }),
   handleValidationErrors
 ];
 
 const loginValidation = [
   body('email')
-    .isEmail()
-    .normalizeEmail()
+    .custom((value) => {
+      // Enhanced email validation to support Gmail aliases and testing
+      if (!value || value.trim().length === 0) {
+        throw new Error('Email is required');
+      }
+
+      // Gmail alias pattern: allows + symbol before @gmail.com
+      // Examples: user+tag@gmail.com, test+123@gmail.com
+      const gmailAliasRegex = /^[a-zA-Z0-9._%+-]+\+[a-zA-Z0-9._%-]*@gmail\.com$/;
+
+      // Standard email pattern (supports most valid emails)
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+      // Test email pattern for development
+      const testEmailRegex = /^[a-zA-Z0-9._%+-]+@test\.com$/;
+
+      if (gmailAliasRegex.test(value) || emailRegex.test(value) || testEmailRegex.test(value)) {
+        return true;
+      }
+
+      throw new Error('Please enter a valid email address');
+    })
     .withMessage('Valid email is required'),
   body('password')
     .notEmpty()
@@ -53,25 +186,37 @@ const orderValidation = [
     .toUpperCase()
     .withMessage('Stock symbol is required'),
   body('side')
+    .customSanitizer(v => v?.toLowerCase())
     .isIn(['buy', 'sell'])
     .withMessage('Side must be buy or sell'),
-  body('orderType')
+  body('type')
+    .if((_value, { req }) => !isAfricanBodyReq(req))
     .isIn(['market', 'limit', 'stop', 'stop_limit'])
     .withMessage('Invalid order type'),
-  body('quantity')
+  body('qty')
+    .isFloat({ min: 0.0001 })
+    .withMessage('Quantity must be at least 0.0001'),
+  body('time_in_force')
+    .if((_value, { req }) => !isAfricanBodyReq(req))
+    .isIn(['day', 'gtc', 'ioc', 'fok'])
+    .withMessage('Invalid time_in_force. Must be day, gtc, ioc, or fok'),
+  body('limit_price')
+    .optional()
     .isFloat({ min: 0.01 })
-    .withMessage('Quantity must be greater than 0'),
-  body('currency')
-    .isIn(['KES', 'USD'])
-    .withMessage('Currency must be KES or USD'),
+    .withMessage('Limit price must be greater than 0'),
+  body('stop_price')
+    .optional()
+    .isFloat({ min: 0.01 })
+    .withMessage('Stop price must be greater than 0'),
   handleValidationErrors
 ];
 
 const depositValidation = [
   body('amount')
-    .isFloat({ min: 1 })
-    .withMessage('Amount must be at least 1'),
+    .isFloat({ min: 10 })
+    .withMessage('Minimum deposit amount is KES 10'),
   body('currency')
+    .optional()
     .isIn(['KES'])
     .withMessage('Only KES deposits supported'),
   body('phone')
@@ -124,6 +269,14 @@ const supportTicketValidation = [
   handleValidationErrors
 ];
 
+// Personal details validation - simplified format
+const personalDetailsValidation = [
+  body('city').trim().notEmpty().withMessage('City is required'),
+  body('postalCode').trim().notEmpty().withMessage('Postal code is required'),
+  body('streetAddress').trim().notEmpty().withMessage('Street address is required'),
+  handleValidationErrors
+];
+
 const paginationValidation = [
   query('page')
     .optional()
@@ -136,13 +289,148 @@ const paginationValidation = [
   handleValidationErrors
 ];
 
+const withdrawalValidation = [
+  body('amount')
+    .isFloat({ min: 1 })
+    .withMessage('Amount must be at least 1'),
+  body('currency')
+    .isIn(['KES', 'USD'])
+    .withMessage('Currency must be KES or USD'),
+  body('method')
+    .isIn(['mpesa', 'bank_transfer', 'paypal'])
+    .withMessage('Method must be mpesa, bank_transfer, or paypal'),
+  // For M-Pesa, phoneNumber can be provided directly
+  body('phoneNumber')
+    .optional()
+    .custom((value, { req }) => {
+      if (req.body.method === 'mpesa' && value) {
+        // Clean the phone number and validate
+        const cleanPhone = value.replace(/\D/g, '');
+        if (!/^(254|0)?[17]\d{8}$/.test(cleanPhone)) {
+          throw new Error('Invalid Kenyan phone number format');
+        }
+      }
+      return true;
+    }),
+  // accountDetails is optional for M-Pesa (can use phoneNumber directly)
+  body('accountDetails')
+    .optional()
+    .custom((value, { req }) => {
+      const method = req.body.method;
+
+      // For M-Pesa, check if phoneNumber is provided directly or in accountDetails
+      if (method === 'mpesa') {
+        const phone = req.body.phoneNumber || value?.phoneNumber;
+        if (!phone) {
+          throw new Error('Phone number is required for M-Pesa withdrawals');
+        }
+        const cleanPhone = phone.replace(/\D/g, '');
+        if (!/^(254|0)?[17]\d{8}$/.test(cleanPhone)) {
+          throw new Error('Invalid Kenyan phone number format');
+        }
+      } else if (method === 'bank_transfer') {
+        if (!value || !value.accountNumber || !value.bankName || !value.accountName) {
+          throw new Error('Account number, bank name, and account name are required for bank transfers');
+        }
+        if (req.body.currency === 'USD' && !value.swiftCode) {
+          throw new Error('SWIFT code is required for USD bank transfers');
+        }
+      } else if (method === 'paypal') {
+        if (!value || !value.email) {
+          throw new Error('PayPal email is required');
+        }
+        const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+        if (!emailRegex.test(value.email)) {
+          throw new Error('Invalid PayPal email format');
+        }
+      }
+
+      return true;
+    }),
+  // Custom validation to ensure required data is present
+  body()
+    .custom((value, { req }) => {
+      const { method, phoneNumber, accountDetails } = req.body;
+
+      if (method === 'mpesa') {
+        if (!phoneNumber && !accountDetails?.phoneNumber) {
+          throw new Error('Phone number is required for M-Pesa withdrawals');
+        }
+      } else if (method === 'bank_transfer') {
+        if (!accountDetails) {
+          throw new Error('Account details are required for bank transfers');
+        }
+      } else if (method === 'paypal') {
+        if (!accountDetails) {
+          throw new Error('Account details are required for PayPal withdrawals');
+        }
+      }
+      return true;
+    }),
+  handleValidationErrors
+];
+
+const emailValidator = [
+  body('email')
+    .custom((value) => {
+      if (!value || value.trim().length === 0) throw new Error('Email is required');
+      const gmailAliasRegex = /^[a-zA-Z0-9._%+-]+\+[a-zA-Z0-9._%-]*@gmail\.com$/;
+      const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+      const testEmailRegex = /^[a-zA-Z0-9._%+-]+@test\.com$/;
+      if (gmailAliasRegex.test(value) || emailRegex.test(value) || testEmailRegex.test(value)) return true;
+      throw new Error('Please enter a valid email address');
+    })
+];
+
+const registerV2Validation = [
+  body('fullName')
+    .trim()
+    .isLength({ min: 2 })
+    .withMessage('Full name must be at least 2 characters'),
+  ...emailValidator,
+  body('phoneNumber')
+    .isMobilePhone('any')
+    .withMessage('Valid phone number is required'),
+  body('password')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters')
+    .custom((value) => {
+      if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'testing') return true;
+      if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(value)) {
+        throw new Error('Password must contain at least one uppercase letter, one lowercase letter, and one number');
+      }
+      return true;
+    }),
+  body('citizenship')
+    .trim()
+    .notEmpty()
+    .withMessage('Citizenship is required'),
+  body('dateOfBirth')
+    .isISO8601()
+    .withMessage('Valid date of birth is required (YYYY-MM-DD)'),
+  body('gender')
+    .isIn(['male', 'female', 'other', 'Male', 'Female', 'Other'])
+    .withMessage('Gender must be male, female, or other'),
+  body('termsAccepted')
+    .custom((value) => {
+      if (value !== true) throw new Error('You must accept the Terms & Conditions to continue');
+      return true;
+    }),
+  handleValidationErrors
+];
+
 module.exports = {
   registerValidation,
+  registerV2Validation,
   loginValidation,
   orderValidation,
   depositValidation,
   kycValidation,
   supportTicketValidation,
+  personalDetailsValidation,
   paginationValidation,
-  handleValidationErrors
+  withdrawalValidation,
+  handleValidationErrors,
+  KENYA_COUNTIES, // Export for use in other parts of the app
+  KENYA_CITIES    // Export for use in other parts of the app
 };

@@ -31,6 +31,10 @@ EmailVerificationToken.init({
     allowNull: false,
     unique: true
   },
+  verification_code: {
+    type: DataTypes.STRING(10),
+    allowNull: true
+  },
   expires_at: {
     type: DataTypes.DATE,
     allowNull: false,

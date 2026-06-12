@@ -1,6 +1,9 @@
 const { Notification, User } = require('../models');
 const alpacaService = require('./alpacaService');
 const emailService = require('./emailService');
+const batchNotificationProcessor = require('./batchNotificationProcessor');
+const realtimeNotificationService = require('./realtimeNotificationService');
+const redisService = require('../config/redis');
 const logger = require('../utils/logger');
 
 class PriceAlertService {
@@ -114,12 +117,87 @@ class PriceAlertService {
   }
 
   async processTriggeredAlerts(triggeredAlerts) {
+    // Batch process alerts for efficiency
+    const alertsToSend = [];
+
     for (const { alert, currentPrice } of triggeredAlerts) {
       try {
-        await this.triggerAlert(alert, currentPrice);
+        const user = alert.User;
+        const { symbol, condition, targetPrice, assetName } = alert.metadata;
+
+        // Mark alert as triggered in database
+        await alert.update({
+          metadata: {
+            ...alert.metadata,
+            active: false,
+            triggeredAt: new Date().toISOString(),
+            triggerPrice: currentPrice
+          },
+          is_read: false
+        });
+
+        // Create triggered alert notification
+        await Notification.create({
+          user_id: user.id,
+          type: 'price_alert_triggered',
+          title: `Price Alert Triggered - ${symbol}`,
+          message: `${symbol} has ${condition.replace('_', ' ')} your target price of $${targetPrice}. Current price: $${currentPrice.toFixed(2)}`,
+          priority: 'high',
+          is_read: false,
+          metadata: {
+            symbol,
+            assetName,
+            condition,
+            targetPrice,
+            currentPrice,
+            originalAlertId: alert.id,
+            triggeredAt: new Date().toISOString()
+          },
+          action_url: `/stocks/${symbol}`
+        });
+
+        // Add to batch for real-time notification
+        alertsToSend.push({
+          userId: user.id,
+          symbol,
+          currentPrice,
+          targetPrice,
+          condition,
+          assetName
+        });
+
+        // Send email notification if enabled
+        const emailEnabled = user.notification_preferences?.email?.priceAlerts !== false;
+        if (emailEnabled) {
+          await emailService.sendNotificationEmail(user, {
+            type: 'price_alert_triggered',
+            title: `Price Alert Triggered - ${symbol}`,
+            data: {
+              symbol,
+              assetName,
+              condition,
+              targetPrice,
+              currentPrice
+            }
+          });
+        }
+
+        logger.info(`Price alert triggered for user ${user.id}:`, {
+          symbol,
+          condition,
+          targetPrice,
+          currentPrice,
+          alertId: alert.id
+        });
       } catch (error) {
         logger.error(`Error processing triggered alert ${alert.id}:`, error);
       }
+    }
+
+    // Send all alerts in batch
+    if (alertsToSend.length > 0) {
+      await batchNotificationProcessor.sendPriceAlerts(alertsToSend);
+      logger.info(`Batched ${alertsToSend.length} price alerts for processing`);
     }
   }
 

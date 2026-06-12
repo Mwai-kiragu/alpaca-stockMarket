@@ -158,6 +158,14 @@ Order.init({
   metadata: {
     type: DataTypes.JSONB,
     defaultValue: {}
+  },
+  flagged: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
+  },
+  flag_note: {
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 }, {
   sequelize,

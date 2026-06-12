@@ -1,9 +1,85 @@
-const { Wallet, Transaction, User } = require('../models');
-const mpesaService = require('../services/mpesaService');
+const { Wallet, Transaction } = require('../models/Wallet');
+const { User } = require('../models');
 const exchangeService = require('../services/exchangeService');
+const kcbService = require('../services/kcbService');
 const logger = require('../utils/logger');
+const { sequelize } = require('../config/database');
+const ms = require('../services/mystocksService');
+const { ensureMyStocksSubAccount } = require('../utils/ensureMyStocksAccount');
 
 const getWallet = async (req, res) => {
+  try {
+    let wallet = await Wallet.findOne({
+      where: { user_id: req.user.id }
+    });
+
+    if (!wallet) {
+      // Create a new wallet for the user
+      wallet = await Wallet.create({
+        user_id: req.user.id,
+        kes_balance: 0,
+        usd_balance: 0,
+        frozen_kes: 0,
+        frozen_usd: 0
+      });
+
+      logger.info(`Created new wallet for user ${req.user.id}`);
+    }
+
+    const [exchangeRate, user] = await Promise.all([
+      exchangeService.getExchangeRate('KES', 'USD'),
+      User.findByPk(req.user.id, { attributes: ['id', 'mystocks_sub_account_id', 'mystocks_wallet_balance', 'account_mode', 'demo_balance'] })
+    ]);
+
+    const kesBalance = parseFloat(wallet.kes_balance) || 0;
+    const usdBalance = parseFloat(wallet.usd_balance) || 0;
+    const frozenKes = parseFloat(wallet.frozen_kes) || 0;
+    const frozenUsd = parseFloat(wallet.frozen_usd) || 0;
+
+    // MyStocks balance — try live API first, fall back to last saved balance
+    let msUsdBalance = 0;
+    let msWalletData = null;
+    try {
+      const subAccountId = await ensureMyStocksSubAccount(req.user.id);
+      const msWallet = await ms.getWallet(subAccountId);
+      const apiBalance = parseFloat(msWallet?.wallet?.balance || msWallet?.balance || 0);
+      msUsdBalance = apiBalance > 0 ? apiBalance : parseFloat(user?.mystocks_wallet_balance || 0);
+      msWalletData = { ...msWallet, wallet: { ...(msWallet?.wallet || {}), balance: msUsdBalance } };
+    } catch (_) {
+      msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
+    }
+
+    const totalUsd = usdBalance + msUsdBalance;
+    const totalKes = kesBalance + (msUsdBalance / exchangeRate);
+
+    res.json({
+      success: true,
+      wallet: {
+        kesBalance: kesBalance.toFixed(2),
+        usdBalance: usdBalance.toFixed(2),
+        availableKes: (kesBalance - frozenKes).toFixed(2),
+        availableUsd: (usdBalance - frozenUsd).toFixed(2),
+        frozenKes: frozenKes.toFixed(2),
+        frozenUsd: frozenUsd.toFixed(2),
+        myStocksBalance: msUsdBalance.toFixed(2),
+        myStocksBalanceKes: (msUsdBalance / exchangeRate).toFixed(2),
+        totalValueKes: totalKes.toFixed(2),
+        totalValueUsd: totalUsd.toFixed(2),
+        exchangeRate,
+        myStocksWallet: msWalletData
+      }
+    });
+  } catch (error) {
+    logger.error('Get wallet error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// Unfreeze stuck funds (when withdrawals fail mid-process)
+const unfreezeWallet = async (req, res) => {
   try {
     const wallet = await Wallet.findOne({
       where: { user_id: req.user.id }
@@ -16,24 +92,44 @@ const getWallet = async (req, res) => {
       });
     }
 
-    const exchangeRate = await exchangeService.getExchangeRate('KES', 'USD');
+    const frozenKes = parseFloat(wallet.frozen_kes) || 0;
+    const frozenUsd = parseFloat(wallet.frozen_usd) || 0;
+
+    if (frozenKes === 0 && frozenUsd === 0) {
+      return res.json({
+        success: true,
+        message: 'No frozen funds to release',
+        wallet: {
+          kesBalance: wallet.kes_balance,
+          usdBalance: wallet.usd_balance,
+          frozenKes: wallet.frozen_kes,
+          frozenUsd: wallet.frozen_usd
+        }
+      });
+    }
+
+    // Unfreeze all funds
+    wallet.frozen_kes = 0;
+    wallet.frozen_usd = 0;
+    await wallet.save();
+
+    logger.info(`Unfroze wallet for user ${req.user.id}: KES ${frozenKes}, USD ${frozenUsd}`);
 
     res.json({
       success: true,
+      message: `Released KES ${frozenKes.toFixed(2)} and USD ${frozenUsd.toFixed(2)} from frozen status`,
       wallet: {
         kesBalance: wallet.kes_balance,
         usdBalance: wallet.usd_balance,
-        availableKes: wallet.availableKes,
-        availableUsd: wallet.availableUsd,
+        availableKes: wallet.kes_balance,
+        availableUsd: wallet.usd_balance,
         frozenKes: wallet.frozen_kes,
-        frozenUsd: wallet.frozen_usd,
-        totalValueKes: wallet.kes_balance + (wallet.usd_balance / exchangeRate),
-        totalValueUsd: wallet.usd_balance + (wallet.kes_balance * exchangeRate),
-        exchangeRate
+        frozenUsd: wallet.frozen_usd
       }
     });
+
   } catch (error) {
-    logger.error('Get wallet error:', error);
+    logger.error('Unfreeze wallet error:', error);
     res.status(500).json({
       success: false,
       message: 'Server error'
@@ -44,38 +140,40 @@ const getWallet = async (req, res) => {
 const getTransactions = async (req, res) => {
   try {
     const { page = 1, limit = 20, type, status } = req.query;
-    const wallet = await Wallet.findOne({ userId: req.user.id });
+    let wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
 
     if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: 'Wallet not found'
+      // Create a new wallet for the user
+      wallet = await Wallet.create({
+        user_id: req.user.id,
+        kes_balance: 0,
+        usd_balance: 0,
+        frozen_kes: 0,
+        frozen_usd: 0
       });
+      logger.info(`Created new wallet for user ${req.user.id} when fetching transactions`);
     }
 
-    let transactions = wallet.transactions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    const whereClause = { wallet_id: wallet.id };
+    if (type) whereClause.type = type;
+    if (status) whereClause.status = status;
 
-    if (type) {
-      transactions = transactions.filter(tx => tx.type === type);
-    }
-
-    if (status) {
-      transactions = transactions.filter(tx => tx.status === status);
-    }
-
-    const startIndex = (page - 1) * limit;
-    const endIndex = startIndex + parseInt(limit);
-    const paginatedTransactions = transactions.slice(startIndex, endIndex);
+    const { count, rows: paginatedTransactions } = await Transaction.findAndCountAll({
+      where: whereClause,
+      order: [['created_at', 'DESC']],
+      limit: parseInt(limit),
+      offset: (page - 1) * limit
+    });
 
     res.json({
       success: true,
       transactions: paginatedTransactions,
       pagination: {
         currentPage: parseInt(page),
-        totalPages: Math.ceil(transactions.length / limit),
-        totalTransactions: transactions.length,
-        hasNext: endIndex < transactions.length,
-        hasPrev: startIndex > 0
+        totalPages: Math.ceil(count / limit),
+        totalTransactions: count,
+        hasNext: (page * limit) < count,
+        hasPrev: page > 1
       }
     });
   } catch (error) {
@@ -98,42 +196,194 @@ const initiateDeposit = async (req, res) => {
       });
     }
 
-    const wallet = await Wallet.findOne({ userId: req.user.id });
+    let wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
     if (!wallet) {
-      return res.status(404).json({
-        success: false,
-        message: 'Wallet not found'
+      // Create a new wallet for the user
+      wallet = await Wallet.create({
+        user_id: req.user.id,
+        kes_balance: 0,
+        usd_balance: 0,
+        frozen_kes: 0,
+        frozen_usd: 0
       });
+      logger.info(`Created new wallet for user ${req.user.id} during deposit`);
     }
 
     const reference = `DEP_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    const transaction = {
+    // SANDBOX MODE: Check if we're in development and skip MPesa
+    const isSandboxMode = process.env.NODE_ENV === 'development' || !process.env.MPESA_CONSUMER_KEY || process.env.MPESA_STK_CALLBACK_URL?.includes('your-domain.com');
+
+    if (isSandboxMode) {
+      // Sandbox: Instantly add money to wallet
+      logger.info(`SANDBOX MODE: Simulating deposit for user ${req.user.id}`);
+
+      // Create transaction record
+      const transaction = await Transaction.create({
+        wallet_id: wallet.id,
+        type: 'deposit',
+        amount,
+        currency: 'KES',
+        reference,
+        description: `Sandbox deposit of KES ${amount}`,
+        status: 'completed',
+        metadata: {
+          phone,
+          method: 'sandbox',
+          mpesaReceiptNumber: `SANDBOX${Date.now()}`,
+          transactionDate: new Date().toISOString()
+        }
+      });
+
+      // Add money to wallet
+      wallet.kes_balance = parseFloat(wallet.kes_balance) + amount;
+      await wallet.save();
+
+      logger.info(`Sandbox deposit completed for user ${req.user.id}: KES ${amount}`);
+
+      // Check if user has auto-conversion enabled
+      const user = await User.findByPk(req.user.id);
+
+      let autoConvertedUSD = 0;
+      let conversionDetails = null;
+
+      // Auto-convert to USD if user preference is enabled
+      if (user && user.auto_convert_deposits) {
+        try {
+          const conversionAmount = amount;
+          const conversion = await exchangeService.convertCurrency(conversionAmount, 'KES', 'USD');
+          const forexFees = exchangeService.calculateForexFees(conversion.convertedAmount);
+          const finalUSDAmount = conversion.convertedAmount - forexFees;
+
+          // Update balances: remove KES, add USD
+          wallet.kes_balance = parseFloat(wallet.kes_balance) - conversionAmount;
+          wallet.usd_balance = parseFloat(wallet.usd_balance) + finalUSDAmount;
+          await wallet.save();
+
+          autoConvertedUSD = finalUSDAmount;
+
+          // Record conversion transaction
+          await Transaction.create({
+            wallet_id: wallet.id,
+            type: 'forex_conversion',
+            amount: -conversionAmount,
+            currency: 'KES',
+            reference: `AUTOCONV_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            exchange_rate: conversion.rate,
+            fees: { forex: forexFees },
+            description: `Auto-convert ${conversionAmount} KES to USD on sandbox deposit`,
+            status: 'completed',
+            metadata: {
+              originalAmount: conversionAmount,
+              convertedAmount: conversion.convertedAmount,
+              forexFees,
+              finalAmount: finalUSDAmount,
+              rate: conversion.rate,
+              autoConversion: true,
+              relatedDeposit: reference
+            }
+          });
+
+          await Transaction.create({
+            wallet_id: wallet.id,
+            type: 'forex_conversion',
+            amount: finalUSDAmount,
+            currency: 'USD',
+            reference: `AUTOCRED_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            exchange_rate: conversion.rate,
+            fees: { forex: forexFees },
+            description: `Receive ${finalUSDAmount} USD from auto-conversion`,
+            status: 'completed',
+            metadata: {
+              originalAmount: conversionAmount,
+              convertedAmount: conversion.convertedAmount,
+              forexFees,
+              finalAmount: finalUSDAmount,
+              rate: conversion.rate,
+              autoConversion: true,
+              relatedDeposit: reference
+            }
+          });
+
+          conversionDetails = {
+            kesAmount: conversionAmount,
+            usdAmount: finalUSDAmount,
+            rate: conversion.rate,
+            fees: forexFees
+          };
+
+          logger.info(`Auto-conversion completed for sandbox deposit ${reference}:`, {
+            kesAmount: conversionAmount,
+            usdReceived: finalUSDAmount,
+            rate: conversion.rate,
+            fees: forexFees
+          });
+
+        } catch (conversionError) {
+          logger.error(`Auto-conversion failed for sandbox deposit ${reference}:`, conversionError);
+          // Keep KES balance as is if conversion fails
+        }
+      }
+
+      const responseData = {
+        success: true,
+        message: autoConvertedUSD > 0
+          ? '💰 Sandbox deposit completed and auto-converted to USD!'
+          : '💰 Sandbox deposit completed instantly!',
+        reference,
+        transaction: {
+          amount,
+          currency: 'KES',
+          status: 'completed',
+          reference,
+          mpesaReceiptNumber: transaction.metadata.mpesaReceiptNumber,
+          newKESBalance: wallet.kes_balance,
+          newUSDBalance: wallet.usd_balance
+        },
+        note: 'This is a sandbox/test deposit. In production, this would use real MPesa.'
+      };
+
+      if (autoConvertedUSD > 0) {
+        responseData.autoConverted = true;
+        responseData.conversionDetails = conversionDetails;
+        responseData.message = `${responseData.message} Converted KES ${conversionDetails.kesAmount} to USD ${conversionDetails.usdAmount} at rate ${conversionDetails.rate}`;
+      }
+
+      return res.json(responseData);
+    }
+
+    // PRODUCTION MODE: Use real MPesa
+    // Create transaction record
+    const transaction = await Transaction.create({
+      wallet_id: wallet.id,
       type: 'deposit',
       amount,
       currency: 'KES',
       reference,
       description: `MPesa deposit of KES ${amount}`,
+      status: 'pending',
       metadata: {
         phone,
         method: 'mpesa'
       }
-    };
-
-    await wallet.addTransaction(transaction);
+    });
 
     const stkResponse = await mpesaService.initiateSTKPush(
-      phone,
       amount,
+      phone,
       reference,
       'Trading Platform Deposit'
     );
 
     if (stkResponse.success) {
-      const updatedTransaction = wallet.transactions.find(tx => tx.reference === reference);
-      updatedTransaction.metadata.checkoutRequestId = stkResponse.checkoutRequestId;
-      updatedTransaction.metadata.merchantRequestId = stkResponse.merchantRequestId;
-      await wallet.save();
+      // Update transaction with checkout IDs
+      await transaction.update({
+        metadata: {
+          ...transaction.metadata,
+          checkoutRequestId: stkResponse.checkoutRequestId,
+          merchantRequestId: stkResponse.merchantRequestId
+        }
+      });
 
       logger.info(`Deposit initiated for user ${req.user.id}:`, {
         amount,
@@ -150,9 +400,10 @@ const initiateDeposit = async (req, res) => {
         customerMessage: stkResponse.customerMessage
       });
     } else {
-      const updatedTransaction = wallet.transactions.find(tx => tx.reference === reference);
-      updatedTransaction.status = 'failed';
-      await wallet.save();
+      // Update transaction status to failed
+      await transaction.update({
+        status: 'failed'
+      });
 
       res.status(400).json({
         success: false,
@@ -170,8 +421,25 @@ const initiateDeposit = async (req, res) => {
 
 const mpesaCallback = async (req, res) => {
   try {
-    const { reference } = req.params;
+    let { reference } = req.params;
     const callbackResult = await mpesaService.processCallback(req.body);
+
+    // If no reference in params, try to extract from callback data
+    if (!reference && callbackResult.success && req.body.Body?.stkCallback?.CheckoutRequestID) {
+      const checkoutRequestId = req.body.Body.stkCallback.CheckoutRequestID;
+      const wallet = await Wallet.findOne({
+        'transactions.metadata.checkoutRequestId': checkoutRequestId
+      });
+      if (wallet) {
+        const transaction = wallet.transactions.find(tx => tx.metadata.checkoutRequestId === checkoutRequestId);
+        reference = transaction?.reference;
+      }
+    }
+
+    if (!reference) {
+      logger.error('No reference found in callback');
+      return res.status(400).json({ success: false, message: 'Invalid callback' });
+    }
 
     const wallet = await Wallet.findOne({
       'transactions.reference': reference
@@ -190,24 +458,117 @@ const mpesaCallback = async (req, res) => {
       transaction.metadata.transactionDate = callbackResult.metadata.transactionDate;
       transaction.metadata.phoneNumber = callbackResult.metadata.phoneNumber;
 
-      wallet.kesBalance += transaction.amount;
+      wallet.kes_balance += transaction.amount;
+
+      // Check if user has auto-conversion enabled
+      const user = await User.findByPk(wallet.user_id);
+
+      let autoConvertedUSD = 0;
+      let conversionDetails = null;
+
+      // Auto-convert to USD if user preference is enabled
+      if (user && user.auto_convert_deposits) {
+        try {
+          const conversionAmount = transaction.amount;
+          const conversion = await exchangeService.convertCurrency(conversionAmount, 'KES', 'USD');
+          const forexFees = exchangeService.calculateForexFees(conversion.convertedAmount);
+          const finalUSDAmount = conversion.convertedAmount - forexFees;
+
+          // Update balances: remove KES, add USD
+          wallet.kes_balance -= conversionAmount;
+          wallet.usd_balance += finalUSDAmount;
+          autoConvertedUSD = finalUSDAmount;
+
+          // Record conversion transaction
+          const conversionTransaction = {
+            type: 'forex_conversion',
+            amount: -conversionAmount,
+            currency: 'KES',
+            reference: `AUTOCONV_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            exchange_rate: conversion.rate,
+            fees: { forex: forexFees },
+            description: `Auto-convert ${conversionAmount} KES to USD on deposit`,
+            status: 'completed',
+            metadata: {
+              originalAmount: conversionAmount,
+              convertedAmount: conversion.convertedAmount,
+              forexFees,
+              finalAmount: finalUSDAmount,
+              rate: conversion.rate,
+              autoConversion: true,
+              relatedDeposit: reference
+            }
+          };
+
+          const creditTransaction = {
+            type: 'forex_conversion',
+            amount: finalUSDAmount,
+            currency: 'USD',
+            reference: `AUTOCRED_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            exchange_rate: conversion.rate,
+            fees: { forex: forexFees },
+            description: `Receive ${finalUSDAmount} USD from auto-conversion`,
+            status: 'completed',
+            metadata: {
+              originalAmount: conversionAmount,
+              convertedAmount: conversion.convertedAmount,
+              forexFees,
+              finalAmount: finalUSDAmount,
+              rate: conversion.rate,
+              autoConversion: true,
+              relatedDeposit: reference
+            }
+          };
+
+          await wallet.addTransaction(conversionTransaction);
+          await wallet.addTransaction(creditTransaction);
+
+          conversionDetails = {
+            kesAmount: conversionAmount,
+            usdAmount: finalUSDAmount,
+            rate: conversion.rate,
+            fees: forexFees
+          };
+
+          logger.info(`Auto-conversion completed for deposit ${reference}:`, {
+            kesAmount: conversionAmount,
+            usdReceived: finalUSDAmount,
+            rate: conversion.rate,
+            fees: forexFees
+          });
+
+        } catch (conversionError) {
+          logger.error(`Auto-conversion failed for deposit ${reference}:`, conversionError);
+          // Keep KES balance as is if conversion fails
+        }
+      }
 
       await wallet.save();
-
-      const user = await User.findById(wallet.userId);
 
       logger.info(`Deposit completed for user ${user.email}:`, {
         amount: transaction.amount,
         reference,
-        mpesaReceiptNumber: callbackResult.metadata.mpesaReceiptNumber
+        mpesaReceiptNumber: callbackResult.metadata.mpesaReceiptNumber,
+        autoConverted: !!autoConvertedUSD,
+        usdReceived: autoConvertedUSD
       });
 
-      req.app.get('io').to(user.id.toString()).emit('deposit_completed', {
+      // Emit appropriate event based on conversion
+      const eventData = {
         amount: transaction.amount,
         currency: 'KES',
         reference,
-        newBalance: wallet.kesBalance
-      });
+        newKESBalance: wallet.kes_balance,
+        newUSDBalance: wallet.usd_balance
+      };
+
+      if (autoConvertedUSD > 0) {
+        eventData.autoConverted = true;
+        eventData.usdReceived = autoConvertedUSD;
+        eventData.conversionDetails = conversionDetails;
+      }
+
+      req.app.get('io').to(user.id.toString()).emit('deposit_completed', eventData);
     } else {
       transaction.status = 'failed';
       transaction.metadata.failureReason = callbackResult.resultDesc;
@@ -286,7 +647,7 @@ const convertCurrency = async (req, res) => {
       });
     }
 
-    const wallet = await Wallet.findOne({ userId: req.user.id });
+    const wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
 
     const availableBalance = fromCurrency === 'KES' ? wallet.availableKes : wallet.availableUsd;
 
@@ -378,11 +739,718 @@ const convertCurrency = async (req, res) => {
   }
 };
 
+const initiateWithdrawal = async (req, res) => {
+  try {
+    const { amount, currency, method, phoneNumber, accountDetails } = req.body;
+
+    // Validation
+    if (!['KES', 'USD'].includes(currency)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid currency. Only KES and USD supported.'
+      });
+    }
+
+    if (!method || !['mpesa', 'bank_transfer', 'paypal'].includes(method)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid withdrawal method. Supported methods: mpesa, bank_transfer, paypal'
+      });
+    }
+
+    // For M-Pesa, phone number is required
+    if (method === 'mpesa' && !phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Phone number is required for M-Pesa withdrawal'
+      });
+    }
+
+    // M-Pesa only supports KES
+    if (method === 'mpesa' && currency !== 'KES') {
+      return res.status(400).json({
+        success: false,
+        message: 'M-Pesa withdrawals only support KES currency'
+      });
+    }
+
+    // Minimum withdrawal amounts
+    const minimumAmounts = {
+      KES: 50,  // Minimum KES 50
+      USD: 1    // Minimum $1
+    };
+
+    if (amount < minimumAmounts[currency]) {
+      return res.status(400).json({
+        success: false,
+        message: `Minimum withdrawal amount is ${currency} ${minimumAmounts[currency]}`
+      });
+    }
+
+    const wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
+    if (!wallet) {
+      return res.status(404).json({
+        success: false,
+        message: 'Wallet not found'
+      });
+    }
+
+    // Get user details for beneficiary name
+    const user = await User.findByPk(req.user.id);
+    const beneficiaryName = `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email;
+
+    const kesBalance = parseFloat(wallet.kes_balance) || 0;
+    const usdBalance = parseFloat(wallet.usd_balance) || 0;
+    const frozenKes = parseFloat(wallet.frozen_kes) || 0;
+    const frozenUsd = parseFloat(wallet.frozen_usd) || 0;
+    const availableBalance = currency === 'KES' ? (kesBalance - frozenKes) : (usdBalance - frozenUsd);
+
+    if (availableBalance < amount) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient ${currency} balance. Available: ${availableBalance.toFixed(2)}`
+      });
+    }
+
+    // Check for pending/processing withdrawals (prevent concurrent withdrawals)
+    const { Op } = require('sequelize');
+    const pendingWithdrawal = await Transaction.findOne({
+      where: {
+        wallet_id: wallet.id,
+        type: 'withdrawal',
+        status: 'pending',
+        created_at: {
+          [Op.gte]: new Date(Date.now() - 5 * 60 * 1000) // Last 5 minutes
+        }
+      },
+      order: [['created_at', 'DESC']]
+    });
+
+    if (pendingWithdrawal) {
+      logger.warn(`Blocked concurrent withdrawal attempt for user ${req.user.id}`, {
+        pendingReference: pendingWithdrawal.reference,
+        pendingAmount: pendingWithdrawal.amount
+      });
+
+      return res.status(409).json({
+        success: false,
+        message: 'You have a pending withdrawal. Please wait for it to complete before initiating another.',
+        pendingWithdrawal: {
+          reference: pendingWithdrawal.reference,
+          amount: Math.abs(pendingWithdrawal.amount),
+          currency: pendingWithdrawal.currency,
+          status: pendingWithdrawal.status,
+          createdAt: pendingWithdrawal.created_at
+        }
+      });
+    }
+
+    // Calculate withdrawal fees
+    const withdrawalFees = calculateWithdrawalFees(amount, currency, method);
+    const netAmount = amount - withdrawalFees;
+
+    if (netAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Withdrawal amount too small after fees'
+      });
+    }
+
+    const reference = kcbService.generateTransactionReference();
+
+    // Handle M-Pesa withdrawal via KCB
+    if (method === 'mpesa') {
+      // Use database transaction for atomicity
+      const dbTransaction = await sequelize.transaction();
+
+      try {
+        logger.info(`Processing M-Pesa withdrawal for user ${req.user.id}:`, {
+          amount,
+          phoneNumber,
+          reference
+        });
+
+        // Freeze funds first (within transaction)
+        wallet.frozen_kes = (parseFloat(wallet.frozen_kes) || 0) + amount;
+        await wallet.save({ transaction: dbTransaction });
+
+        // Create pending transaction (within transaction)
+        const txnRecord = await Transaction.create({
+          wallet_id: wallet.id,
+          type: 'withdrawal',
+          amount: -amount,
+          currency: 'KES',
+          reference,
+          status: 'pending',
+          fees: { withdrawal: withdrawalFees },
+          description: `M-Pesa withdrawal to ${phoneNumber}`,
+          metadata: {
+            method: 'mpesa',
+            phoneNumber,
+            beneficiaryName,
+            netAmount,
+            withdrawalFees,
+            processingStatus: 'processing'
+          }
+        }, { transaction: dbTransaction });
+
+        // Commit the freeze and transaction creation
+        await dbTransaction.commit();
+
+        // Now call KCB API (outside db transaction - this is an external call)
+        const kcbResult = await kcbService.withdrawToMpesa({
+          phoneNumber,
+          amount: netAmount,
+          beneficiaryName,
+          reference
+        });
+
+        if (kcbResult.success) {
+          // Deduct from wallet and unfreeze
+          wallet.kes_balance = (parseFloat(wallet.kes_balance) || 0) - amount;
+          wallet.frozen_kes = (parseFloat(wallet.frozen_kes) || 0) - amount;
+          await wallet.save();
+
+          // Update transaction to completed
+          await txnRecord.update({
+            status: 'completed',
+            metadata: {
+              ...txnRecord.metadata,
+              processingStatus: 'completed',
+              processedAt: new Date().toISOString(),
+              kcbReference: kcbResult.retrievalRefNumber,
+              kcbStatusCode: kcbResult.statusCode
+            }
+          });
+
+          logger.info(`M-Pesa withdrawal completed for user ${req.user.id}:`, {
+            reference,
+            kcbReference: kcbResult.retrievalRefNumber,
+            amount: netAmount,
+            phoneNumber
+          });
+
+          return res.json({
+            success: true,
+            message: `KES ${netAmount.toFixed(2)} sent to M-Pesa ${phoneNumber} successfully!`,
+            withdrawal: {
+              reference,
+              kcbReference: kcbResult.retrievalRefNumber,
+              amount,
+              netAmount,
+              currency: 'KES',
+              method: 'mpesa',
+              phoneNumber,
+              withdrawalFees,
+              status: 'completed',
+              newBalance: wallet.kes_balance
+            }
+          });
+
+        } else {
+          // Unfreeze funds on KCB failure
+          wallet.frozen_kes = (parseFloat(wallet.frozen_kes) || 0) - amount;
+          await wallet.save();
+
+          // Update transaction to failed
+          await txnRecord.update({
+            status: 'failed',
+            metadata: {
+              ...txnRecord.metadata,
+              processingStatus: 'failed',
+              failureReason: kcbResult.error,
+              errorData: kcbResult.errorData
+            }
+          });
+
+          logger.error(`M-Pesa withdrawal failed for user ${req.user.id}:`, {
+            reference,
+            error: kcbResult.error
+          });
+
+          return res.status(400).json({
+            success: false,
+            message: 'M-Pesa withdrawal failed. Please try again.',
+            error: kcbResult.error,
+            reference
+          });
+        }
+
+      } catch (dbError) {
+        // Rollback on any error during freeze/transaction creation
+        await dbTransaction.rollback();
+        logger.error(`M-Pesa withdrawal db error for user ${req.user.id}:`, {
+          error: dbError.message,
+          reference
+        });
+
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to process withdrawal. Please try again.',
+          error: dbError.message
+        });
+      }
+    }
+
+    // SANDBOX MODE for other methods: Check if we're in development
+    const isSandboxMode = process.env.NODE_ENV === 'development';
+
+    if (isSandboxMode) {
+      // Sandbox: Instantly process withdrawal
+      logger.info(`SANDBOX MODE: Simulating withdrawal for user ${req.user.id}`);
+
+      // Deduct from wallet
+      if (currency === 'KES') {
+        wallet.kes_balance = parseFloat(wallet.kes_balance) - amount;
+      } else {
+        wallet.usd_balance = parseFloat(wallet.usd_balance) - amount;
+      }
+      await wallet.save();
+
+      // Create completed transaction
+      const transaction = await Transaction.create({
+        wallet_id: wallet.id,
+        type: 'withdrawal',
+        amount: -amount,
+        currency,
+        reference,
+        status: 'completed',
+        fees: { withdrawal: withdrawalFees },
+        description: `Sandbox ${method} withdrawal of ${currency} ${amount}`,
+        metadata: {
+          method,
+          accountDetails,
+          netAmount,
+          withdrawalFees,
+          processingStatus: 'completed',
+          processedAt: new Date().toISOString(),
+          sandbox: true
+        }
+      });
+
+      logger.info(`Sandbox withdrawal completed for user ${req.user.id}: ${currency} ${amount}`);
+
+      return res.json({
+        success: true,
+        message: '💸 Sandbox withdrawal completed instantly!',
+        withdrawal: {
+          reference,
+          amount,
+          currency,
+          method,
+          withdrawalFees,
+          netAmount,
+          status: 'completed',
+          newBalance: currency === 'KES' ? wallet.kes_balance : wallet.usd_balance
+        },
+        note: 'This is a sandbox/test withdrawal. In production, this would take 1-5 business days.'
+      });
+    }
+
+    // PRODUCTION MODE for bank_transfer/paypal: Freeze funds and await approval
+    if (currency === 'KES') {
+      wallet.frozen_kes = (parseFloat(wallet.frozen_kes) || 0) + amount;
+    } else {
+      wallet.frozen_usd = (parseFloat(wallet.frozen_usd) || 0) + amount;
+    }
+    await wallet.save();
+
+    const transaction = await Transaction.create({
+      wallet_id: wallet.id,
+      type: 'withdrawal',
+      amount: -amount,
+      currency,
+      reference,
+      status: 'pending',
+      fees: { withdrawal: withdrawalFees },
+      description: `${method} withdrawal of ${currency} ${amount}`,
+      metadata: {
+        method,
+        accountDetails,
+        netAmount,
+        withdrawalFees,
+        processingStatus: 'pending_approval'
+      }
+    });
+
+    logger.info(`Withdrawal initiated for user ${req.user.id}:`, {
+      amount,
+      currency,
+      method,
+      reference,
+      netAmount,
+      withdrawalFees
+    });
+
+    res.json({
+      success: true,
+      message: 'Withdrawal initiated successfully. Processing may take 1-5 business days.',
+      withdrawal: {
+        reference,
+        amount,
+        currency,
+        method,
+        withdrawalFees,
+        netAmount,
+        status: 'pending',
+        estimatedProcessingTime: getEstimatedProcessingTime(method, currency)
+      }
+    });
+
+  } catch (error) {
+    logger.error('Initiate withdrawal error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during withdrawal initiation'
+    });
+  }
+};
+
+const processWithdrawal = async (req, res) => {
+  try {
+    const { reference } = req.params;
+    const { action, adminNotes } = req.body; // action: 'approve' or 'reject'
+
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid action. Use "approve" or "reject"'
+      });
+    }
+
+    const transaction = await Transaction.findOne({ where: { reference } });
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Transaction not found'
+      });
+    }
+
+    if (transaction.type !== 'withdrawal' || transaction.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid transaction for processing'
+      });
+    }
+
+    const wallet = await Wallet.findOne({ where: { id: transaction.wallet_id } });
+
+    if (action === 'approve') {
+      // Process the actual withdrawal
+      const success = await processActualWithdrawal(transaction);
+
+      if (success) {
+        transaction.status = 'completed';
+        transaction.metadata.processingStatus = 'completed';
+        transaction.metadata.processedAt = new Date();
+        transaction.metadata.adminNotes = adminNotes;
+
+        // Unfreeze and subtract from balance
+        await wallet.unfreezeFunds(Math.abs(transaction.amount), transaction.currency);
+        await wallet.updateBalance(Math.abs(transaction.amount), transaction.currency, 'subtract');
+
+        logger.info(`Withdrawal approved and processed: ${reference}`);
+      } else {
+        transaction.status = 'failed';
+        transaction.metadata.processingStatus = 'failed';
+        transaction.metadata.failureReason = 'Processing failed';
+
+        // Unfreeze funds but keep in balance
+        await wallet.unfreezeFunds(Math.abs(transaction.amount), transaction.currency);
+
+        logger.error(`Withdrawal processing failed: ${reference}`);
+      }
+    } else {
+      // Reject withdrawal
+      transaction.status = 'cancelled';
+      transaction.metadata.processingStatus = 'rejected';
+      transaction.metadata.rejectionReason = adminNotes || 'Withdrawn by admin';
+
+      // Unfreeze funds but keep in balance
+      await wallet.unfreezeFunds(Math.abs(transaction.amount), transaction.currency);
+
+      logger.info(`Withdrawal rejected: ${reference}`);
+    }
+
+    await transaction.save();
+
+    res.json({
+      success: true,
+      message: `Withdrawal ${action}d successfully`,
+      transaction: {
+        reference: transaction.reference,
+        status: transaction.status,
+        amount: transaction.amount,
+        currency: transaction.currency
+      }
+    });
+
+  } catch (error) {
+    logger.error('Process withdrawal error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during withdrawal processing'
+    });
+  }
+};
+
+const getWithdrawalStatus = async (req, res) => {
+  try {
+    const { reference } = req.params;
+
+    const transaction = await Transaction.findOne({
+      where: {
+        reference,
+        type: 'withdrawal'
+      },
+      include: [{
+        model: Wallet,
+        as: 'wallet',
+        where: { user_id: req.user.id }
+      }]
+    });
+
+    if (!transaction) {
+      return res.status(404).json({
+        success: false,
+        message: 'Withdrawal not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      withdrawal: {
+        reference: transaction.reference,
+        amount: Math.abs(transaction.amount),
+        currency: transaction.currency,
+        status: transaction.status,
+        method: transaction.metadata.method,
+        netAmount: transaction.metadata.netAmount,
+        fees: transaction.fees,
+        createdAt: transaction.createdAt,
+        processedAt: transaction.metadata.processedAt,
+        estimatedCompletion: transaction.metadata.estimatedCompletion,
+        processingStatus: transaction.metadata.processingStatus
+      }
+    });
+
+  } catch (error) {
+    logger.error('Get withdrawal status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// Helper functions
+function calculateWithdrawalFees(amount, currency, method) {
+  const feeStructure = {
+    mpesa: { KES: 0.02, USD: 0.05 }, // 2% for KES, 5% for USD
+    bank_transfer: { KES: 50, USD: 5 }, // Fixed fees
+    paypal: { KES: 0.03, USD: 0.035 } // 3% for KES, 3.5% for USD
+  };
+
+  const fee = feeStructure[method]?.[currency] || 0;
+
+  // If percentage-based fee
+  if (fee < 1) {
+    return Math.max(amount * fee, currency === 'KES' ? 10 : 1); // Minimum fees
+  }
+
+  // Fixed fee
+  return fee;
+}
+
+function getEstimatedProcessingTime(method, currency) {
+  const processingTimes = {
+    mpesa: '1-2 hours',
+    bank_transfer: currency === 'KES' ? '1-3 business days' : '3-5 business days',
+    paypal: '1-2 business days'
+  };
+
+  return processingTimes[method] || '1-5 business days';
+}
+
+async function processActualWithdrawal(transaction) {
+  try {
+    const { method, accountDetails } = transaction.metadata;
+
+    // This would integrate with actual payment processors
+    // For now, we'll simulate success
+    if (method === 'mpesa') {
+      // Integrate with M-Pesa B2C API
+      logger.info(`Processing M-Pesa withdrawal: ${transaction.reference}`);
+      return true; // Simulated success
+    } else if (method === 'bank_transfer') {
+      // Integrate with bank transfer API
+      logger.info(`Processing bank transfer: ${transaction.reference}`);
+      return true; // Simulated success
+    } else if (method === 'paypal') {
+      // Integrate with PayPal API
+      logger.info(`Processing PayPal withdrawal: ${transaction.reference}`);
+      return true; // Simulated success
+    }
+
+    return false;
+  } catch (error) {
+    logger.error('Actual withdrawal processing error:', error);
+    return false;
+  }
+}
+
+const getCurrentExchangeRates = async (req, res) => {
+  try {
+    const rates = await exchangeService.getCurrentRates();
+
+    res.json({
+      success: true,
+      ...rates
+    });
+  } catch (error) {
+    logger.error('Get current exchange rates error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch current exchange rates'
+    });
+  }
+};
+
+const getSpecificRate = async (req, res) => {
+  try {
+    const { from, to } = req.params;
+
+    if (!from || !to) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both from and to currencies are required'
+      });
+    }
+
+    const fromUpper = from.toUpperCase();
+    const toUpper = to.toUpperCase();
+
+    const rate = await exchangeService.getExchangeRate(fromUpper, toUpper);
+    const conversion = await exchangeService.convertCurrency(1, fromUpper, toUpper);
+
+    res.json({
+      success: true,
+      rate,
+      pair: `${fromUpper}/${toUpper}`,
+      conversion,
+      timestamp: new Date().toISOString(),
+      description: `1 ${fromUpper} = ${rate} ${toUpper}`
+    });
+  } catch (error) {
+    logger.error('Get specific exchange rate error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch exchange rate'
+    });
+  }
+};
+
+const updateAutoConvertPreference = async (req, res) => {
+  try {
+    const { enabled } = req.body;
+
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        success: false,
+        message: 'enabled must be a boolean value'
+      });
+    }
+
+    const user = await User.findByPk(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    user.auto_convert_deposits = enabled;
+    await user.save();
+
+    logger.info(`Auto-conversion preference updated for user ${user.email}: ${enabled}`);
+
+    res.json({
+      success: true,
+      message: `Auto-conversion ${enabled ? 'enabled' : 'disabled'} successfully`,
+      autoConvertEnabled: enabled,
+      note: enabled
+        ? 'KES deposits will be automatically converted to USD using real-time exchange rates'
+        : 'KES deposits will remain as KES until manually converted'
+    });
+
+  } catch (error) {
+    logger.error('Update auto-convert preference error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error updating preference'
+    });
+  }
+};
+
+const getAutoConvertPreference = async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.id, {
+      attributes: ['auto_convert_deposits', 'email']
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Get current exchange rate for display
+    const currentRate = await exchangeService.getExchangeRate('KES', 'USD');
+
+    res.json({
+      success: true,
+      autoConvertEnabled: user.auto_convert_deposits,
+      currentExchangeRate: {
+        rate: currentRate,
+        pair: 'KES/USD',
+        description: `1 KES = ${currentRate} USD`,
+        lastUpdated: new Date().toISOString()
+      },
+      fees: {
+        forexFee: '1.5%',
+        description: 'Small forex fee applied to conversions'
+      },
+      example: {
+        kesDeposit: 5000,
+        estimatedUSD: Math.round((5000 * currentRate * 0.985) * 100) / 100, // 1.5% fee
+        note: 'Actual amount may vary based on real-time rates at conversion time'
+      }
+    });
+
+  } catch (error) {
+    logger.error('Get auto-convert preference error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error fetching preference'
+    });
+  }
+};
+
 module.exports = {
   getWallet,
+  unfreezeWallet,
   getTransactions,
   initiateDeposit,
   mpesaCallback,
   checkDepositStatus,
-  convertCurrency
+  convertCurrency,
+  initiateWithdrawal,
+  processWithdrawal,
+  getWithdrawalStatus,
+  getCurrentExchangeRates,
+  getSpecificRate,
+  updateAutoConvertPreference,
+  getAutoConvertPreference
 };
