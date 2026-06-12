@@ -5,7 +5,7 @@ class ExchangeService {
   constructor() {
     this.apiKey = process.env.EXCHANGE_RATE_API_KEY;
     this.cache = new Map();
-    this.cacheExpiry = 2 * 60 * 1000; // 2 minutes cache for real-time rates
+    this.cacheExpiry = 10 * 60 * 1000; // 10 minutes — rates don't change that fast
 
     // Multiple exchange rate providers for reliability
     this.providers = [
@@ -102,25 +102,26 @@ class ExchangeService {
   }
 
   async fetchFromMultipleProviders(from, to) {
-    for (const provider of this.providers) {
-      try {
-        const rate = await this.fetchFromProvider(provider, from, to);
-        if (rate) {
-          logger.info(`Rate fetched successfully from ${provider.name}: ${rate}`);
-          return rate;
-        }
-      } catch (error) {
-        logger.warn(`Provider ${provider.name} failed:`, error.message);
-        continue;
-      }
+    // Race all providers — first valid response wins, others are discarded
+    try {
+      const rate = await Promise.any(
+        this.providers.map(p =>
+          this.fetchFromProvider(p, from, to).then(r => {
+            if (!r) throw new Error('no rate');
+            logger.info(`Rate fetched from ${p.name}: ${r}`);
+            return r;
+          })
+        )
+      );
+      return rate;
+    } catch {
+      // All providers failed — try free fallback APIs
+      return await this.fetchFromFreeAPIs(from, to);
     }
-
-    // Try free external APIs as final fallback
-    return await this.fetchFromFreeAPIs(from, to);
   }
 
   async fetchFromProvider(provider, from, to) {
-    const timeout = 8000; // 8 second timeout
+    const timeout = 3000; // 3 second timeout per provider
 
     switch (provider.name) {
       case 'exchangerate-api':

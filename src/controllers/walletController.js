@@ -26,9 +26,15 @@ const getWallet = async (req, res) => {
       logger.info(`Created new wallet for user ${req.user.id}`);
     }
 
-    const [exchangeRate, user] = await Promise.all([
+    // Fetch exchange rate, user record, and MyStocks wallet all in parallel
+    const msWalletPromise = ensureMyStocksSubAccount(req.user.id)
+      .then(id => ms.getWallet(id))
+      .catch(() => null);
+
+    const [exchangeRate, user, msWalletRaw] = await Promise.all([
       exchangeService.getExchangeRate('KES', 'USD'),
-      User.findByPk(req.user.id, { attributes: ['id', 'mystocks_sub_account_id', 'mystocks_wallet_balance', 'account_mode', 'demo_balance'] })
+      User.findByPk(req.user.id, { attributes: ['id', 'mystocks_sub_account_id', 'mystocks_wallet_balance', 'account_mode', 'demo_balance'] }),
+      msWalletPromise
     ]);
 
     const kesBalance = parseFloat(wallet.kes_balance) || 0;
@@ -36,16 +42,14 @@ const getWallet = async (req, res) => {
     const frozenKes = parseFloat(wallet.frozen_kes) || 0;
     const frozenUsd = parseFloat(wallet.frozen_usd) || 0;
 
-    // MyStocks balance — try live API first, fall back to last saved balance
+    // MyStocks balance — use live result or fall back to last saved balance
     let msUsdBalance = 0;
     let msWalletData = null;
-    try {
-      const subAccountId = await ensureMyStocksSubAccount(req.user.id);
-      const msWallet = await ms.getWallet(subAccountId);
-      const apiBalance = parseFloat(msWallet?.wallet?.balance || msWallet?.balance || 0);
+    if (msWalletRaw) {
+      const apiBalance = parseFloat(msWalletRaw?.wallet?.balance || msWalletRaw?.balance || 0);
       msUsdBalance = apiBalance > 0 ? apiBalance : parseFloat(user?.mystocks_wallet_balance || 0);
-      msWalletData = { ...msWallet, wallet: { ...(msWallet?.wallet || {}), balance: msUsdBalance } };
-    } catch (_) {
+      msWalletData = { ...msWalletRaw, wallet: { ...(msWalletRaw?.wallet || {}), balance: msUsdBalance } };
+    } else {
       msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
     }
 
