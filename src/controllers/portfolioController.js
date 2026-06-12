@@ -54,20 +54,16 @@ const buildDemoPositions = async (userId, exchangeRate) => {
 
 const getPortfolio = async (req, res) => {
   try {
-    // Check if user has an Alpaca account
-    const user = await User.findByPk(req.user.id);
+    // Fetch user, wallet, and exchange rate in parallel — none depend on each other
+    const [user, walletRow, exchangeRate] = await Promise.all([
+      User.findByPk(req.user.id),
+      Wallet.findOne({ where: { user_id: req.user.id } }),
+      exchangeService.getExchangeRate('USD', 'KES')
+    ]);
 
-    // Get local wallet balance
-    let wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
-    if (!wallet) {
-      wallet = { kes_balance: 0, usd_balance: 0, frozen_kes: 0, frozen_usd: 0 };
-    }
-
+    const wallet = walletRow || { kes_balance: 0, usd_balance: 0, frozen_kes: 0, frozen_usd: 0 };
     const localKesBalance = parseFloat(wallet.kes_balance) || 0;
     const localUsdBalance = parseFloat(wallet.usd_balance) || 0;
-
-    // Get exchange rate early - needed for both cases
-    const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     // Demo mode: return demo portfolio (same logic as paper trading)
     const isDemo = user?.account_mode === 'demo' || process.env.NODE_ENV === 'development';
@@ -187,18 +183,16 @@ const getPortfolio = async (req, res) => {
       });
     }
 
-    // Get Alpaca account information for this specific user
-    const account = await alpacaService.getAccount(user.alpaca_account_id);
-
-    // Get positions from Alpaca for this specific user
-    const positions = await alpacaService.getPositions(user.alpaca_account_id);
-
-    // Get user's order history for additional context
-    const userOrders = await Order.findAll({
-      where: { user_id: req.user.id },
-      order: [['created_at', 'DESC']],
-      limit: 100
-    });
+    // Fetch Alpaca account, positions, and local orders in parallel
+    const [account, positions, userOrders] = await Promise.all([
+      alpacaService.getAccount(user.alpaca_account_id),
+      alpacaService.getPositions(user.alpaca_account_id),
+      Order.findAll({
+        where: { user_id: req.user.id },
+        order: [['created_at', 'DESC']],
+        limit: 100
+      })
+    ]);
 
     // Calculate portfolio metrics from Alpaca
     const alpacaEquity = parseFloat(account.equity || 0);
