@@ -64,7 +64,8 @@ const getWallet = async (req, res) => {
         myStocksBalanceKes: (msUsdBalance / exchangeRate).toFixed(2),
         totalValueKes: totalKes.toFixed(2),
         totalValueUsd: totalUsd.toFixed(2),
-        exchangeRate
+        exchangeRate,
+        myStocksWallet: { wallet: { balance: msUsdBalance }, balance: msUsdBalance, currency: 'USD' }
       }
     });
   } catch (error) {
