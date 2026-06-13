@@ -247,14 +247,7 @@ const login = async (req, res) => {
 const requestVerification = async (req, res) => {
   try {
     const { verificationType } = req.body;
-    const user = await User.findByPk(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'We couldn\'t find your account. Please make sure you\'re logged in and try again.'
-      });
-    }
+    const user = req.user; // already fetched and attached by auth middleware
 
     if (verificationType === 'email') {
       if (user.is_email_verified) {
@@ -281,8 +274,8 @@ const requestVerification = async (req, res) => {
         expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
       });
 
-      // Send verification email asynchronously (don't block the response)
-      emailService.sendVerificationCodeEmail(user, verificationCode)
+      // Send verification email — Brevo API (no SMTP handshake overhead)
+      brevoEmailService.sendVerificationCodeEmail(user, verificationCode)
         .then(emailResult => {
           if (emailResult.success) {
             logger.info(`Verification code sent to ${user.email}`);
