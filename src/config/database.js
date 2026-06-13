@@ -7,10 +7,10 @@ const sequelize = process.env.DATABASE_URL && !process.env.DATABASE_URL.startsWi
     logging: process.env.NODE_ENV === 'development' ?
       (msg) => logger.debug(msg) : false,
     pool: {
-      max: 10,
+      max: 3,
       min: 0,
-      acquire: 30000,
-      idle: 10000,
+      acquire: 10000,
+      idle: 5000,
     },
     define: {
       timestamps: true,
@@ -29,10 +29,10 @@ const sequelize = process.env.DATABASE_URL && !process.env.DATABASE_URL.startsWi
     logging: process.env.NODE_ENV === 'development' ?
       (msg) => logger.debug(msg) : false,
     pool: {
-      max: 10,
+      max: 3,
       min: 0,
-      acquire: 30000,
-      idle: 10000,
+      acquire: 10000,
+      idle: 5000,
     },
     define: {
       timestamps: true,
