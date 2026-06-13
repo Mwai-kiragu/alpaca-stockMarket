@@ -354,7 +354,12 @@ const requestVerification = async (req, res) => {
 // Verify code (generic)
 const verifyCode = async (req, res) => {
   try {
-    const { verificationCode, email } = req.body;
+    const { email } = req.body;
+    const verificationCode = req.body.verificationCode || req.body.code;
+
+    if (!verificationCode) {
+      return res.status(400).json({ success: false, message: 'Verification code is required.' });
+    }
 
     // TEMPORARY: Since auth is removed, find user by email
     const user = req.user ?
