@@ -26,15 +26,10 @@ const getWallet = async (req, res) => {
       logger.info(`Created new wallet for user ${req.user.id}`);
     }
 
-    // Fetch exchange rate, user record, and MyStocks wallet all in parallel
-    const msWalletPromise = ensureMyStocksSubAccount(req.user.id)
-      .then(id => ms.getWallet(id))
-      .catch(() => null);
-
-    const [exchangeRate, user, msWalletRaw] = await Promise.all([
+    // Fetch exchange rate and user record — respond immediately with cached MyStocks balance
+    const [exchangeRate, user] = await Promise.all([
       exchangeService.getExchangeRate('KES', 'USD'),
-      User.findByPk(req.user.id, { attributes: ['id', 'mystocks_sub_account_id', 'mystocks_wallet_balance', 'account_mode', 'demo_balance'] }),
-      msWalletPromise
+      User.findByPk(req.user.id, { attributes: ['id', 'mystocks_sub_account_id', 'mystocks_wallet_balance', 'account_mode', 'demo_balance'] })
     ]);
 
     const kesBalance = parseFloat(wallet.kes_balance) || 0;
@@ -42,15 +37,15 @@ const getWallet = async (req, res) => {
     const frozenKes = parseFloat(wallet.frozen_kes) || 0;
     const frozenUsd = parseFloat(wallet.frozen_usd) || 0;
 
-    // MyStocks balance — use live result or fall back to last saved balance
-    let msUsdBalance = 0;
-    let msWalletData = null;
-    if (msWalletRaw) {
-      const apiBalance = parseFloat(msWalletRaw?.wallet?.balance || msWalletRaw?.balance || 0);
-      msUsdBalance = apiBalance > 0 ? apiBalance : parseFloat(user?.mystocks_wallet_balance || 0);
-      msWalletData = { ...msWalletRaw, wallet: { ...(msWalletRaw?.wallet || {}), balance: msUsdBalance } };
-    } else {
-      msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
+    // Serve last-known MyStocks balance from DB — refresh in background so next call is fresh
+    const msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
+    if (user?.mystocks_sub_account_id) {
+      ms.getWallet(user.mystocks_sub_account_id)
+        .then(msWalletRaw => {
+          const apiBalance = parseFloat(msWalletRaw?.wallet?.balance || msWalletRaw?.balance || 0);
+          if (apiBalance > 0) user.update({ mystocks_wallet_balance: apiBalance }).catch(() => {});
+        })
+        .catch(() => {});
     }
 
     const totalUsd = usdBalance + msUsdBalance;
@@ -69,8 +64,7 @@ const getWallet = async (req, res) => {
         myStocksBalanceKes: (msUsdBalance / exchangeRate).toFixed(2),
         totalValueKes: totalKes.toFixed(2),
         totalValueUsd: totalUsd.toFixed(2),
-        exchangeRate,
-        myStocksWallet: msWalletData
+        exchangeRate
       }
     });
   } catch (error) {

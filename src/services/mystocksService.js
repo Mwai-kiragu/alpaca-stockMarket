@@ -30,14 +30,14 @@ const publicClient = axios.create({
 const client = axios.create({
   baseURL: PARTNER_URL,
   headers: authHeaders,
-  timeout: 15000
+  timeout: 8000
 });
 
 // Market data: stocks, bonds, funds, dividends, market-intel
 const dataClient = axios.create({
   baseURL: DATA_URL,
   headers: authHeaders,
-  timeout: 15000
+  timeout: 8000
 });
 
 const errorInterceptor = err => {
