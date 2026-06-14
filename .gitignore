@@ -125,5 +125,6 @@ ENDPOINTS.md
 .env.example
 .env.testsms
 /.serena
+.env.prod
 /riven-dev.env
 /riven-prod.env
