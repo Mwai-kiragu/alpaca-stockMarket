@@ -2,10 +2,9 @@
 
 module.exports = {
   async up(queryInterface, Sequelize) {
-    await queryInterface.addColumn('kyc_documents', 'file_url', {
-      type: Sequelize.STRING(1024),
-      allowNull: true
-    });
+    await queryInterface.sequelize.query(`
+      ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS file_url VARCHAR(1024)
+    `);
   },
 
   async down(queryInterface) {

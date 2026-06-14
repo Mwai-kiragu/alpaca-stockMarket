@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
 const { Op } = require('sequelize');
 const { User, EmailVerificationToken, PhoneVerificationToken, PasswordResetToken, sequelize } = require('../models');
 const emailService = require('../services/emailService');
@@ -170,6 +171,13 @@ const login = async (req, res) => {
       }
     }
 
+    // Rehash in background if stored hash uses more rounds than current target
+    if (bcrypt.getRounds(user.password) > 10) {
+      bcrypt.hash(password, 10)
+        .then(hash => user.update({ password: hash }))
+        .catch(err => logger.error('Password rehash error:', err));
+    }
+
     // Reset login attempts on successful login
     if (user.login_attempts > 0) {
       await user.update({
@@ -239,14 +247,7 @@ const login = async (req, res) => {
 const requestVerification = async (req, res) => {
   try {
     const { verificationType } = req.body;
-    const user = await User.findByPk(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'We couldn\'t find your account. Please make sure you\'re logged in and try again.'
-      });
-    }
+    const user = req.user; // already fetched and attached by auth middleware
 
     if (verificationType === 'email') {
       if (user.is_email_verified) {
@@ -273,8 +274,8 @@ const requestVerification = async (req, res) => {
         expires_at: new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
       });
 
-      // Send verification email asynchronously (don't block the response)
-      emailService.sendVerificationCodeEmail(user, verificationCode)
+      // Send verification email — Brevo API (no SMTP handshake overhead)
+      brevoEmailService.sendVerificationCodeEmail(user, verificationCode)
         .then(emailResult => {
           if (emailResult.success) {
             logger.info(`Verification code sent to ${user.email}`);
@@ -353,7 +354,12 @@ const requestVerification = async (req, res) => {
 // Verify code (generic)
 const verifyCode = async (req, res) => {
   try {
-    const { verificationCode, email } = req.body;
+    const { email } = req.body;
+    const verificationCode = req.body.verificationCode || req.body.code;
+
+    if (!verificationCode) {
+      return res.status(400).json({ success: false, message: 'Verification code is required.' });
+    }
 
     // TEMPORARY: Since auth is removed, find user by email
     const user = req.user ?

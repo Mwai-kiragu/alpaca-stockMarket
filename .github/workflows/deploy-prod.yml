@@ -67,6 +67,12 @@ jobs:
           EOF
           chmod +x /tmp/remote-deploy.sh
 
+      - name: Clean stale temp files from previous deploys
+        run: |
+          gcloud compute ssh "$VM_NAME" \
+            --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap \
+            --command="sudo rm -f /tmp/deploy.tar.gz /tmp/deploy.env /tmp/remote-deploy.sh" || true
+
       - name: Upload artifacts to VM
         run: |
           gcloud compute scp /tmp/deploy.tar.gz /tmp/deploy.env /tmp/remote-deploy.sh \
@@ -77,4 +83,4 @@ jobs:
         run: |
           gcloud compute ssh "$VM_NAME" \
             --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap \
-            --command="sudo install -m 600 -o $DEPLOY_USER -g $DEPLOY_USER /tmp/deploy.env /tmp/deploy.env.owned && sudo mv /tmp/deploy.env.owned /tmp/deploy.env && sudo -u $DEPLOY_USER bash /tmp/remote-deploy.sh && sudo rm -f /tmp/remote-deploy.sh /tmp/deploy.tar.gz /tmp/deploy.env"
+            --command="sudo install -m 600 -o $DEPLOY_USER -g $DEPLOY_USER /tmp/deploy.env /tmp/deploy.env.owned && sudo mv /tmp/deploy.env.owned /tmp/deploy.env && sudo -u $DEPLOY_USER bash /tmp/remote-deploy.sh; sudo rm -f /tmp/remote-deploy.sh /tmp/deploy.tar.gz /tmp/deploy.env; exit \$?"
