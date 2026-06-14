@@ -1,6 +1,7 @@
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
+const { withCache } = require('../utils/cache');
 
 const isSandbox = process.env.MYSTOCKS_ENV !== 'production';
 
@@ -134,8 +135,11 @@ const getPortfolio = async (subAccountId) => {
 };
 
 const getStocks = async ({ exchange, sector, search, page, limit } = {}) => {
-  const res = await dataClient.get('/stocks', { params: { exchange, sector, search, page, limit } });
-  return res.data;
+  const cacheKey = `ms:stocks:${exchange || ''}:${sector || ''}:${search || ''}:${page || ''}:${limit || ''}`;
+  return withCache(cacheKey, 120, async () => {
+    const res = await dataClient.get('/stocks', { params: { exchange, sector, search, page, limit } });
+    return res.data;
+  });
 };
 
 const getStockHistory = async (symbol, range = '1M') => {
@@ -152,26 +156,34 @@ const buildStockSlug = (name, exchange) =>
 
 // Public API — returns stock detail including price history used by the web chart
 const getStockBySlug = async (slug) => {
-  const res = await publicClient.get(`/stocks/${slug}`, { params: { t: Date.now() } });
-  if (typeof res.data === 'string' && res.data.trimStart().startsWith('<')) {
-    throw new Error(`MyStocks public stock endpoint not available for slug: ${slug}`);
-  }
-  return res.data;
+  return withCache(`ms:slug:${slug}`, 120, async () => {
+    const res = await publicClient.get(`/stocks/${slug}`, { params: { t: Date.now() } });
+    if (typeof res.data === 'string' && res.data.trimStart().startsWith('<')) {
+      throw new Error(`MyStocks public stock endpoint not available for slug: ${slug}`);
+    }
+    return res.data;
+  });
 };
 
 const getStockPulse = async (symbol) => {
-  const res = await dataClient.get(`/stocks/${symbol}/pulse`);
-  return res.data;
+  return withCache(`ms:pulse:${symbol}`, 120, async () => {
+    const res = await dataClient.get(`/stocks/${symbol}/pulse`);
+    return res.data;
+  });
 };
 
 const getBonds = async ({ type, currency, exchange } = {}) => {
-  const res = await dataClient.get('/bonds', { params: { type, currency, exchange } });
-  return res.data;
+  return withCache(`ms:bonds:${type || ''}:${currency || ''}:${exchange || ''}`, 300, async () => {
+    const res = await dataClient.get('/bonds', { params: { type, currency, exchange } });
+    return res.data;
+  });
 };
 
 const getBond = async (bondId) => {
-  const res = await dataClient.get(`/bonds/${bondId}`);
-  return res.data;
+  return withCache(`ms:bond:${bondId}`, 300, async () => {
+    const res = await dataClient.get(`/bonds/${bondId}`);
+    return res.data;
+  });
 };
 
 const subscribeToBond = async (subAccountId, { bondId, units }) => {
@@ -184,13 +196,17 @@ const subscribeToBond = async (subAccountId, { bondId, units }) => {
 };
 
 const getFunds = async ({ category, currency } = {}) => {
-  const res = await dataClient.get('/funds', { params: { category, currency } });
-  return res.data;
+  return withCache(`ms:funds:${category || ''}:${currency || ''}`, 300, async () => {
+    const res = await dataClient.get('/funds', { params: { category, currency } });
+    return res.data;
+  });
 };
 
 const getFund = async (fundId) => {
-  const res = await dataClient.get(`/funds/${fundId}`);
-  return res.data;
+  return withCache(`ms:fund:${fundId}`, 300, async () => {
+    const res = await dataClient.get(`/funds/${fundId}`);
+    return res.data;
+  });
 };
 
 const subscribeToFund = async (subAccountId, { fundId, units }) => {
@@ -212,20 +228,26 @@ const redeemFund = async (subAccountId, { holdingId, units }) => {
 };
 
 const getMarketIntel = async ({ symbol, exchange, page, limit } = {}) => {
-  const res = await dataClient.get('/market-intel', { params: { symbol, exchange, page, limit } });
-  return res.data;
+  return withCache(`ms:intel:${symbol || ''}:${exchange || ''}:${page || ''}:${limit || ''}`, 180, async () => {
+    const res = await dataClient.get('/market-intel', { params: { symbol, exchange, page, limit } });
+    return res.data;
+  });
 };
 
 const getMarketIntelArticle = async (idOrSlug) => {
-  const res = await dataClient.get(`/market-intel/${idOrSlug}`);
-  return res.data;
+  return withCache(`ms:intel:article:${idOrSlug}`, 600, async () => {
+    const res = await dataClient.get(`/market-intel/${idOrSlug}`);
+    return res.data;
+  });
 };
 
 const getDividendCalendar = async ({ status } = {}) => {
-  const params = {};
-  if (status) params.status = status.toUpperCase();
-  const res = await dataClient.get('/dividends/calendar', { params });
-  return res.data;
+  return withCache(`ms:dividends:calendar:${status || 'all'}`, 600, async () => {
+    const params = {};
+    if (status) params.status = status.toUpperCase();
+    const res = await dataClient.get('/dividends/calendar', { params });
+    return res.data;
+  });
 };
 
 const getUserDividends = async (subAccountId) => {

@@ -1,5 +1,6 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
+const { withCache } = require('../utils/cache');
 
 class AlpacaService {
   constructor() {
@@ -680,24 +681,16 @@ class AlpacaService {
         throw new Error('Paper Trading API credentials not configured. Please set ALPACA_PAPER_API_KEY and ALPACA_PAPER_SECRET_KEY in your environment variables.');
       }
 
-      const params = {
-        status,
-        asset_class: assetClass
-      };
+      const cacheKey = `alpaca:assets:${status}:${assetClass}:${exchange || 'all'}`;
+      return await withCache(cacheKey, 300, async () => {
+        const params = { status, asset_class: assetClass };
+        if (exchange) params.exchange = exchange;
 
-      if (exchange) {
-        params.exchange = exchange;
-      }
-
-      // Use Paper Trading API for assets
-      const url = `${this.paperUrl}/v2/assets`;
-      logger.info(`Fetching assets from Paper Trading API: ${url}`);
-
-      const response = await axios.get(url, {
-        headers: this.paperHeaders, // Use paper trading headers
-        params
+        const url = `${this.paperUrl}/v2/assets`;
+        logger.info(`Fetching assets from Paper Trading API: ${url}`);
+        const response = await axios.get(url, { headers: this.paperHeaders, params });
+        return response.data;
       });
-      return response.data;
     } catch (error) {
       logger.error('Get assets error:', error.response?.data || error.message);
 
@@ -856,10 +849,12 @@ class AlpacaService {
 
   async getLatestQuote(symbol) {
     try {
-      const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/${symbol}/quotes/latest`, {
-        headers: this.paperHeaders
+      return await withCache(`alpaca:quote:${symbol}`, 30, async () => {
+        const response = await axios.get(`${this.dataBaseUrl}/v2/stocks/${symbol}/quotes/latest`, {
+          headers: this.paperHeaders
+        });
+        return response.data.quote;
       });
-      return response.data.quote;
     } catch (error) {
       logger.debug('Get latest quote error:', error.response?.data || error.message);
       throw new Error('Failed to get latest quote');
@@ -880,7 +875,10 @@ class AlpacaService {
   }
 
   async getBars(symbol, timeframe = '1Day', start, end, limit = 100) {
+    const cacheKey = `alpaca:bars:${symbol}:${timeframe}:${limit}:${start || ''}:${end || ''}`;
+    const ttl = timeframe.includes('Day') ? 60 : timeframe.includes('Week') || timeframe.includes('Month') ? 300 : 30;
     try {
+      return await withCache(cacheKey, ttl, async () => {
       const params = {
         symbols: symbol,
         timeframe,
@@ -950,6 +948,7 @@ class AlpacaService {
       }
 
       return bars;
+      }); // end withCache
     } catch (error) {
       logger.error('Get bars error:', error.response?.data || error.message);
 
@@ -1105,12 +1104,14 @@ class AlpacaService {
 
   async getMarketStatus() {
     try {
-      logger.info('Getting market status from:', `${this.paperUrl}/v2/clock`);
-      const response = await axios.get(`${this.paperUrl}/v2/clock`, {
-        headers: this.paperHeaders
+      return await withCache('alpaca:market:status', 60, async () => {
+        logger.info('Getting market status from:', `${this.paperUrl}/v2/clock`);
+        const response = await axios.get(`${this.paperUrl}/v2/clock`, {
+          headers: this.paperHeaders
+        });
+        logger.info('Market status response received:', response.data);
+        return response.data;
       });
-      logger.info('Market status response received:', response.data);
-      return response.data;
     } catch (error) {
       logger.error('Get market status error:', {
         message: error.message,
