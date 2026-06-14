@@ -107,17 +107,32 @@ module.exports = {
       }
 
       if (tableInfo.kyc_status) {
-        // First remove the default value
-        await queryInterface.changeColumn('users', 'kyc_status', {
-          type: Sequelize.ENUM('not_started', 'pending', 'submitted', 'approved', 'rejected', 'under_review'),
-          allowNull: true
-        });
-        // Then set the new default value
-        await queryInterface.changeColumn('users', 'kyc_status', {
-          type: Sequelize.ENUM('not_started', 'pending', 'submitted', 'approved', 'rejected', 'under_review'),
-          allowNull: true,
-          defaultValue: 'not_started'
-        });
+        // Rebuild enum to ensure 'not_started' is present. Sequelize's changeColumn
+        // generates SET DEFAULT before CREATE TYPE, which fails if the enum already
+        // exists without the new value. Use rename/create/alter/drop instead.
+        await queryInterface.sequelize.query(`
+          DO $$ BEGIN
+            -- Check if 'not_started' is already a valid value for this enum
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_enum e
+              JOIN pg_type t ON t.oid = e.enumtypid
+              WHERE t.typname = 'enum_users_kyc_status' AND e.enumlabel = 'not_started'
+            ) THEN
+              ALTER TYPE "enum_users_kyc_status" RENAME TO "enum_users_kyc_status_old";
+              CREATE TYPE "enum_users_kyc_status" AS ENUM ('not_started', 'pending', 'submitted', 'approved', 'rejected', 'under_review');
+              ALTER TABLE "users"
+                ALTER COLUMN "kyc_status" DROP DEFAULT,
+                ALTER COLUMN "kyc_status" TYPE "enum_users_kyc_status"
+                  USING "kyc_status"::text::"enum_users_kyc_status";
+              DROP TYPE "enum_users_kyc_status_old";
+            END IF;
+          END $$;
+        `);
+        await queryInterface.sequelize.query(`
+          ALTER TABLE "users"
+            ALTER COLUMN "kyc_status" DROP NOT NULL,
+            ALTER COLUMN "kyc_status" SET DEFAULT 'not_started'
+        `);
       }
 
       // Create unique index on alpaca_account_id if it doesn't exist

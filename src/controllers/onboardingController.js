@@ -1031,10 +1031,7 @@ const onboardingController = {
   // Get detailed onboarding progress (matching Rivenapp pattern)
   getDetailedOnboardingProgress: async (req, res) => {
     try {
-      const user = await User.findByPk(req.user.id);
-      if (!user) {
-        return res.status(404).json(ApiResponse.Error('User not found', 404));
-      }
+      const user = req.user;
 
       const kycData = user.kyc_data || {};
 
