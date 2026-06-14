@@ -11,26 +11,32 @@ class RedisService {
 
   initialize() {
     try {
-      const redisConfig = {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT) || 6379,
-        password: process.env.REDIS_PASSWORD || undefined,
-        db: parseInt(process.env.REDIS_DB) || 0,
-        retryStrategy: (times) => {
-          const delay = Math.min(times * 50, 2000);
-          return delay;
-        },
+      // Support both REDIS_URL (e.g. redis://localhost:6379) and individual host/port vars
+      const redisUrl = process.env.REDIS_URL || null;
+      const baseConfig = {
+        retryStrategy: (times) => Math.min(times * 50, 2000),
         maxRetriesPerRequest: 3,
         enableReadyCheck: true,
         lazyConnect: false
       };
+      const redisConfig = redisUrl
+        ? baseConfig
+        : {
+            ...baseConfig,
+            host: process.env.REDIS_HOST || 'localhost',
+            port: parseInt(process.env.REDIS_PORT) || 6379,
+            password: process.env.REDIS_PASSWORD || undefined,
+            db: parseInt(process.env.REDIS_DB) || 0
+          };
+
+      const makeClient = () => redisUrl ? new Redis(redisUrl, baseConfig) : new Redis(redisConfig);
 
       // Main client for general operations
-      this.client = new Redis(redisConfig);
+      this.client = makeClient();
 
       // Separate clients for pub/sub
-      this.publisher = new Redis(redisConfig);
-      this.subscriber = new Redis(redisConfig);
+      this.publisher = makeClient();
+      this.subscriber = makeClient();
 
       // Event handlers
       this.client.on('connect', () => {

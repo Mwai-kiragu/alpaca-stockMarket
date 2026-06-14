@@ -300,7 +300,7 @@ User.init({
   },
   account_mode: {
     type: DataTypes.ENUM('demo', 'real'),
-    defaultValue: 'demo',
+    defaultValue: 'real',
     allowNull: false
   },
   demo_balance: {

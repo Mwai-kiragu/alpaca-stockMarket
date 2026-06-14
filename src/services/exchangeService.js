@@ -1,5 +1,6 @@
 const axios = require('axios');
 const logger = require('../utils/logger');
+const { withCache } = require('../utils/cache');
 
 class ExchangeService {
   constructor() {
@@ -56,30 +57,30 @@ class ExchangeService {
 
   async getExchangeRate(from = 'KES', to = 'USD') {
     try {
-      const cacheKey = `${from}_${to}`;
-      const cached = this.cache.get(cacheKey);
+      const redisKey = `fx:rate:${from}_${to}`;
 
-      if (cached && Date.now() - cached.timestamp < this.cacheExpiry) {
-        logger.info(`Using cached exchange rate: ${from}/${to} = ${cached.rate}`);
-        return cached.rate;
-      }
+      return await withCache(redisKey, 600, async () => {
+        // Also check in-memory map as fast L1 cache
+        const memKey = `${from}_${to}`;
+        const inMem = this.cache.get(memKey);
+        if (inMem && Date.now() - inMem.timestamp < this.cacheExpiry) {
+          return inMem.rate;
+        }
 
-      // Try multiple providers for real-time rates
-      const rate = await this.fetchFromMultipleProviders(from, to);
-
-      if (rate) {
-        this.cache.set(cacheKey, { rate, timestamp: Date.now() });
-        this.fallbackRates[cacheKey] = rate; // keep fallback current
-        logger.info(`Live exchange rate fetched: ${from}/${to} = ${rate}`);
-        return rate;
-      }
-
-      throw new Error('All providers failed');
+        const rate = await this.fetchFromMultipleProviders(from, to);
+        if (rate) {
+          this.cache.set(memKey, { rate, timestamp: Date.now() });
+          this.fallbackRates[memKey] = rate;
+          logger.info(`Live exchange rate fetched: ${from}/${to} = ${rate}`);
+          return rate;
+        }
+        throw new Error('All providers failed');
+      });
 
     } catch (error) {
       logger.error('Exchange rate fetch error:', error.message);
 
-      // Try cached rate first
+      // Try in-memory cache first
       const cached = this.cache.get(`${from}_${to}`);
       if (cached) {
         logger.warn(`Using cached exchange rate due to API error: ${cached.rate}`);
