@@ -10,6 +10,7 @@ const { createServer } = require('http');
 const { connectDB } = require('./config/database');
 const logger = require('./utils/logger');
 const errorHandler = require('./middleware/errorHandler');
+const { register: metricsRegister, requestDurationMiddleware } = require('./utils/metrics');
 const websocketService = require('./services/websocketService');
 const redisService = require('./config/redis');
 const realtimeNotificationService = require('./services/realtimeNotificationService');
@@ -120,6 +121,7 @@ app.use(morgan('combined', { stream: { write: message => logger.info(message.tri
 app.use(limiter);
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(requestDurationMiddleware);
 
 // Serve static files for uploads
 app.use('/uploads', express.static('uploads'));
@@ -169,6 +171,21 @@ app.use('/api/v1/waitlist', waitlistRoutes);
 app.use('/api/v1/posts', postRoutes);
 app.use('/api/v1/pages', pageRoutes);
 app.use('/api/v1/social', socialRoutes);
+
+app.get('/metrics', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    const ip = req.ip || req.connection.remoteAddress;
+    if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+      return res.status(403).end('Forbidden');
+    }
+  }
+  try {
+    res.set('Content-Type', metricsRegister.contentType);
+    res.end(await metricsRegister.metrics());
+  } catch (err) {
+    res.status(500).end(err.message);
+  }
+});
 
 app.get('/health', (req, res) => {
   res.status(200).json({

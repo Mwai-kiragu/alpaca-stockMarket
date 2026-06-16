@@ -6,6 +6,8 @@ const logger = require('../utils/logger');
 const { sequelize } = require('../config/database');
 const ms = require('../services/mystocksService');
 const { ensureMyStocksSubAccount } = require('../utils/ensureMyStocksAccount');
+const platformConfigService = require('../services/platformConfigService');
+const { recordRevenue } = require('../services/revenueService');
 
 const getWallet = async (req, res) => {
   try {
@@ -234,11 +236,16 @@ const initiateDeposit = async (req, res) => {
         }
       });
 
-      // Add money to wallet
-      wallet.kes_balance = parseFloat(wallet.kes_balance) + amount;
+      // Apply platform deposit fee
+      const depositFeeRate = await platformConfigService.getSetting('deposit_fee_rate');
+      const depositFee = Math.round(amount * depositFeeRate * 100) / 100;
+      const netDepositAmount = amount - depositFee;
+
+      wallet.kes_balance = parseFloat(wallet.kes_balance) + netDepositAmount;
       await wallet.save();
 
-      logger.info(`Sandbox deposit completed for user ${req.user.id}: KES ${amount}`);
+      recordRevenue('deposit_fee', { userId: req.user.id, amountKes: depositFee, currency: 'KES', reference: reference });
+      logger.info(`Sandbox deposit completed for user ${req.user.id}: KES ${amount} (fee: KES ${depositFee}, net: KES ${netDepositAmount})`);
 
       // Check if user has auto-conversion enabled
       const user = await User.findByPk(req.user.id);
@@ -457,7 +464,10 @@ const mpesaCallback = async (req, res) => {
       transaction.metadata.transactionDate = callbackResult.metadata.transactionDate;
       transaction.metadata.phoneNumber = callbackResult.metadata.phoneNumber;
 
-      wallet.kes_balance += transaction.amount;
+      const depositFeeRate = await platformConfigService.getSetting('deposit_fee_rate');
+      const depositFee = Math.round(transaction.amount * depositFeeRate * 100) / 100;
+      wallet.kes_balance += (transaction.amount - depositFee);
+      recordRevenue('deposit_fee', { userId: wallet.user_id, amountKes: depositFee, currency: 'KES', reference: reference });
 
       // Check if user has auto-conversion enabled
       const user = await User.findByPk(wallet.user_id);
@@ -845,8 +855,9 @@ const initiateWithdrawal = async (req, res) => {
     }
 
     // Calculate withdrawal fees
-    const withdrawalFees = calculateWithdrawalFees(amount, currency, method);
+    const withdrawalFees = await calculateWithdrawalFees(amount, currency);
     const netAmount = amount - withdrawalFees;
+    recordRevenue('withdrawal_fee', { userId: req.user.id, amountKes: currency === 'KES' ? withdrawalFees : null, amountUsd: currency === 'USD' ? withdrawalFees : null, currency, reference: `WD_${req.user.id}_${Date.now()}` });
 
     if (netAmount <= 0) {
       return res.status(400).json({
@@ -1243,22 +1254,10 @@ const getWithdrawalStatus = async (req, res) => {
 };
 
 // Helper functions
-function calculateWithdrawalFees(amount, currency, method) {
-  const feeStructure = {
-    mpesa: { KES: 0.02, USD: 0.05 }, // 2% for KES, 5% for USD
-    bank_transfer: { KES: 50, USD: 5 }, // Fixed fees
-    paypal: { KES: 0.03, USD: 0.035 } // 3% for KES, 3.5% for USD
-  };
-
-  const fee = feeStructure[method]?.[currency] || 0;
-
-  // If percentage-based fee
-  if (fee < 1) {
-    return Math.max(amount * fee, currency === 'KES' ? 10 : 1); // Minimum fees
-  }
-
-  // Fixed fee
-  return fee;
+async function calculateWithdrawalFees(amount, currency) {
+  const rate = await platformConfigService.getSetting('withdrawal_fee_rate');
+  const fee = amount * rate;
+  return Math.max(fee, currency === 'KES' ? 10 : 0.5); // minimum floor
 }
 
 function getEstimatedProcessingTime(method, currency) {

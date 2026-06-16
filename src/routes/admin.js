@@ -20,6 +20,9 @@ const {
   cancelOrder,
   flagOrder,
   resolveOrder,
+  getConfig,
+  updateConfig,
+  getRevenue,
 } = require('../controllers/adminController');
 
 const router = express.Router();
@@ -56,5 +59,12 @@ router.post('/kyc/:userId/request-info', requestKYCInfo);
 // Alpaca KYC Sync Routes
 router.post('/kyc/:userId/sync-alpaca', syncKYCFromAlpaca);
 router.post('/kyc/bulk-sync-alpaca', bulkSyncKYCFromAlpaca);
+
+// Platform Config
+router.get('/config', getConfig);
+router.put('/config', updateConfig);
+
+// Revenue
+router.get('/revenue', getRevenue);
 
 module.exports = router;

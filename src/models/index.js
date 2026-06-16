@@ -19,6 +19,8 @@ const StaticPage = require('./StaticPage');
 const SocialLink = require('./SocialLink');
 const MsOrder = require('./MsOrder');
 const DemoOrder = require('./DemoOrder');
+const PlatformSetting = require('./PlatformSetting');
+const PlatformRevenue = require('./PlatformRevenue');
 
 // Define associations
 User.hasOne(Wallet, { foreignKey: 'user_id', as: 'wallet' });
@@ -71,6 +73,10 @@ WaitlistUser.hasMany(Referral, { foreignKey: 'referrer_user_id', as: 'outgoingRe
 Referral.belongsTo(WaitlistUser, { foreignKey: 'referrer_user_id', as: 'referrer' });
 Referral.belongsTo(WaitlistUser, { foreignKey: 'referred_user_id', as: 'referred' });
 
+// Platform revenue associations
+User.hasMany(PlatformRevenue, { foreignKey: 'user_id', as: 'revenue' });
+PlatformRevenue.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
+
 // User referral associations (self-referencing)
 User.belongsTo(User, { foreignKey: 'referred_by', as: 'referrer' });
 User.hasMany(User, { foreignKey: 'referred_by', as: 'referredUsers' });
@@ -105,4 +111,6 @@ module.exports = {
   SocialLink,
   MsOrder,
   DemoOrder,
+  PlatformSetting,
+  PlatformRevenue,
 };
