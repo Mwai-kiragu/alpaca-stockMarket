@@ -5,6 +5,9 @@ const exchangeService = require('../services/exchangeService');
 const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
 
+const platformConfigService = require('../services/platformConfigService');
+const { recordRevenue } = require('../services/revenueService');
+
 const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
 const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
 
@@ -55,15 +58,17 @@ const createOrder = async (req, res) => {
           return res.status(503).json({ success: false, message: priceError || 'Unable to fetch current price for this stock.' });
         }
         const gross = Math.round(qty * currentPrice * 100) / 100;
-        const fee = Math.round(gross * 0.01 * 100) / 100;
+        const tradeFeeRate = await platformConfigService.getSetting('trade_fee_rate');
+        const fee = Math.round(gross * tradeFeeRate * 100) / 100;
         if (tradeType === 'BUY') {
           const totalCost = gross + fee;
           if (demoBalance < totalCost) {
             return res.status(400).json({ success: false, message: 'Insufficient demo balance', available: parseFloat(demoBalance.toFixed(2)), required: parseFloat(totalCost.toFixed(2)) });
           }
           const newBalance = Math.round((demoBalance - totalCost) * 100) / 100;
-          await DemoOrder.create({ user_id: req.user.id, symbol: msSymbol, side: 'BUY', quantity: qty, price_usd: currentPrice, gross_usd: gross, fee_usd: fee, total_cost_usd: totalCost, currency: stockCurrency, exchange: exchange.toUpperCase(), balance_after: newBalance, status: 'FILLED', filled_at: new Date() });
+          const demoOrder = await DemoOrder.create({ user_id: req.user.id, symbol: msSymbol, side: 'BUY', quantity: qty, price_usd: currentPrice, gross_usd: gross, fee_usd: fee, total_cost_usd: totalCost, currency: stockCurrency, exchange: exchange.toUpperCase(), balance_after: newBalance, status: 'FILLED', filled_at: new Date() });
           await user.update({ demo_balance: newBalance });
+          recordRevenue('trade_fee', { userId: req.user.id, amountUsd: fee, currency: 'USD', reference: `DEMO_${demoOrder.id}` });
           return res.status(201).json({ success: true, provider: 'demo', order: { symbol: msSymbol, side: 'BUY', quantity: qty, price: currentPrice, gross, fee, totalCost, balanceAfter: newBalance } });
         } else {
           const existingOrders = await DemoOrder.findAll({ where: { user_id: req.user.id, symbol: msSymbol } });
@@ -72,8 +77,9 @@ const createOrder = async (req, res) => {
           if (netQty < qty) return res.status(400).json({ success: false, message: 'Insufficient shares', available: parseFloat(netQty.toFixed(6)), required: qty });
           const proceeds = Math.round((gross - fee) * 100) / 100;
           const newBalance = Math.round((demoBalance + proceeds) * 100) / 100;
-          await DemoOrder.create({ user_id: req.user.id, symbol: msSymbol, side: 'SELL', quantity: qty, price_usd: currentPrice, gross_usd: gross, fee_usd: fee, total_cost_usd: proceeds, currency: stockCurrency, exchange: exchange.toUpperCase(), balance_after: newBalance, status: 'FILLED', filled_at: new Date() });
+          const demoOrder = await DemoOrder.create({ user_id: req.user.id, symbol: msSymbol, side: 'SELL', quantity: qty, price_usd: currentPrice, gross_usd: gross, fee_usd: fee, total_cost_usd: proceeds, currency: stockCurrency, exchange: exchange.toUpperCase(), balance_after: newBalance, status: 'FILLED', filled_at: new Date() });
           await user.update({ demo_balance: newBalance });
+          recordRevenue('trade_fee', { userId: req.user.id, amountUsd: fee, currency: 'USD', reference: `DEMO_${demoOrder.id}` });
           return res.status(201).json({ success: true, provider: 'demo', order: { symbol: msSymbol, side: 'SELL', quantity: qty, price: currentPrice, gross, fee, proceeds, balanceAfter: newBalance } });
         }
       }
@@ -185,8 +191,7 @@ const createOrder = async (req, res) => {
       });
     }
 
-    // Calculate commission (1% of order value in USD)
-    const COMMISSION_RATE = 0.01;
+    const COMMISSION_RATE = await platformConfigService.getSetting('trade_fee_rate');
     const commissionUsd = orderValue * COMMISSION_RATE;
     const totalCostUsd = orderValue + commissionUsd;
 
@@ -683,6 +688,7 @@ const handleOrderFill = async (order) => {
         });
 
         logger.info(`Commission collected for order ${order.id}: $${commissionUsd.toFixed(2)}`);
+        recordRevenue('trade_fee', { userId: order.user_id, amountUsd: commissionUsd, currency: 'USD', reference: `ORDER_${order.id}` });
       }
     }
 
