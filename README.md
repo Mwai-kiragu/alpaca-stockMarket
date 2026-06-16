@@ -350,3 +350,85 @@ For support and questions:
 - Trading functionality via Alpaca
 - Portfolio management
 - Customer support system
+
+
+
+
+
+
+Step 4 — On the GCP VM: Install Prometheus & Grafana                                                                                                                                                                       
+                                                                                                                                                                                                                             
+  SSH into your VM, then run these commands:                                                                                                                                                                                 
+                                                                                                                                                                                                                             
+  Install Prometheus:                                                                                                                                                                                                        
+                                                                                                                                                                                                                           
+  # Download and install                                                                                                                                                                                                     
+  cd /tmp                                                                                                                                                                                                                  
+  wget https://github.com/prometheus/prometheus/releases/download/v2.51.0/prometheus-2.51.0.linux-amd64.tar.gz                                                                                                               
+  tar xvf prometheus-2.51.0.linux-amd64.tar.gz
+  sudo mv prometheus-2.51.0.linux-amd64 /opt/prometheus                                                                                                                                                                      
+                                                                                                                                                                                                                           
+  # Create config                                                                                                                                                                                                            
+  sudo tee /opt/prometheus/prometheus.yml > /dev/null <<EOF                                                                                                                                                                
+  global:                                                                                                                                                                                                                    
+                                                                                                                                                                                                                           
+  scrape_configs:                                                                                                                                                                                                          
+    - job_name: 'riven-api'
+      static_configs:      
+        - targets: ['localhost:3000']                                                                                                                                                                                        
+      metrics_path: '/metrics'       
+  EOF                                                                                                                                                                                                                        
+                                                                                                                                                                                                                           
+  # Create systemd service                                                                                                                                                                                                 
+  sudo tee /etc/systemd/system/prometheus.service > /dev/null <<EOF                                                                                                                                                          
+  [Unit]                                                           
+  Description=Prometheus                                                                                                                                                                                                     
+  After=network.target                                                                                                                                                                                                     
+                                                                                                                                                                                                                           
+  [Service]
+  ExecStart=/opt/prometheus/prometheus --config.file=/opt/prometheus/prometheus.yml --storage.tsdb.path=/opt/prometheus/data
+  Restart=always                                                                                                            
+                                                                                                                                                                                                                             
+  [Install]
+  WantedBy=multi-user.target                                                                                                                                                                                                 
+  EOF                                                                                                                                                                                                                      
+                                                                                                                                                                                                                           
+  sudo systemctl daemon-reload
+  sudo systemctl enable prometheus
+  sudo systemctl start prometheus
+                                                                                                                                                                                                                             
+  Install Grafana:
+  sudo apt-get install -y apt-transport-https software-properties-common                                                                                                                                                     
+  wget -q -O - https://apt.grafana.com/gpg.key | sudo apt-key add -                                                                                                                                                        
+  echo "deb https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list                                                                                                                           
+  sudo apt-get update                                                                                                                                                                                                        
+  sudo apt-get install grafana -y
+  sudo systemctl enable grafana-server                                                                                                                                                                                       
+  sudo systemctl start grafana-server                                                                                                                                                                                      
+                                                                                                                                                                                                                             
+  ---                                                                                                                                                                                                                      
+  Step 5 — Open firewall port in GCP                                                                                                                                                                                         
+                                                                                                                                                                                                                             
+  In GCP Console → VPC Network → Firewall:
+  - Add rule: allow TCP port 3001 (or just use SSH tunnel — see below)                                                                                                                                                       
+                                                                                                                                                                                                                             
+  Safer option — SSH tunnel (no firewall change needed):
+  # Run on your Mac:                                                                                                                                                                                                         
+  ssh -L 3001:localhost:3000 your-vm-user@your-vm-ip                                                                                                                                                                       
+  # Then open http://localhost:3001 on your Mac                                                                                                                                                                              
+                                                                                                                                                                                                                             
+  ---
+  Step 6 — Configure Grafana                                                                                                                                                                                                 
+                                                                                                                                                                                                                             
+  1. Open http://your-vm-ip:3000 (Grafana runs on port 3000 — change if clash with your app)
+  2. Default login: admin / admin                                                                                                                                                                                            
+  3. Add data source → Prometheus → URL: http://localhost:9090                                                                                                                                                             
+  4. Import dashboard ID 11159 (Node.js Express app dashboard — pre-built)                                                                                                                                                   
+                                                                                                                                                                                                                             
+  ---                                                                                                                                                                                                                        
+  Summary of what's done in code:                                                                                                                                                                                            
+  - src/utils/metrics.js — Prometheus metrics (request duration histogram, request counter, active connections)                                                                                                            
+  - server.js — middleware wired, /metrics endpoint added                                                      
+  - prom-client installed                                                                                                                                                                                                    
+                         
+  The only thing left is the VM install + Grafana config above.

@@ -1,6 +1,8 @@
 const { User, Transaction, Order, MsOrder } = require('../models');
+const PlatformRevenue = require('../models/PlatformRevenue');
 const { Op, fn, col, literal } = require('sequelize');
 const logger = require('../utils/logger');
+const platformConfigService = require('../services/platformConfigService');
 
 const adminController = {
   // Get all pending KYC applications
@@ -1092,6 +1094,83 @@ const adminController = {
     } catch (error) {
       logger.error('Resolve order error:', error);
       res.status(500).json({ success: false, message: 'Failed to resolve order' });
+    }
+  },
+  // GET /api/v1/admin/revenue
+  getRevenue: async (req, res) => {
+    try {
+      const { days = 30 } = req.query;
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+      const rows = await PlatformRevenue.findAll({ where: { created_at: { [Op.gte]: since } } });
+
+      const totals = { trade_fee: { usd: 0, kes: 0 }, deposit_fee: { usd: 0, kes: 0 }, withdrawal_fee: { usd: 0, kes: 0 }, forex_fee: { usd: 0, kes: 0 } };
+      for (const r of rows) {
+        if (r.amount_usd) totals[r.type].usd += parseFloat(r.amount_usd);
+        if (r.amount_kes) totals[r.type].kes += parseFloat(r.amount_kes);
+      }
+
+      // Daily breakdown for chart (last N days)
+      const dailyMap = {};
+      for (const r of rows) {
+        const day = r.created_at.toISOString().slice(0, 10);
+        if (!dailyMap[day]) dailyMap[day] = { date: day, usd: 0, kes: 0 };
+        if (r.amount_usd) dailyMap[day].usd += parseFloat(r.amount_usd);
+        if (r.amount_kes) dailyMap[day].kes += parseFloat(r.amount_kes);
+      }
+      const daily = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date));
+
+      // Recent transactions (last 20)
+      const recent = await PlatformRevenue.findAll({
+        order: [['created_at', 'DESC']],
+        limit: 20,
+        include: [{ model: User, as: 'user', attributes: ['id', 'first_name', 'last_name', 'email'] }],
+      });
+
+      const grandTotalUsd = Object.values(totals).reduce((s, t) => s + t.usd, 0);
+      const grandTotalKes = Object.values(totals).reduce((s, t) => s + t.kes, 0);
+
+      res.json({ success: true, data: { period_days: parseInt(days), totals, grandTotalUsd, grandTotalKes, daily, recent } });
+    } catch (error) {
+      logger.error('getRevenue error:', error);
+      res.status(500).json({ success: false, message: 'Failed to load revenue data' });
+    }
+  },
+
+  // GET /api/v1/admin/config
+  getConfig: async (req, res) => {
+    try {
+      const settings = await platformConfigService.getAllSettings();
+      res.json({ success: true, data: settings });
+    } catch (error) {
+      logger.error('getConfig error:', error);
+      res.status(500).json({ success: false, message: 'Failed to load config' });
+    }
+  },
+
+  // PUT /api/v1/admin/config
+  updateConfig: async (req, res) => {
+    try {
+      const allowed = ['trade_fee_rate', 'deposit_fee_rate', 'withdrawal_fee_rate'];
+      const updates = req.body;
+
+      for (const key of Object.keys(updates)) {
+        if (!allowed.includes(key)) {
+          return res.status(400).json({ success: false, message: `Unknown config key: ${key}` });
+        }
+        const val = parseFloat(updates[key]);
+        if (isNaN(val) || val < 0 || val > 0.1) {
+          return res.status(400).json({ success: false, message: `${key} must be between 0 and 0.1 (0%–10%)` });
+        }
+        await platformConfigService.setSetting(key, val);
+      }
+
+      logger.info(`Admin ${req.user.id} updated platform config: ${JSON.stringify(updates)}`);
+      const settings = await platformConfigService.getAllSettings();
+      res.json({ success: true, message: 'Config updated', data: settings });
+    } catch (error) {
+      logger.error('updateConfig error:', error);
+      res.status(500).json({ success: false, message: 'Failed to update config' });
     }
   },
 };
