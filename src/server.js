@@ -103,7 +103,6 @@ app.use((req, res, next) => {
     '/appsettings',
     '/cgi-bin',
     '/.env',
-    '/config',
     '/parameters.yml'
   ];
 
