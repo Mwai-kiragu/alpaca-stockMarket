@@ -90,47 +90,59 @@ const createOrder = async (req, res) => {
       if (tradeType === 'BUY') {
         let currentPrice = null;
         try {
-          const stocks = await ms.getStocks({ exchange: exchange.toUpperCase() });
-          const all = Array.isArray(stocks) ? stocks : (stocks?.stocks || []);
-          const stock = all.find(s => (s.symbol || '').toUpperCase() === msSymbol);
+          // Strip exchange suffix (e.g. SCOM.KE → SCOM) to match MyStocks symbol format
+          const ticker = msSymbol.includes('.') ? msSymbol.split('.')[0] : msSymbol;
+          const snap = await ms.getStocks({ search: ticker });
+          const all = Array.isArray(snap) ? snap : (snap?.stocks || []);
+          const stock = all.find(s => {
+            const sym = (s.symbol || '').toUpperCase();
+            return sym === msSymbol || sym === ticker;
+          }) || all[0];
           if (stock) currentPrice = parseFloat(stock.price || stock.currentPrice || 0);
         } catch (_) {}
 
-        if (currentPrice && currentPrice > 0) {
-          const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
-          const tradeFeeRate = await platformConfigService.getSetting('trade_fee_rate');
-          const grossKes = qty * currentPrice;
-          const feeKes = Math.round(grossKes * tradeFeeRate * 100) / 100;
-          const totalKes = grossKes + feeKes;
+        if (!currentPrice || currentPrice <= 0) {
+          return res.status(503).json({ success: false, message: 'Unable to fetch current price. Please try again.' });
+        }
 
-          const wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
-          const kesBalance = parseFloat(wallet?.kes_balance || 0);
+        const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
+        const tradeFeeRate = await platformConfigService.getSetting('trade_fee_rate');
+        const grossKes = qty * currentPrice;
+        const feeKes = Math.round(grossKes * tradeFeeRate * 100) / 100;
+        const totalKes = grossKes + feeKes;
 
-          if (kesBalance < totalKes) {
-            return res.status(400).json({
-              success: false,
-              message: 'Insufficient balance',
-              required: `KES ${totalKes.toFixed(2)}`,
-              available: `KES ${kesBalance.toFixed(2)}`,
-            });
-          }
+        const wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
+        const kesBalance = parseFloat(wallet?.kes_balance || 0);
 
-          // Convert KES → USD and deposit to MyStocks sub-account
-          const usdAmount = Math.round((totalKes / exchangeRate) * 10000) / 10000;
-          try {
-            await ms.depositToSubAccount(subAccountId, {
-              amount: usdAmount,
-              currency: 'USD',
-              localAmount: totalKes,
-              localCurrency: 'KES',
-              fxRate: exchangeRate,
-              reference: `ORDER_${req.user.id}_${Date.now()}`,
-            });
-            await wallet.update({ kes_balance: Math.max(0, kesBalance - totalKes) });
-            logger.info(`Funded MyStocks $${usdAmount} (KES ${totalKes}) for user ${req.user.id}`);
-          } catch (fundErr) {
-            logger.warn(`MyStocks deposit skipped (may already have balance): ${fundErr.message}`);
-          }
+        if (kesBalance < totalKes) {
+          return res.status(400).json({
+            success: false,
+            message: 'Insufficient balance',
+            required: `KES ${totalKes.toFixed(2)}`,
+            available: `KES ${kesBalance.toFixed(2)}`,
+          });
+        }
+
+        // Convert KES → USD and deposit to MyStocks sub-account
+        const usdAmount = Math.round((totalKes / exchangeRate) * 10000) / 10000;
+        try {
+          await ms.depositToSubAccount(subAccountId, {
+            amount: usdAmount,
+            currency: 'USD',
+            localAmount: totalKes,
+            localCurrency: 'KES',
+            fxRate: exchangeRate,
+            reference: `ORDER_${req.user.id}_${Date.now()}`,
+          });
+          await wallet.update({ kes_balance: Math.max(0, kesBalance - totalKes) });
+          logger.info(`Funded MyStocks $${usdAmount} (KES ${totalKes}) for user ${req.user.id}`);
+        } catch (fundErr) {
+          logger.error(`MyStocks deposit failed for user ${req.user.id}: ${fundErr.message}`);
+          const msError = fundErr.response?.data?.error || fundErr.response?.data?.message || '';
+          const userMessage = msError.toLowerCase().includes('master wallet')
+            ? 'Trading services are temporarily unavailable. Please try again later or contact support.'
+            : 'Failed to fund trading account. Please try again.';
+          return res.status(502).json({ success: false, message: userMessage });
         }
       }
 
