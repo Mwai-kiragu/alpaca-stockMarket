@@ -3,7 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const logger = require('../utils/logger');
 const { withCache } = require('../utils/cache');
 
-const isSandbox = process.env.MYSTOCKS_ENV !== 'production';
+const isSandbox = !['live', 'production'].includes(process.env.MYSTOCKS_ENV);
 
 // Partner/user operations: /partner prefix in both envs
 const PARTNER_URL = isSandbox
@@ -46,7 +46,9 @@ const errorInterceptor = err => {
   const message = err.response?.data?.message || err.message;
   logger.error(`MyStocks API error [${status}]: ${message}`, {
     url: err.config?.url,
-    method: err.config?.method
+    method: err.config?.method,
+    responseData: err.response?.data,
+    requestData: err.config?.data,
   });
   return Promise.reject(err);
 };
