@@ -88,9 +88,9 @@ const createOrder = async (req, res) => {
 
       // For BUY orders: auto-fund MyStocks sub-account from local KES wallet
       if (tradeType === 'BUY') {
-        let currentPrice = null;
+        let priceUsd = null;
         try {
-          // Strip exchange suffix (e.g. SCOM.KE → SCOM) to match MyStocks symbol format
+          // Strip exchange suffix (e.g. SCOM.KE → SCOM, ACL.ZA → ACL)
           const ticker = msSymbol.includes('.') ? msSymbol.split('.')[0] : msSymbol;
           const snap = await ms.getStocks({ search: ticker });
           const all = Array.isArray(snap) ? snap : (snap?.stocks || []);
@@ -98,18 +98,22 @@ const createOrder = async (req, res) => {
             const sym = (s.symbol || '').toUpperCase();
             return sym === msSymbol || sym === ticker;
           }) || all[0];
-          if (stock) currentPrice = parseFloat(stock.price || stock.currentPrice || 0);
+          if (stock) {
+            const kesRate = await exchangeService.getExchangeRate('USD', 'KES');
+            priceUsd = parseFloat(stock.usdPrice || (stock.price ? stock.price / kesRate : 0) || 0);
+          }
         } catch (_) {}
 
-        if (!currentPrice || currentPrice <= 0) {
+        if (!priceUsd || priceUsd <= 0) {
           return res.status(503).json({ success: false, message: 'Unable to fetch current price. Please try again.' });
         }
 
         const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
         const tradeFeeRate = await platformConfigService.getSetting('trade_fee_rate');
-        const grossKes = qty * currentPrice;
-        const feeKes = Math.round(grossKes * tradeFeeRate * 100) / 100;
-        const totalKes = grossKes + feeKes;
+        const grossUsd = Math.round(qty * priceUsd * 10000) / 10000;
+        const feeUsd = Math.round(grossUsd * tradeFeeRate * 10000) / 10000;
+        const totalUsd = grossUsd + feeUsd;
+        const totalKes = Math.round(totalUsd * exchangeRate * 100) / 100;
 
         const wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
         const kesBalance = parseFloat(wallet?.kes_balance || 0);
@@ -123,8 +127,8 @@ const createOrder = async (req, res) => {
           });
         }
 
-        // Convert KES → USD and deposit to MyStocks sub-account
-        const usdAmount = Math.round((totalKes / exchangeRate) * 10000) / 10000;
+        // Deposit exact USD amount needed into MyStocks sub-account
+        const usdAmount = totalUsd;
         try {
           await ms.depositToSubAccount(subAccountId, {
             amount: usdAmount,
