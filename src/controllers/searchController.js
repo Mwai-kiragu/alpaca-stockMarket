@@ -2,6 +2,7 @@ const alpacaService = require('../services/alpacaService');
 const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
 const logger = require('../utils/logger');
+const { getProviderFlags } = require('../services/platformConfigService');
 
 const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
 const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
@@ -17,13 +18,18 @@ const searchStocks = async (req, res) => {
       });
     }
 
+    const { alpacaEnabled, mystocksEnabled } = await getProviderFlags();
+
     // African exchange → MyStocks search
     if (isAfrican(exchange)) {
+      if (!mystocksEnabled) return res.status(503).json({ success: false, message: 'African market search is currently unavailable.' });
       const data = await ms.getStocks({ exchange: exchange.toUpperCase(), search: query.trim() });
       const results = Array.isArray(data) ? data : (Array.isArray(data?.stocks) ? data.stocks : []);
       const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
       return res.json({ success: true, provider: 'mystocks', results: results.slice(0, limitNum), count: Math.min(results.length, limitNum), total: results.length });
     }
+
+    if (!alpacaEnabled) return res.status(503).json({ success: false, message: 'US market search is currently unavailable.' });
 
     const searchQuery = query.toLowerCase().trim();
 
