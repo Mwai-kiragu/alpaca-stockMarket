@@ -918,7 +918,7 @@ const getAssetTrend = async (req, res) => {
       // African-only user — build trend from ms_orders history + live MyStocks data
       const limitNum = Math.min(parseInt(limit) || 30, 100);
 
-      const [msPortfolioResult, msWalletResult, pendingOrdersResult, dbOrders] = await Promise.allSettled([
+      const [msPortfolioResult, msWalletResult, pendingOrdersResult, dbOrders, walletRow] = await Promise.allSettled([
         user?.mystocks_sub_account_id ? ms.getPortfolio(user.mystocks_sub_account_id) : Promise.resolve(null),
         user?.mystocks_sub_account_id ? ms.getWallet(user.mystocks_sub_account_id) : Promise.resolve(null),
         user?.mystocks_sub_account_id ? ms.getUserOrders(user.mystocks_sub_account_id) : Promise.resolve({ orders: [] }),
@@ -926,7 +926,8 @@ const getAssetTrend = async (req, res) => {
           where: { user_id: req.user.id },
           order: [['filled_at', 'ASC']],
           limit: 500
-        })
+        }),
+        Wallet.findOne({ where: { user_id: req.user.id } })
       ]);
 
       const msPortfolio = msPortfolioResult.status === 'fulfilled' ? msPortfolioResult.value : null;
@@ -934,6 +935,10 @@ const getAssetTrend = async (req, res) => {
       const msWalletBalance = parseFloat(msWalletRaw?.wallet?.balance || msWalletRaw?.balance || user?.mystocks_wallet_balance || 0);
       const allMsOrders = pendingOrdersResult.status === 'fulfilled' ? (pendingOrdersResult.value?.orders || []) : [];
       const orders = dbOrders.status === 'fulfilled' ? dbOrders.value : [];
+      const localWallet = walletRow.status === 'fulfilled' ? walletRow.value : null;
+      const localKesBalance = parseFloat(localWallet?.kes_balance || 0);
+      const localUsdBalance = parseFloat(localWallet?.usd_balance || 0);
+      const localCashUsd = localUsdBalance + (localKesBalance / (exchangeRate || 1));
 
       // Current filled holdings from MyStocks
       const holdings = msPortfolio
@@ -961,7 +966,7 @@ const getAssetTrend = async (req, res) => {
         return s + price * qty;
       }, 0);
       const pendingValue = pendingOrders.reduce((s, o) => s + parseFloat(o.totalAmount || 0), 0);
-      const currentValue = holdingsValue + pendingValue + msWalletBalance;
+      const currentValue = holdingsValue + pendingValue + msWalletBalance + localCashUsd;
       const profit = currentValue - netInvested;
 
       // Build chart from db order history — cumulative portfolio value per day
@@ -1006,8 +1011,12 @@ const getAssetTrend = async (req, res) => {
           profitKES: Math.round(profit * exchangeRate * 100) / 100,
           profitPercent: netInvested > 0 ? Math.round((profit / netInvested) * 10000) / 100 : 0,
           totalStocks: holdings.length + pendingOrders.length,
-          cash: msWalletBalance,
-          cashKES: Math.round(msWalletBalance * exchangeRate * 100) / 100
+          cash: msWalletBalance + localCashUsd,
+          cashKES: Math.round((msWalletBalance + localCashUsd) * exchangeRate * 100) / 100,
+          myStocksCash: msWalletBalance,
+          myStocksCashKES: Math.round(msWalletBalance * exchangeRate * 100) / 100,
+          localCash: localCashUsd,
+          localCashKES: Math.round(localCashUsd * exchangeRate * 100) / 100
         },
         chartData,
         summary: {
