@@ -106,17 +106,22 @@ const getPortfolio = async (req, res) => {
       // African-only user — fetch MyStocks portfolio + wallet
       let msPortfolio = null;
       let msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
+      let pendingOrders = [];
 
       try {
         if (user?.mystocks_sub_account_id) {
-          const [portfolioData, walletData] = await Promise.allSettled([
+          const [portfolioData, walletData, ordersData] = await Promise.allSettled([
             ms.getPortfolio(user.mystocks_sub_account_id),
-            ms.getWallet(user.mystocks_sub_account_id)
+            ms.getWallet(user.mystocks_sub_account_id),
+            ms.getUserOrders(user.mystocks_sub_account_id, { status: 'PENDING' })
           ]);
           if (portfolioData.status === 'fulfilled') msPortfolio = portfolioData.value;
           if (walletData.status === 'fulfilled') {
             const apiBalance = parseFloat(walletData.value?.wallet?.balance || walletData.value?.balance || 0);
             if (apiBalance > 0) msUsdBalance = apiBalance;
+          }
+          if (ordersData.status === 'fulfilled') {
+            pendingOrders = Array.isArray(ordersData.value?.orders) ? ordersData.value.orders : [];
           }
         }
       } catch (_) {}
@@ -146,10 +151,37 @@ const getPortfolio = async (req, res) => {
             unrealizedPLPC: cost > 0 ? (unrealizedPL / (qty * cost)) * 100 : 0,
             exchange: h.exchange || 'NSE',
             currency: h.currency || 'KES',
+            status: 'filled',
             provider: 'mystocks'
           });
         });
       }
+
+      // Append pending orders not already in filled holdings
+      const filledSymbols = new Set(positions.map(p => p.symbol));
+      pendingOrders.forEach(o => {
+        const priceUsd = parseFloat(o.usdPriceAtOrder || 0);
+        const qty = parseFloat(o.quantity || 0);
+        const totalUsd = parseFloat(o.totalAmount || qty * priceUsd);
+        positions.push({
+          symbol: o.symbol,
+          name: o.stockName || o.symbol,
+          qty,
+          avgEntryPrice: priceUsd,
+          currentPrice: priceUsd,
+          marketValue: totalUsd,
+          marketValueKES: totalUsd * exchangeRate,
+          unrealizedPL: 0,
+          unrealizedPLKES: 0,
+          unrealizedPLPC: 0,
+          exchange: o.exchange || 'NSE',
+          currency: 'USD',
+          status: 'pending',
+          orderId: o.orderId,
+          placedAt: o.createdAt,
+          provider: 'mystocks'
+        });
+      });
 
       const holdingsValue = positions.reduce((s, p) => s + p.marketValue, 0);
       const totalEquity = msUsdBalance + holdingsValue + localUsdBalance + (localKesBalance / exchangeRate);

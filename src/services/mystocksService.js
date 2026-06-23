@@ -121,12 +121,22 @@ const placeTrade = async (subAccountId, { symbol, type, quantity }) => {
   if (typeof res.data === 'string' && res.data.trimStart().startsWith('<')) {
     throw new Error('MyStocks trade endpoint not available in this environment. Contact MyStocks support or use a production API key.');
   }
+  if (res.data?.error) {
+    throw new Error(res.data.error);
+  }
   return res.data;
 };
 
 const getOrders = async (_subAccountId, { symbol, status, limit } = {}) => {
   const res = await dataClient.get('/orders', {
     params: { symbol, status, limit }
+  });
+  return res.data;
+};
+
+const getUserOrders = async (subAccountId, { status, limit } = {}) => {
+  const res = await client.get(`/users/${subAccountId}/orders`, {
+    params: { status, limit }
   });
   return res.data;
 };
@@ -284,6 +294,7 @@ module.exports = {
   getTransactions,
   placeTrade,
   getOrders,
+  getUserOrders,
   getPortfolio,
   getStocks,
   getStockHistory,
