@@ -3,6 +3,7 @@ const alpacaService = require('../services/alpacaService');
 const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
 const logger = require('../utils/logger');
+const { getProviderFlags } = require('../services/platformConfigService');
 
 const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
 
@@ -54,11 +55,12 @@ const buildDemoPositions = async (userId, exchangeRate) => {
 
 const getPortfolio = async (req, res) => {
   try {
-    // Fetch user, wallet, and exchange rate in parallel — none depend on each other
-    const [user, walletRow, exchangeRate] = await Promise.all([
+    // Fetch user, wallet, exchange rate, and provider flags in parallel
+    const [user, walletRow, exchangeRate, { alpacaEnabled, mystocksEnabled }] = await Promise.all([
       User.findByPk(req.user.id),
       Wallet.findOne({ where: { user_id: req.user.id } }),
-      exchangeService.getExchangeRate('USD', 'KES')
+      exchangeService.getExchangeRate('USD', 'KES'),
+      getProviderFlags()
     ]);
 
     const wallet = walletRow || { kes_balance: 0, usd_balance: 0, frozen_kes: 0, frozen_usd: 0 };
@@ -102,7 +104,11 @@ const getPortfolio = async (req, res) => {
       });
     }
 
-    if (!user || !user.alpaca_account_id) {
+    if (!user || !user.alpaca_account_id || (!alpacaEnabled && mystocksEnabled)) {
+      // MyStocks-only path: no Alpaca account, Alpaca disabled, or MyStocks-only mode
+      if (!mystocksEnabled) {
+        return res.status(503).json({ success: false, message: 'Trading services are currently unavailable.' });
+      }
       // African-only user — fetch MyStocks portfolio + wallet
       let msPortfolio = null;
       let msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
@@ -213,6 +219,10 @@ const getPortfolio = async (req, res) => {
           myStocksWallet: { balance: msUsdBalance, currency: 'USD' }
         }
       });
+    }
+
+    if (!alpacaEnabled) {
+      return res.status(503).json({ success: false, message: 'US market trading is currently disabled.' });
     }
 
     // Fetch Alpaca account, positions, and local orders in parallel

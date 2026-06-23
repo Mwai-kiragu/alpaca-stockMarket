@@ -17,10 +17,14 @@ const createOrder = async (req, res) => {
   try {
     const { symbol, side, type: orderType, qty: quantity, limit_price: limitPrice, stop_price: stopPrice, time_in_force: timeInForce, currency = 'USD', exchange } = req.body;
 
+    const { alpacaEnabled, mystocksEnabled } = await platformConfigService.getProviderFlags();
     const user = await User.findByPk(req.user.id);
 
     // African exchange → MyStocks trade (or paper trade in demo mode)
     if (isAfrican(exchange)) {
+      if (!mystocksEnabled) {
+        return res.status(503).json({ success: false, message: 'African market trading is currently disabled.' });
+      }
       const tradeType = (side || orderType || '').toUpperCase();
       if (!['BUY', 'SELL'].includes(tradeType)) {
         return res.status(400).json({ success: false, message: 'side must be BUY or SELL for African exchanges' });
@@ -172,6 +176,10 @@ const createOrder = async (req, res) => {
         logger.info(`MyStocks wallet balance updated for user ${req.user.id}: ${data.newWalletBalance} (rows updated: ${updated})`);
       }
       return res.status(202).json({ success: true, provider: 'mystocks', data });
+    }
+
+    if (!alpacaEnabled) {
+      return res.status(503).json({ success: false, message: 'US market trading is currently disabled.' });
     }
 
     if (!user || !user.alpaca_account_id) {
