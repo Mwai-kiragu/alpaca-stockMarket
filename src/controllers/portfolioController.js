@@ -3,6 +3,7 @@ const alpacaService = require('../services/alpacaService');
 const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
 const logger = require('../utils/logger');
+const { getProviderFlags } = require('../services/platformConfigService');
 
 const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
 
@@ -54,11 +55,12 @@ const buildDemoPositions = async (userId, exchangeRate) => {
 
 const getPortfolio = async (req, res) => {
   try {
-    // Fetch user, wallet, and exchange rate in parallel — none depend on each other
-    const [user, walletRow, exchangeRate] = await Promise.all([
+    // Fetch user, wallet, exchange rate, and provider flags in parallel
+    const [user, walletRow, exchangeRate, { alpacaEnabled, mystocksEnabled }] = await Promise.all([
       User.findByPk(req.user.id),
       Wallet.findOne({ where: { user_id: req.user.id } }),
-      exchangeService.getExchangeRate('USD', 'KES')
+      exchangeService.getExchangeRate('USD', 'KES'),
+      getProviderFlags()
     ]);
 
     const wallet = walletRow || { kes_balance: 0, usd_balance: 0, frozen_kes: 0, frozen_usd: 0 };
@@ -102,7 +104,11 @@ const getPortfolio = async (req, res) => {
       });
     }
 
-    if (!user || !user.alpaca_account_id) {
+    if (!user || !user.alpaca_account_id || (!alpacaEnabled && mystocksEnabled)) {
+      // MyStocks-only path: no Alpaca account, Alpaca disabled, or MyStocks-only mode
+      if (!mystocksEnabled) {
+        return res.status(503).json({ success: false, message: 'Trading services are currently unavailable.' });
+      }
       // African-only user — fetch MyStocks portfolio + wallet
       let msPortfolio = null;
       let msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
@@ -213,6 +219,10 @@ const getPortfolio = async (req, res) => {
           myStocksWallet: { balance: msUsdBalance, currency: 'USD' }
         }
       });
+    }
+
+    if (!alpacaEnabled) {
+      return res.status(503).json({ success: false, message: 'US market trading is currently disabled.' });
     }
 
     // Fetch Alpaca account, positions, and local orders in parallel
@@ -905,53 +915,113 @@ const getAssetTrend = async (req, res) => {
     const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
 
     if (!user || !user.alpaca_account_id) {
-      // African-only user — build trend from MyStocks portfolio holdings
-      let positions = [];
-      try {
-        if (user?.mystocks_sub_account_id) {
-          const msPortfolio = await ms.getPortfolio(user.mystocks_sub_account_id);
-          const holdings = Array.isArray(msPortfolio) ? msPortfolio
-            : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
-            : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [];
-          positions = holdings;
-        }
-      } catch (_) {}
+      // African-only user — build trend from ms_orders history + live MyStocks data
+      const limitNum = Math.min(parseInt(limit) || 30, 100);
 
-      const msBalance = parseFloat(user?.mystocks_wallet_balance || 0);
+      const [msPortfolioResult, msWalletResult, pendingOrdersResult, dbOrders] = await Promise.allSettled([
+        user?.mystocks_sub_account_id ? ms.getPortfolio(user.mystocks_sub_account_id) : Promise.resolve(null),
+        user?.mystocks_sub_account_id ? ms.getWallet(user.mystocks_sub_account_id) : Promise.resolve(null),
+        user?.mystocks_sub_account_id ? ms.getUserOrders(user.mystocks_sub_account_id) : Promise.resolve({ orders: [] }),
+        MsOrder.findAll({
+          where: { user_id: req.user.id },
+          order: [['filled_at', 'ASC']],
+          limit: 500
+        })
+      ]);
 
-      if (positions.length === 0) {
-        return res.json({
-          success: true,
-          provider: 'mystocks',
-          portfolio: {
-            invested: 0, investedKES: 0,
-            currentValue: msBalance, currentValueKES: msBalance * exchangeRate,
-            profit: 0, profitKES: 0, profitPercent: 0,
-            totalStocks: 0
-          },
-          chartData: [],
-          summary: { period: { from: null, to: null, days: 0 }, highest: msBalance, lowest: 0, bestDay: 0, worstDay: 0, average: msBalance },
-          exchangeRate,
-          lastUpdated: new Date().toISOString()
-        });
-      }
+      const msPortfolio = msPortfolioResult.status === 'fulfilled' ? msPortfolioResult.value : null;
+      const msWalletRaw = msWalletResult.status === 'fulfilled' ? msWalletResult.value : null;
+      const msWalletBalance = parseFloat(msWalletRaw?.wallet?.balance || msWalletRaw?.balance || user?.mystocks_wallet_balance || 0);
+      const allMsOrders = pendingOrdersResult.status === 'fulfilled' ? (pendingOrdersResult.value?.orders || []) : [];
+      const orders = dbOrders.status === 'fulfilled' ? dbOrders.value : [];
 
-      const invested = positions.reduce((s, h) => s + (parseFloat(h.averageCost || h.avgCost || 0) * parseFloat(h.quantity || h.qty || 0)), 0);
-      const currentValue = positions.reduce((s, h) => s + (parseFloat(h.currentPrice || h.price || 0) * parseFloat(h.quantity || h.qty || 0)), 0);
-      const profit = currentValue - invested;
+      // Current filled holdings from MyStocks
+      const holdings = msPortfolio
+        ? (Array.isArray(msPortfolio) ? msPortfolio
+          : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
+          : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [])
+        : [];
+
+      // Pending orders from MyStocks API
+      const pendingOrders = allMsOrders.filter(o => o.status === 'PENDING');
+
+      // Invested = sum of all BUY db orders minus SELL proceeds
+      const totalInvested = orders
+        .filter(o => o.side === 'BUY')
+        .reduce((s, o) => s + parseFloat(o.total_cost_usd || 0), 0);
+      const totalSellProceeds = orders
+        .filter(o => o.side === 'SELL')
+        .reduce((s, o) => s + parseFloat(o.total_cost_usd || 0), 0);
+      const netInvested = Math.max(0, totalInvested - totalSellProceeds);
+
+      // Current value = filled holdings market value + pending order amounts + cash
+      const holdingsValue = holdings.reduce((s, h) => {
+        const price = parseFloat(h.currentPrice || h.price || h.usdPrice || 0);
+        const qty = parseFloat(h.quantity || h.qty || 0);
+        return s + price * qty;
+      }, 0);
+      const pendingValue = pendingOrders.reduce((s, o) => s + parseFloat(o.totalAmount || 0), 0);
+      const currentValue = holdingsValue + pendingValue + msWalletBalance;
+      const profit = currentValue - netInvested;
+
+      // Build chart from db order history — cumulative portfolio value per day
+      const dayMap = new Map();
+      let running = 0;
+      orders.forEach(o => {
+        const day = new Date(o.filled_at || o.created_at).toISOString().split('T')[0];
+        const cost = parseFloat(o.total_cost_usd || 0);
+        running += o.side === 'BUY' ? cost : -cost;
+        dayMap.set(day, { date: day, value: Math.max(0, running) });
+      });
+
+      // Always include today's actual current value as the last point
+      const today = new Date().toISOString().split('T')[0];
+      dayMap.set(today, { date: today, value: currentValue });
+
+      const chartPoints = Array.from(dayMap.values())
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .slice(-limitNum);
+
+      const values = chartPoints.map(p => p.value);
+      const highest = values.length ? Math.max(...values) : 0;
+      const lowest = values.length ? Math.min(...values) : 0;
+      const average = values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
+      const dayChanges = chartPoints.map((p, i) => i > 0 ? p.value - chartPoints[i - 1].value : 0);
+
+      const chartData = chartPoints.map(p => ({
+        date: p.date,
+        value: Math.round(p.value * 10000) / 10000,
+        valueKES: Math.round(p.value * exchangeRate * 100) / 100
+      }));
 
       return res.json({
         success: true,
         provider: 'mystocks',
         portfolio: {
-          invested, investedKES: invested * exchangeRate,
-          currentValue, currentValueKES: currentValue * exchangeRate,
-          profit, profitKES: profit * exchangeRate,
-          profitPercent: invested > 0 ? (profit / invested) * 100 : 0,
-          totalStocks: positions.length
+          invested: Math.round(netInvested * 10000) / 10000,
+          investedKES: Math.round(netInvested * exchangeRate * 100) / 100,
+          currentValue: Math.round(currentValue * 10000) / 10000,
+          currentValueKES: Math.round(currentValue * exchangeRate * 100) / 100,
+          profit: Math.round(profit * 10000) / 10000,
+          profitKES: Math.round(profit * exchangeRate * 100) / 100,
+          profitPercent: netInvested > 0 ? Math.round((profit / netInvested) * 10000) / 100 : 0,
+          totalStocks: holdings.length + pendingOrders.length,
+          cash: msWalletBalance,
+          cashKES: Math.round(msWalletBalance * exchangeRate * 100) / 100
         },
-        chartData: [],
-        summary: { period: { from: null, to: null, days: 0 }, highest: currentValue, lowest: invested, bestDay: 0, worstDay: 0, average: currentValue },
+        chartData,
+        summary: {
+          period: {
+            from: chartData[0]?.date || null,
+            to: chartData[chartData.length - 1]?.date || null,
+            days: chartData.length
+          },
+          highest: Math.round(highest * 10000) / 10000,
+          lowest: Math.round(lowest * 10000) / 10000,
+          bestDay: Math.round(Math.max(0, ...dayChanges) * 10000) / 10000,
+          worstDay: Math.round(Math.min(0, ...dayChanges) * 10000) / 10000,
+          average: Math.round(average * 10000) / 10000
+        },
         exchangeRate,
         lastUpdated: new Date().toISOString()
       });

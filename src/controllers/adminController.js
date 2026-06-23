@@ -1151,18 +1151,25 @@ const adminController = {
   // PUT /api/v1/admin/config
   updateConfig: async (req, res) => {
     try {
-      const allowed = ['trade_fee_rate', 'deposit_fee_rate', 'withdrawal_fee_rate'];
+      const feeKeys = ['trade_fee_rate', 'deposit_fee_rate', 'withdrawal_fee_rate'];
+      const boolKeys = ['alpaca_enabled', 'mystocks_enabled'];
+      const allowed = [...feeKeys, ...boolKeys];
       const updates = req.body;
 
       for (const key of Object.keys(updates)) {
         if (!allowed.includes(key)) {
           return res.status(400).json({ success: false, message: `Unknown config key: ${key}` });
         }
-        const val = parseFloat(updates[key]);
-        if (isNaN(val) || val < 0 || val > 0.1) {
-          return res.status(400).json({ success: false, message: `${key} must be between 0 and 0.1 (0%–10%)` });
+        if (boolKeys.includes(key)) {
+          const val = updates[key] === true || updates[key] === 1 || updates[key] === 'true' ? 1 : 0;
+          await platformConfigService.setSetting(key, val);
+        } else {
+          const val = parseFloat(updates[key]);
+          if (isNaN(val) || val < 0 || val > 0.1) {
+            return res.status(400).json({ success: false, message: `${key} must be between 0 and 0.1 (0%–10%)` });
+          }
+          await platformConfigService.setSetting(key, val);
         }
-        await platformConfigService.setSetting(key, val);
       }
 
       logger.info(`Admin ${req.user.id} updated platform config: ${JSON.stringify(updates)}`);

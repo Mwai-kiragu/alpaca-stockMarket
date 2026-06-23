@@ -7,6 +7,7 @@ const Order = require('../models/Order');
 const exchangeService = require('../services/exchangeService');
 const axios = require('axios');
 const { sequelize } = require('../config/database');
+const { getProviderFlags } = require('../services/platformConfigService');
 
 const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
 const isAfrican = (exchange) => !!exchange && AFRICAN_EXCHANGES.has(exchange.toUpperCase());
@@ -22,13 +23,18 @@ const getQuote = async (req, res) => {
       });
     }
 
+    const { alpacaEnabled, mystocksEnabled } = await getProviderFlags();
+
     // African exchange → MyStocks
     if (isAfrican(req.query.exchange)) {
+      if (!mystocksEnabled) return res.status(503).json({ success: false, message: 'African market data is currently unavailable.' });
       const stocks = await ms.getStocks({ exchange: req.query.exchange.toUpperCase(), search: symbol });
       const stock = Array.isArray(stocks) ? stocks[0] : stocks;
       if (!stock) return res.status(404).json({ success: false, message: 'Stock symbol not found' });
       return res.json({ success: true, provider: 'mystocks', quote: stock });
     }
+
+    if (!alpacaEnabled) return res.status(503).json({ success: false, message: 'US market data is currently unavailable.' });
 
     const quote = await alpacaService.getLatestQuote(symbol.toUpperCase());
 
