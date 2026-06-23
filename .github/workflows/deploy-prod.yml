@@ -42,6 +42,8 @@ jobs:
               --exclude='.env' \
               --exclude='*.log' \
               -czf /tmp/deploy.tar.gz .
+          # base64-encode so the IAP tunnel doesn't corrupt binary data
+          base64 /tmp/deploy.tar.gz > /tmp/deploy.tar.gz.b64
           printf '%s' "$PROD_ENV" > /tmp/deploy.env
           chmod 600 /tmp/deploy.env
         env:
@@ -71,16 +73,22 @@ jobs:
         run: |
           gcloud compute ssh "$VM_NAME" \
             --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap \
-            --command="sudo rm -f /tmp/deploy.tar.gz /tmp/deploy.env /tmp/remote-deploy.sh" || true
+            --command="sudo rm -f /tmp/deploy.tar.gz /tmp/deploy.tar.gz.b64 /tmp/deploy.env /tmp/remote-deploy.sh" || true
 
       - name: Upload artifacts to VM
         run: |
-          gcloud compute scp /tmp/deploy.tar.gz /tmp/deploy.env /tmp/remote-deploy.sh \
+          gcloud compute scp /tmp/deploy.tar.gz.b64 /tmp/deploy.env /tmp/remote-deploy.sh \
             "$VM_NAME":/tmp/ \
             --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap
+
+      - name: Verify artifacts on VM
+        run: |
+          gcloud compute ssh "$VM_NAME" \
+            --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap \
+            --command="test -f /tmp/deploy.tar.gz.b64 && test -f /tmp/deploy.env && test -f /tmp/remote-deploy.sh && base64 -d /tmp/deploy.tar.gz.b64 > /tmp/deploy.tar.gz && gzip -t /tmp/deploy.tar.gz && echo 'Archive integrity OK'"
 
       - name: Run deploy script as ${{ env.DEPLOY_USER }}
         run: |
           gcloud compute ssh "$VM_NAME" \
             --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap \
-            --command="sudo install -m 600 -o $DEPLOY_USER -g $DEPLOY_USER /tmp/deploy.env /tmp/deploy.env.owned && sudo mv /tmp/deploy.env.owned /tmp/deploy.env && sudo -u $DEPLOY_USER bash /tmp/remote-deploy.sh; sudo rm -f /tmp/remote-deploy.sh /tmp/deploy.tar.gz /tmp/deploy.env; exit \$?"
+            --command="sudo install -m 600 -o $DEPLOY_USER -g $DEPLOY_USER /tmp/deploy.env /tmp/deploy.env.owned && sudo mv /tmp/deploy.env.owned /tmp/deploy.env && sudo -u $DEPLOY_USER bash /tmp/remote-deploy.sh; sudo rm -f /tmp/remote-deploy.sh /tmp/deploy.tar.gz /tmp/deploy.tar.gz.b64 /tmp/deploy.env; exit \$?"
