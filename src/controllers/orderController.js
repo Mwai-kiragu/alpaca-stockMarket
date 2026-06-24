@@ -475,8 +475,12 @@ const getOrders = async (req, res) => {
 
     // MyStocks user (no Alpaca account, or explicit African exchange filter)
     if (!user?.alpaca_account_id || isAfrican(exchange)) {
+      // Normalize status: app may send Alpaca-style names (pending_new) — map to MsOrder values
+      const msStatusMap = { pending_new: 'PENDING', filled: 'FILLED', canceled: 'CANCELLED', expired: 'EXPIRED' };
       const whereClause = { user_id: req.user.id };
-      if (status && status.toLowerCase() !== 'all') whereClause.status = status.toUpperCase();
+      if (status && status.toLowerCase() !== 'all') {
+        whereClause.status = msStatusMap[status.toLowerCase()] || status.toUpperCase();
+      }
       if (symbol) whereClause.symbol = symbol.toUpperCase();
       if (side) whereClause.side = side.toUpperCase();
       if (exchange) whereClause.exchange = exchange.toUpperCase();
