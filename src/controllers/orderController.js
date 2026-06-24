@@ -467,18 +467,59 @@ const createOrder = async (req, res) => {
 const getOrders = async (req, res) => {
   try {
     const { page = 1, limit = 20, status, symbol, side, exchange } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
 
-    // African exchange → MyStocks orders
-    if (isAfrican(exchange)) {
-      const subAccountId = await ensureMyStocksSubAccount(req.user.id);
-      const data = await ms.getOrders(subAccountId, { symbol, status, page, limit });
-      return res.json({ success: true, provider: 'mystocks', data });
+    const user = await User.findByPk(req.user.id, { attributes: ['id', 'alpaca_account_id', 'mystocks_sub_account_id'] });
+
+    // MyStocks user (no Alpaca account, or explicit African exchange filter)
+    if (!user?.alpaca_account_id || isAfrican(exchange)) {
+      const whereClause = { user_id: req.user.id };
+      if (status && status.toLowerCase() !== 'all') whereClause.status = status.toUpperCase();
+      if (symbol) whereClause.symbol = symbol.toUpperCase();
+      if (side) whereClause.side = side.toUpperCase();
+      if (exchange) whereClause.exchange = exchange.toUpperCase();
+
+      const { count, rows: msOrders } = await MsOrder.findAndCountAll({
+        where: whereClause,
+        order: [['created_at', 'DESC']],
+        limit: limitNum,
+        offset
+      });
+
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        orders: msOrders.map(o => ({
+          id: o.id,
+          orderId: o.order_id,
+          symbol: o.symbol,
+          logo: `/api/v1/assets/logo/${o.symbol}`,
+          side: o.side,
+          quantity: parseFloat(o.quantity),
+          localPrice: parseFloat(o.local_price || 0),
+          usdPrice: parseFloat(o.usd_price || 0),
+          grossUsd: parseFloat(o.gross_usd || 0),
+          feeUsd: parseFloat(o.fee_usd || 0),
+          totalCostUsd: parseFloat(o.total_cost_usd || 0),
+          currency: o.currency,
+          status: o.status,
+          exchange: o.exchange,
+          filledAt: o.filled_at,
+          createdAt: o.created_at
+        })),
+        pagination: {
+          currentPage: pageNum,
+          totalPages: Math.ceil(count / limitNum),
+          totalItems: count,
+          itemsPerPage: limitNum
+        }
+      });
     }
 
-    const offset = (page - 1) * limit;
-
+    // Alpaca user
     const whereClause = { user_id: req.user.id };
-    // Only add status filter if it's not "all"
     if (status && status.toLowerCase() !== 'all') whereClause.status = status;
     if (symbol) whereClause.symbol = symbol.toUpperCase();
     if (side) whereClause.side = side;
@@ -486,8 +527,8 @@ const getOrders = async (req, res) => {
     const { count, rows: orders } = await Order.findAndCountAll({
       where: whereClause,
       order: [['created_at', 'DESC']],
-      limit: parseInt(limit),
-      offset: parseInt(offset)
+      limit: limitNum,
+      offset
     });
 
     res.json({
@@ -515,10 +556,10 @@ const getOrders = async (req, res) => {
         createdAt: order.created_at
       })),
       pagination: {
-        currentPage: parseInt(page),
-        totalPages: Math.ceil(count / limit),
+        currentPage: pageNum,
+        totalPages: Math.ceil(count / limitNum),
         totalItems: count,
-        itemsPerPage: parseInt(limit)
+        itemsPerPage: limitNum
       }
     });
   } catch (error) {

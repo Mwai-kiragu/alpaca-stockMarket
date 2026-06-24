@@ -7,6 +7,23 @@ const { getProviderFlags } = require('../services/platformConfigService');
 
 const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
 
+// Build a symbol → weighted avg USD entry price lookup from local MsOrder history
+const computeAvgEntryPrices = (msOrders) => {
+  const bySymbol = {};
+  for (const o of msOrders) {
+    const sym = o.symbol;
+    if (!bySymbol[sym]) bySymbol[sym] = { totalQty: 0, totalCost: 0 };
+    const qty = parseFloat(o.quantity);
+    const price = parseFloat(o.usd_price || 0);
+    if (o.side === 'BUY') { bySymbol[sym].totalQty += qty; bySymbol[sym].totalCost += qty * price; }
+    else { bySymbol[sym].totalQty -= qty; bySymbol[sym].totalCost -= qty * price; }
+  }
+  return (sym) => {
+    const d = bySymbol[sym];
+    return d && d.totalQty > 0 ? d.totalCost / d.totalQty : 0;
+  };
+};
+
 // Aggregate DemoOrder records into positions with current prices
 const buildDemoPositions = async (userId, exchangeRate) => {
   const orders = await DemoOrder.findAll({ where: { user_id: userId }, order: [['filled_at', 'ASC']] });
@@ -116,10 +133,11 @@ const getPortfolio = async (req, res) => {
 
       try {
         if (user?.mystocks_sub_account_id) {
-          const [portfolioData, walletData, ordersData] = await Promise.allSettled([
+          const [portfolioData, walletData, ordersData, msOrdersData] = await Promise.allSettled([
             ms.getPortfolio(user.mystocks_sub_account_id),
             ms.getWallet(user.mystocks_sub_account_id),
-            ms.getUserOrders(user.mystocks_sub_account_id, { status: 'PENDING' })
+            ms.getUserOrders(user.mystocks_sub_account_id, { status: 'PENDING' }),
+            MsOrder.findAll({ where: { user_id: req.user.id }, order: [['filled_at', 'ASC']] })
           ]);
           if (portfolioData.status === 'fulfilled') msPortfolio = portfolioData.value;
           if (walletData.status === 'fulfilled') {
@@ -129,6 +147,7 @@ const getPortfolio = async (req, res) => {
           if (ordersData.status === 'fulfilled') {
             pendingOrders = Array.isArray(ordersData.value?.orders) ? ordersData.value.orders : [];
           }
+          const getAvgEntry = computeAvgEntryPrices(msOrdersData.status === 'fulfilled' ? msOrdersData.value : []);
         }
       } catch (_) {}
 
@@ -138,10 +157,26 @@ const getPortfolio = async (req, res) => {
           : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
           : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [];
 
+        logger.info('MyStocks portfolio raw holdings sample:', JSON.stringify(holdings[0] || {}));
         holdings.forEach(h => {
-          const qty = parseFloat(h.quantity || h.qty || 0);
-          const price = parseFloat(h.currentPrice || h.price || h.localPrice || 0);
-          const cost = parseFloat(h.averageCost || h.avgCost || price);
+          const qty = parseFloat(h.quantity || h.qty || h.units || h.shares || 0);
+          if (qty <= 0) return; // skip expired/cancelled zero-qty entries
+
+          // Try every known field name for per-unit price
+          const unitPrice = parseFloat(
+            h.currentPrice || h.price || h.localPrice || h.lastPrice ||
+            h.marketPrice || h.usdPrice || h.unitPrice || h.closePrice ||
+            h.tradePrice || h.currentUnitPrice || 0
+          );
+          // Fallback: some APIs return total value instead of unit price
+          const totalVal = parseFloat(h.value || h.currentValue || h.totalValue || h.marketValue || 0);
+          const price = unitPrice || (qty > 0 && totalVal > 0 ? totalVal / qty : 0);
+
+          const nativeCost = parseFloat(
+            h.averageCost || h.avgCost || h.averagePrice || h.avgPrice ||
+            h.purchasePrice || h.costBasis || 0
+          );
+          const cost = nativeCost || getAvgEntry(h.symbol) || price;
           const marketValue = qty * price;
           const unrealizedPL = marketValue - (qty * cost);
           positions.push({
@@ -157,7 +192,7 @@ const getPortfolio = async (req, res) => {
             unrealizedPLPC: cost > 0 ? (unrealizedPL / (qty * cost)) * 100 : 0,
             exchange: h.exchange || 'NSE',
             currency: h.currency || 'KES',
-            status: 'filled',
+            status: h.status ? h.status.toLowerCase() : 'filled',
             provider: 'mystocks'
           });
         });
@@ -189,8 +224,57 @@ const getPortfolio = async (req, res) => {
         });
       });
 
+      // If live portfolio and pending orders are both empty, fall back to local MsOrder history
+      if (positions.length === 0) {
+        const msOrderHistory = await MsOrder.findAll({
+          where: { user_id: req.user.id },
+          order: [['filled_at', 'ASC']]
+        });
+        const bySymbol = {};
+        for (const o of msOrderHistory) {
+          const sym = o.symbol;
+          if (!bySymbol[sym]) bySymbol[sym] = { symbol: sym, exchange: o.exchange || 'NSE', currency: o.currency || 'KES', totalQty: 0, totalCost: 0 };
+          const qty = parseFloat(o.quantity);
+          const price = parseFloat(o.usd_price || o.local_price || 0);
+          if (o.side === 'BUY') { bySymbol[sym].totalQty += qty; bySymbol[sym].totalCost += qty * price; }
+          else { bySymbol[sym].totalQty -= qty; bySymbol[sym].totalCost -= qty * price; }
+        }
+        const msPositions = await Promise.all(
+          Object.values(bySymbol).filter(p => p.totalQty > 0.0001).map(async p => {
+            let currentPrice = p.totalQty > 0 && p.totalCost > 0 ? p.totalCost / p.totalQty : 0;
+            try {
+              // Strip .KE/.ZA suffix — MyStocks search doesn't accept the suffix
+              const ticker = p.symbol.includes('.') ? p.symbol.split('.')[0] : p.symbol;
+              const stocks = await ms.getStocks({ search: ticker });
+              const stock = Array.isArray(stocks) ? stocks[0] : stocks?.stocks?.[0];
+              if (stock?.usdPrice) currentPrice = parseFloat(stock.usdPrice);
+              else if (stock?.price) currentPrice = parseFloat(stock.price) / (exchangeRate || 1);
+            } catch (_) {}
+            const marketValue = p.totalQty * currentPrice;
+            return {
+              symbol: p.symbol,
+              name: p.symbol,
+              qty: p.totalQty,
+              avgEntryPrice: p.totalQty > 0 && p.totalCost > 0 ? p.totalCost / p.totalQty : 0,
+              currentPrice,
+              marketValue,
+              marketValueKES: marketValue * (exchangeRate || 1),
+              unrealizedPL: 0,
+              unrealizedPLKES: 0,
+              unrealizedPLPC: 0,
+              exchange: p.exchange,
+              currency: p.currency,
+              status: 'open',
+              provider: 'mystocks'
+            };
+          })
+        );
+        positions.push(...msPositions);
+      }
+
+      const localCashUsd = localUsdBalance + (localKesBalance / (exchangeRate || 1));
       const holdingsValue = positions.reduce((s, p) => s + p.marketValue, 0);
-      const totalEquity = msUsdBalance + holdingsValue + localUsdBalance + (localKesBalance / exchangeRate);
+      const totalEquity = msUsdBalance + holdingsValue + localCashUsd;
       const totalEquityKES = totalEquity * exchangeRate;
 
       return res.json({
@@ -342,6 +426,8 @@ const getPositions = async (req, res) => {
     if (!user || !user.alpaca_account_id) {
       // Try live MyStocks portfolio first, fall back to locally saved ms_orders
       let positions = [];
+      const msOrdersForAvg = await MsOrder.findAll({ where: { user_id: req.user.id }, order: [['filled_at', 'ASC']] }).catch(() => []);
+      const getAvgEntry = computeAvgEntryPrices(msOrdersForAvg);
       try {
         if (user?.mystocks_sub_account_id) {
           const msPortfolio = await ms.getPortfolio(user.mystocks_sub_account_id);
@@ -349,26 +435,38 @@ const getPositions = async (req, res) => {
             : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
             : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [];
           if (holdings.length > 0) {
-            positions = holdings.map(h => {
-              const qty = parseFloat(h.quantity || h.qty || 0);
-              const price = parseFloat(h.currentPrice || h.price || 0);
-              const cost = parseFloat(h.averageCost || h.avgCost || price);
-              const marketValue = qty * price;
-              const costBasis = qty * cost;
-              const unrealizedPL = marketValue - costBasis;
-              return {
-                symbol: h.symbol, name: h.name || h.symbol,
-                logo: `/api/v1/assets/logo/${h.symbol}`,
-                quantity: qty, side: 'long', averageEntryPrice: cost,
-                currentPrice: price, marketValue,
-                marketValueKES: marketValue * exchangeRate,
-                costBasis, costBasisKES: costBasis * exchangeRate,
-                unrealizedPL, unrealizedPLKES: unrealizedPL * exchangeRate,
-                unrealizedPLPercent: costBasis > 0 ? parseFloat(((unrealizedPL / costBasis) * 100).toFixed(2)) : 0,
-                exchange: h.exchange || 'NSE', currency: h.currency || 'KES',
-                provider: 'mystocks', status: 'open'
-              };
-            });
+            positions = holdings
+              .filter(h => parseFloat(h.quantity || h.qty || h.units || h.shares || 0) > 0)
+              .map(h => {
+                const qty = parseFloat(h.quantity || h.qty || h.units || h.shares || 0);
+                const unitPrice = parseFloat(
+                  h.currentPrice || h.price || h.localPrice || h.lastPrice ||
+                  h.marketPrice || h.usdPrice || h.unitPrice || h.closePrice ||
+                  h.tradePrice || h.currentUnitPrice || 0
+                );
+                const totalVal = parseFloat(h.value || h.currentValue || h.totalValue || h.marketValue || 0);
+                const price = unitPrice || (qty > 0 && totalVal > 0 ? totalVal / qty : 0);
+                const nativeCost = parseFloat(
+                  h.averageCost || h.avgCost || h.averagePrice || h.avgPrice ||
+                  h.purchasePrice || h.costBasis || 0
+                );
+                const cost = nativeCost || getAvgEntry(h.symbol) || price;
+                const marketValue = qty * price;
+                const costBasis = qty * cost;
+                const unrealizedPL = marketValue - costBasis;
+                return {
+                  symbol: h.symbol, name: h.name || h.symbol,
+                  logo: `/api/v1/assets/logo/${h.symbol}`,
+                  quantity: qty, side: 'long', averageEntryPrice: cost,
+                  currentPrice: price, marketValue,
+                  marketValueKES: marketValue * exchangeRate,
+                  costBasis, costBasisKES: costBasis * exchangeRate,
+                  unrealizedPL, unrealizedPLKES: unrealizedPL * exchangeRate,
+                  unrealizedPLPercent: costBasis > 0 ? parseFloat(((unrealizedPL / costBasis) * 100).toFixed(2)) : 0,
+                  exchange: h.exchange || 'NSE', currency: h.currency || 'KES',
+                  provider: 'mystocks', status: 'open'
+                };
+              });
           }
         }
       } catch (_) {}
@@ -548,15 +646,29 @@ const getPosition = async (req, res) => {
       // Try MyStocks portfolio for African users
       try {
         if (user?.mystocks_sub_account_id) {
-          const msPortfolio = await ms.getPortfolio(user.mystocks_sub_account_id);
+          const [msPortfolio, msOrdersForAvg] = await Promise.all([
+            ms.getPortfolio(user.mystocks_sub_account_id),
+            MsOrder.findAll({ where: { user_id: req.user.id, symbol: symbol.toUpperCase() }, order: [['filled_at', 'ASC']] })
+          ]);
+          const getAvgEntry = computeAvgEntryPrices(msOrdersForAvg);
           const holdings = Array.isArray(msPortfolio) ? msPortfolio
             : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
             : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [];
           const holding = holdings.find(h => h.symbol?.toUpperCase() === symbol.toUpperCase());
           if (holding) {
-            const qty = parseFloat(holding.quantity || holding.qty || 0);
-            const price = parseFloat(holding.currentPrice || holding.price || 0);
-            const cost = parseFloat(holding.averageCost || holding.avgCost || price);
+            const qty = parseFloat(holding.quantity || holding.qty || holding.units || holding.shares || 0);
+            const unitPrice = parseFloat(
+              holding.currentPrice || holding.price || holding.localPrice || holding.lastPrice ||
+              holding.marketPrice || holding.usdPrice || holding.unitPrice || holding.closePrice ||
+              holding.tradePrice || holding.currentUnitPrice || 0
+            );
+            const totalVal = parseFloat(holding.value || holding.currentValue || holding.totalValue || holding.marketValue || 0);
+            const price = unitPrice || (qty > 0 && totalVal > 0 ? totalVal / qty : 0);
+            const nativeCost = parseFloat(
+              holding.averageCost || holding.avgCost || holding.averagePrice || holding.avgPrice ||
+              holding.purchasePrice || holding.costBasis || 0
+            );
+            const cost = nativeCost || getAvgEntry(symbol.toUpperCase()) || price;
             const marketValue = qty * price;
             const costBasis = qty * cost;
             const unrealizedPL = marketValue - costBasis;
@@ -699,23 +811,148 @@ const getPerformance = async (req, res) => {
       default:   startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     }
 
-    // African-only user — use MyStocks wallet balance + local orders
+    // African-only user — compute performance from MsOrder history
     if (!user?.alpaca_account_id) {
-      const msBalance = parseFloat(user?.mystocks_wallet_balance || 0);
+      const orders = await MsOrder.findAll({
+        where: {
+          user_id: req.user.id,
+          filled_at: { [MsOrder.sequelize.Sequelize.Op.between]: [startDate, endDate] }
+        },
+        order: [['filled_at', 'ASC']]
+      });
+
+      // currentEquity = cash balance + market value of current holdings
+      let currentEquity = parseFloat(user?.mystocks_wallet_balance || 0);
+      try {
+        if (user?.mystocks_sub_account_id) {
+          const [walletResult, portfolioResult] = await Promise.allSettled([
+            ms.getWallet(user.mystocks_sub_account_id),
+            ms.getPortfolio(user.mystocks_sub_account_id)
+          ]);
+          const cashBalance = walletResult.status === 'fulfilled'
+            ? parseFloat(walletResult.value?.wallet?.balance || walletResult.value?.balance || 0)
+            : 0;
+          let holdingsValue = 0;
+          if (portfolioResult.status === 'fulfilled') {
+            const ph = portfolioResult.value;
+            const hList = Array.isArray(ph) ? ph
+              : Array.isArray(ph?.holdings) ? ph.holdings
+              : Array.isArray(ph?.positions) ? ph.positions : [];
+            holdingsValue = hList.reduce((s, h) => {
+              const qty = parseFloat(h.quantity || h.qty || h.units || h.shares || 0);
+              if (qty <= 0) return s;
+              const unitPrice = parseFloat(
+                h.currentPrice || h.price || h.localPrice || h.lastPrice ||
+                h.marketPrice || h.usdPrice || h.unitPrice || h.closePrice ||
+                h.tradePrice || h.currentUnitPrice || 0
+              );
+              const totalVal = parseFloat(h.value || h.currentValue || h.totalValue || h.marketValue || 0);
+              const price = unitPrice || (qty > 0 && totalVal > 0 ? totalVal / qty : 0);
+              return s + qty * price;
+            }, 0);
+          }
+          currentEquity = cashBalance + holdingsValue;
+        }
+      } catch (_) {}
+
+      // Live portfolio returns no price data for these symbols — compute holdings value
+      // the same way getPositions does: MsOrder net qty + ms.getStocks current price
+      if (currentEquity <= 0) {
+        const allMsOrders = await MsOrder.findAll({ where: { user_id: req.user.id }, order: [['filled_at', 'ASC']] });
+        const bySymbol = {};
+        for (const o of allMsOrders) {
+          const sym = o.symbol;
+          if (!bySymbol[sym]) bySymbol[sym] = { symbol: sym, totalQty: 0 };
+          const qty = parseFloat(o.quantity);
+          if (o.side === 'BUY') bySymbol[sym].totalQty += qty;
+          else bySymbol[sym].totalQty -= qty;
+        }
+        const activeHoldings = Object.values(bySymbol).filter(p => p.totalQty > 0.0001);
+        const holdingValues = await Promise.all(
+          activeHoldings.map(async p => {
+            try {
+              const ticker = p.symbol.includes('.') ? p.symbol.split('.')[0] : p.symbol;
+              const stocks = await ms.getStocks({ search: ticker });
+              const stock = Array.isArray(stocks) ? stocks[0] : stocks?.stocks?.[0];
+              const price = stock?.usdPrice ? parseFloat(stock.usdPrice)
+                : stock?.price ? parseFloat(stock.price) / (exchangeRate || 1)
+                : 0;
+              return p.totalQty * price;
+            } catch (_) { return 0; }
+          })
+        );
+        currentEquity = holdingValues.reduce((s, v) => s + v, 0);
+      }
+
+      const buyOrders = orders.filter(o => o.side === 'BUY');
+      const sellOrders = orders.filter(o => o.side === 'SELL');
+
+      const totalBought = buyOrders.reduce((s, o) => s + parseFloat(o.total_cost_usd || (parseFloat(o.quantity) * parseFloat(o.usd_price || 0))), 0);
+      const totalSold = sellOrders.reduce((s, o) => s + parseFloat(o.total_cost_usd || (parseFloat(o.quantity) * parseFloat(o.usd_price || 0))), 0);
+
+      // Group by symbol
+      const symbolMap = {};
+      orders.forEach(o => {
+        const sym = o.symbol;
+        if (!symbolMap[sym]) symbolMap[sym] = {
+          symbol: sym, exchange: o.exchange || 'NSE',
+          totalTrades: 0, buyQty: 0, sellQty: 0,
+          totalBought: 0, totalSold: 0, avgBuyPrice: 0, avgSellPrice: 0
+        };
+        const qty = parseFloat(o.quantity);
+        const price = parseFloat(o.usd_price || 0);
+        const value = parseFloat(o.total_cost_usd || qty * price);
+        symbolMap[sym].totalTrades += 1;
+        if (o.side === 'BUY') {
+          symbolMap[sym].buyQty += qty;
+          symbolMap[sym].totalBought += value;
+          symbolMap[sym].avgBuyPrice = symbolMap[sym].buyQty > 0 ? symbolMap[sym].totalBought / symbolMap[sym].buyQty : 0;
+        } else {
+          symbolMap[sym].sellQty += qty;
+          symbolMap[sym].totalSold += value;
+          symbolMap[sym].avgSellPrice = symbolMap[sym].sellQty > 0 ? symbolMap[sym].totalSold / symbolMap[sym].sellQty : 0;
+        }
+      });
+
+      const bySymbol = Object.values(symbolMap)
+        .sort((a, b) => b.totalTrades - a.totalTrades)
+        .map(s => ({
+          ...s,
+          totalBought: parseFloat(s.totalBought.toFixed(4)),
+          totalBoughtKES: parseFloat((s.totalBought * exchangeRate).toFixed(2)),
+          totalSold: parseFloat(s.totalSold.toFixed(4)),
+          totalSoldKES: parseFloat((s.totalSold * exchangeRate).toFixed(2)),
+          avgBuyPrice: parseFloat(s.avgBuyPrice.toFixed(6)),
+          avgSellPrice: parseFloat(s.avgSellPrice.toFixed(6))
+        }));
+
+      const totalTrades = orders.length;
+      const avgTradeSize = totalTrades > 0 ? (totalBought + totalSold) / totalTrades : 0;
+
       return res.json({
         success: true,
         provider: 'mystocks',
         performance: {
           period,
           summary: {
-            currentEquity: msBalance,
-            currentEquityKES: msBalance * exchangeRate,
+            currentEquity: parseFloat(currentEquity.toFixed(4)),
+            currentEquityKES: parseFloat((currentEquity * exchangeRate).toFixed(2)),
             dayChange: 0, dayChangeKES: 0, dayChangePercent: 0,
-            totalTrades: 0, totalBought: 0, totalBoughtKES: 0,
-            totalSold: 0, totalSoldKES: 0, netFlow: 0, netFlowKES: 0
+            totalTrades,
+            totalBought: parseFloat(totalBought.toFixed(4)),
+            totalBoughtKES: parseFloat((totalBought * exchangeRate).toFixed(2)),
+            totalSold: parseFloat(totalSold.toFixed(4)),
+            totalSoldKES: parseFloat((totalSold * exchangeRate).toFixed(2)),
+            netFlow: parseFloat((totalBought - totalSold).toFixed(4)),
+            netFlowKES: parseFloat(((totalBought - totalSold) * exchangeRate).toFixed(2))
           },
-          trading: { buyOrders: 0, sellOrders: 0, avgTradeSize: 0, mostTradedSymbol: null },
-          bySymbol: [],
+          trading: {
+            buyOrders: buyOrders.length,
+            sellOrders: sellOrders.length,
+            avgTradeSize: parseFloat(avgTradeSize.toFixed(4)),
+            mostTradedSymbol: bySymbol[0]?.symbol || null
+          },
+          bySymbol,
           exchangeRate
         }
       });
@@ -962,7 +1199,7 @@ const getAssetTrend = async (req, res) => {
       // Current value = filled holdings market value + pending order amounts + cash
       const holdingsValue = holdings.reduce((s, h) => {
         const price = parseFloat(h.currentPrice || h.price || h.usdPrice || 0);
-        const qty = parseFloat(h.quantity || h.qty || 0);
+        const qty = parseFloat(h.quantity || h.qty || h.units || h.shares || 0);
         return s + price * qty;
       }, 0);
       const pendingValue = pendingOrders.reduce((s, o) => s + parseFloat(o.totalAmount || 0), 0);
@@ -1223,9 +1460,14 @@ const getPortfolioAllocation = async (req, res) => {
     if (!user || !user.alpaca_account_id) {
       // African-only user — build allocation from MyStocks portfolio + wallet
       let holdings = [];
+      let getAvgEntry = () => 0;
       try {
         if (user?.mystocks_sub_account_id) {
-          const msPortfolio = await ms.getPortfolio(user.mystocks_sub_account_id);
+          const [msPortfolio, msOrdersForAvg] = await Promise.all([
+            ms.getPortfolio(user.mystocks_sub_account_id),
+            MsOrder.findAll({ where: { user_id: req.user.id }, order: [['filled_at', 'ASC']] })
+          ]);
+          getAvgEntry = computeAvgEntryPrices(msOrdersForAvg);
           const raw = Array.isArray(msPortfolio) ? msPortfolio
             : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
             : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [];
@@ -1234,13 +1476,34 @@ const getPortfolioAllocation = async (req, res) => {
       } catch (_) {}
 
       const msBalance = parseFloat(user?.mystocks_wallet_balance || 0);
-      const marketValue = holdings.reduce((s, h) => s + (parseFloat(h.currentPrice || h.price || 0) * parseFloat(h.quantity || h.qty || 0)), 0);
+
+      // Normalize holdings with full price fallback chain (same as getPortfolio)
+      const normalizedHoldings = holdings
+        .map(h => {
+          const qty = parseFloat(h.quantity || h.qty || h.units || h.shares || 0);
+          if (qty <= 0) return null;
+          const unitPrice = parseFloat(
+            h.currentPrice || h.price || h.localPrice || h.lastPrice ||
+            h.marketPrice || h.usdPrice || h.unitPrice || h.closePrice ||
+            h.tradePrice || h.currentUnitPrice || 0
+          );
+          const totalVal = parseFloat(h.value || h.currentValue || h.totalValue || h.marketValue || 0);
+          const price = unitPrice || (qty > 0 && totalVal > 0 ? totalVal / qty : 0);
+          const nativeCost = parseFloat(
+            h.averageCost || h.avgCost || h.averagePrice || h.avgPrice ||
+            h.purchasePrice || h.costBasis || 0
+          );
+          const cost = nativeCost || getAvgEntry(h.symbol) || price;
+          return { h, qty, price, cost, value: qty * price, exchange: h.exchange || 'NSE', sector: h.sector || 'Other' };
+        })
+        .filter(Boolean);
+
+      const marketValue = normalizedHoldings.reduce((s, n) => s + n.value, 0);
       const portfolioValue = msBalance + marketValue + localCashUsd;
 
-      const byStock = holdings.map(h => {
-        const qty = parseFloat(h.quantity || h.qty || 0);
-        const price = parseFloat(h.currentPrice || h.price || 0);
-        const value = qty * price;
+      const byStock = normalizedHoldings.map(({ h, qty, price, cost, value, exchange }) => {
+        const costBasis = qty * cost;
+        const unrealizedPL = value - costBasis;
         return {
           symbol: h.symbol,
           name: h.name || h.symbol,
@@ -1249,15 +1512,15 @@ const getPortfolioAllocation = async (req, res) => {
           percentage: portfolioValue > 0 ? parseFloat(((value / portfolioValue) * 100).toFixed(2)) : 0,
           qty,
           price,
-          exchange: h.exchange || 'NSE'
+          avgEntryPrice: parseFloat(cost.toFixed(8)),
+          unrealizedPL: parseFloat(unrealizedPL.toFixed(2)),
+          unrealizedPLPercent: costBasis > 0 ? parseFloat(((unrealizedPL / costBasis) * 100).toFixed(2)) : 0,
+          exchange
         };
       });
 
       const bySector = Object.values(
-        holdings.reduce((acc, h) => {
-          const sector = h.sector || 'Other';
-          const qty = parseFloat(h.quantity || h.qty || 0);
-          const value = qty * parseFloat(h.currentPrice || h.price || 0);
+        normalizedHoldings.reduce((acc, { sector, value }) => {
           if (!acc[sector]) acc[sector] = { name: sector, value: 0, valueKES: 0, percentage: 0, count: 0 };
           acc[sector].value += value;
           acc[sector].valueKES += value * exchangeRate;
@@ -1265,6 +1528,16 @@ const getPortfolioAllocation = async (req, res) => {
           return acc;
         }, {})
       ).map(s => ({ ...s, value: parseFloat(s.value.toFixed(2)), valueKES: parseFloat(s.valueKES.toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((s.value / portfolioValue) * 100).toFixed(2)) : 0 }));
+
+      const byExchange = Object.values(
+        normalizedHoldings.reduce((acc, { exchange, value }) => {
+          if (!acc[exchange]) acc[exchange] = { name: exchange, value: 0, valueKES: 0, percentage: 0, count: 0 };
+          acc[exchange].value += value;
+          acc[exchange].valueKES += value * exchangeRate;
+          acc[exchange].count += 1;
+          return acc;
+        }, {})
+      ).map(e => ({ ...e, value: parseFloat(e.value.toFixed(2)), valueKES: parseFloat(e.valueKES.toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((e.value / portfolioValue) * 100).toFixed(2)) : 0 }));
 
       const cashEntry = msBalance + localCashUsd > 0 ? [{
         name: 'Cash (MyStocks)',
@@ -1280,11 +1553,11 @@ const getPortfolioAllocation = async (req, res) => {
         allocation: {
           byAssetClass: [
             ...cashEntry,
-            ...(marketValue > 0 ? [{ name: 'African Equities', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((marketValue / portfolioValue) * 100).toFixed(2)) : 0, count: holdings.length, stocks: byStock }] : [])
+            ...(marketValue > 0 ? [{ name: 'African Equities', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((marketValue / portfolioValue) * 100).toFixed(2)) : 0, count: normalizedHoldings.length, stocks: byStock }] : [])
           ],
           bySector,
           byStock,
-          byExchange: holdings.length > 0 ? [{ name: 'NSE', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: marketValue > 0 ? 100 : 0, count: holdings.length }] : []
+          byExchange
         },
         summary: {
           portfolioValue: parseFloat(portfolioValue.toFixed(2)),
