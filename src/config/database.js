@@ -48,7 +48,7 @@ const connectDB = async () => {
     logger.info(`PostgreSQL Connected: ${sequelize.config.host}:${sequelize.config.port}`);
 
     if (process.env.NODE_ENV !== 'production') {
-      await sequelize.sync({ alter: false }); // Changed from alter: true to prevent schema changes
+      await sequelize.sync({ alter: false });
       logger.info('Database synchronized');
     }
   } catch (error) {
