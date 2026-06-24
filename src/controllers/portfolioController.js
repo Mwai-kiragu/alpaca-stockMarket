@@ -1510,8 +1510,8 @@ const getPortfolioAllocation = async (req, res) => {
           value: parseFloat(value.toFixed(2)),
           valueKES: parseFloat((value * exchangeRate).toFixed(2)),
           percentage: portfolioValue > 0 ? parseFloat(((value / portfolioValue) * 100).toFixed(2)) : 0,
-          qty,
-          price,
+          quantity: Math.ceil(qty),   // int for Flutter model (ceil so 0.01 → 1, not 0)
+          currentPrice: price,
           avgEntryPrice: parseFloat(cost.toFixed(8)),
           unrealizedPL: parseFloat(unrealizedPL.toFixed(2)),
           unrealizedPLPercent: costBasis > 0 ? parseFloat(((unrealizedPL / costBasis) * 100).toFixed(2)) : 0,
@@ -1553,7 +1553,7 @@ const getPortfolioAllocation = async (req, res) => {
         allocation: {
           byAssetClass: [
             ...cashEntry,
-            ...(marketValue > 0 ? [{ name: 'African Equities', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((marketValue / portfolioValue) * 100).toFixed(2)) : 0, count: normalizedHoldings.length, stocks: byStock }] : [])
+            ...(marketValue > 0 ? [{ name: 'African Equities', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((marketValue / portfolioValue) * 100).toFixed(2)) : 0, count: normalizedHoldings.length, stocks: byStock.map(s => s.symbol) }] : [])
           ],
           bySector,
           byStock,
