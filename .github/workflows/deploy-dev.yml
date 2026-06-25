@@ -98,6 +98,12 @@ jobs:
             --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap \
             --command="sudo install -m 600 -o $DEPLOY_USER -g $DEPLOY_USER /tmp/deploy.env /tmp/deploy.env.owned && sudo mv /tmp/deploy.env.owned /tmp/deploy.env && sudo -u $DEPLOY_USER bash /tmp/remote-deploy.sh"
 
+      - name: Apply nginx config
+        run: |
+          gcloud compute ssh "$VM_NAME" \
+            --zone="$VM_ZONE" --project="$GCP_PROJECT" --tunnel-through-iap \
+            --command="sudo cp $DEPLOY_PATH/nginx-dev.conf /etc/nginx/sites-available/riven && sudo ln -sf /etc/nginx/sites-available/riven /etc/nginx/sites-enabled/riven && sudo rm -f /etc/nginx/sites-enabled/default && sudo nginx -t && sudo systemctl reload nginx && echo 'Nginx reloaded for dev.rivenapp.com'"
+
       - name: Clean up artifacts on VM
         if: always()
         run: |
