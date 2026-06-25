@@ -23,6 +23,9 @@ const {
   getConfig,
   updateConfig,
   getRevenue,
+  getAuditLogs,
+  getAuditLogStats,
+  getUserIssues,
 } = require('../controllers/adminController');
 
 const router = express.Router();
@@ -66,5 +69,10 @@ router.put('/config', updateConfig);
 
 // Revenue
 router.get('/revenue', getRevenue);
+
+// Audit Logs
+router.get('/audit-logs/stats', getAuditLogStats);
+router.get('/audit-logs', getAuditLogs);
+router.get('/user-issues', getUserIssues);
 
 module.exports = router;

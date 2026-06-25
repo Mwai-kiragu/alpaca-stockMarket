@@ -1,4 +1,5 @@
 const { sequelize } = require('../config/database');
+const AuditLog = require('./AuditLog');
 const User = require('./User');
 const { Wallet, Transaction } = require('./Wallet');
 const Order = require('./Order');
@@ -77,6 +78,10 @@ Referral.belongsTo(WaitlistUser, { foreignKey: 'referred_user_id', as: 'referred
 User.hasMany(PlatformRevenue, { foreignKey: 'user_id', as: 'revenue' });
 PlatformRevenue.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
+// Audit log associations
+User.hasMany(AuditLog, { foreignKey: 'actor_id', as: 'auditLogs' });
+AuditLog.belongsTo(User, { foreignKey: 'actor_id', as: 'actor' });
+
 // User referral associations (self-referencing)
 User.belongsTo(User, { foreignKey: 'referred_by', as: 'referrer' });
 User.hasMany(User, { foreignKey: 'referred_by', as: 'referredUsers' });
@@ -89,6 +94,7 @@ UserReferral.belongsTo(User, { foreignKey: 'referred_id', as: 'referred' });
 
 module.exports = {
   sequelize,
+  AuditLog,
   User,
   Wallet,
   Transaction,

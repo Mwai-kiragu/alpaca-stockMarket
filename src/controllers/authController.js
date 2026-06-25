@@ -7,6 +7,7 @@ const brevoEmailService = require('../services/brevoEmailService');
 const notificationService = require('../services/notificationService');
 const mystocksService = require('../services/mystocksService');
 const logger = require('../utils/logger');
+const { audit, reqCtx } = require('../utils/auditLogger');
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -111,6 +112,7 @@ const register = async (req, res) => {
       });
 
     logger.info(`New user registered: ${email}`);
+    audit({ ...reqCtx(req), action: 'auth.register', targetType: 'user', targetId: null, details: { email } });
 
     res.status(201).json({
       success: true,
@@ -155,6 +157,7 @@ const login = async (req, res) => {
     if (!isMatch) {
       await user.incLoginAttempts();
       const remainingAttempts = 5 - (user.login_attempts + 1);
+      audit({ ...reqCtx(req), action: 'auth.login_failed', targetType: 'user', targetId: user.id, details: { email, remainingAttempts: Math.max(remainingAttempts, 0) }, status: 'failure', severity: 'warning' });
 
       if (remainingAttempts > 0) {
         return res.status(401).json({
@@ -211,6 +214,7 @@ const login = async (req, res) => {
     const onboardingComplete = user.registration_status === 'completed';
 
     logger.info(`User logged in: ${email}`);
+    audit({ ...reqCtx(req), actorId: user.id, actorRole: user.role || 'user', action: 'auth.login', targetType: 'user', targetId: user.id, details: { email } });
 
     res.status(200).json({
       success: true,

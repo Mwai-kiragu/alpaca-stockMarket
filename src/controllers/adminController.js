@@ -1,8 +1,9 @@
-const { User, Transaction, Order, MsOrder } = require('../models');
+const { User, Transaction, Order, MsOrder, AuditLog } = require('../models');
 const PlatformRevenue = require('../models/PlatformRevenue');
 const { Op, fn, col, literal } = require('sequelize');
 const logger = require('../utils/logger');
 const platformConfigService = require('../services/platformConfigService');
+const { audit, reqCtx } = require('../utils/auditLogger');
 
 const adminController = {
   // Get all pending KYC applications
@@ -133,6 +134,7 @@ const adminController = {
       });
 
       logger.info(`KYC approved for user: ${user.email} by ${reviewedBy || 'admin'}`);
+      audit({ ...reqCtx(req), action: 'kyc.approve', targetType: 'user', targetId: userId, details: { email: user.email, comments } });
 
       // Send approval notification (implement email/SMS service)
       try {
@@ -211,6 +213,7 @@ const adminController = {
       });
 
       logger.info(`KYC rejected for user: ${user.email} by ${reviewedBy || 'admin'}, reason: ${reason}`);
+      audit({ ...reqCtx(req), action: 'kyc.reject', targetType: 'user', targetId: userId, details: { email: user.email, reason, comments } });
 
       // Send rejection notification
       try {
@@ -455,6 +458,7 @@ const adminController = {
       });
 
       logger.info(`Additional KYC info requested for user: ${user.email}`);
+      audit({ ...reqCtx(req), action: 'kyc.request_info', targetType: 'user', targetId: userId, details: { email: user.email, requestedInfo } });
 
       // Send info request notification
       try {
@@ -791,6 +795,7 @@ const adminController = {
       if (!user.is_active) return res.status(400).json({ success: false, message: 'Cannot suspend a deleted user' });
       await user.update({ status: 'suspended' });
       logger.info(`User ${user.email} suspended by admin ${req.user.id}`);
+      audit({ ...reqCtx(req), action: 'user.suspend', targetType: 'user', targetId: userId, details: { email: user.email } });
       res.json({ success: true, message: 'User suspended', data: { status: 'suspended' } });
     } catch (error) {
       logger.error('Suspend user error:', error);
@@ -806,6 +811,7 @@ const adminController = {
       if (!user.is_active) return res.status(400).json({ success: false, message: 'Cannot activate a deleted user' });
       await user.update({ status: 'active' });
       logger.info(`User ${user.email} activated by admin ${req.user.id}`);
+      audit({ ...reqCtx(req), action: 'user.activate', targetType: 'user', targetId: userId, details: { email: user.email } });
       res.json({ success: true, message: 'User activated', data: { status: 'active' } });
     } catch (error) {
       logger.error('Activate user error:', error);
@@ -821,6 +827,7 @@ const adminController = {
       if (!user) return res.status(404).json({ success: false, message: 'User not found' });
       await user.update({ is_active: false, deleted_at: new Date(), status: 'closed' });
       logger.info(`User ${user.email} soft-deleted by admin ${req.user.id}`);
+      audit({ ...reqCtx(req), action: 'user.delete', targetType: 'user', targetId: userId, details: { email: user.email }, severity: 'warning' });
       res.json({ success: true, message: 'User account deleted' });
     } catch (error) {
       logger.error('Delete user error:', error);
@@ -837,8 +844,10 @@ const adminController = {
       }
       const user = await User.findByPk(userId);
       if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+      const previousRole = user.role;
       await user.update({ role });
       logger.info(`User ${user.email} role changed to ${role} by admin ${req.user.id}`);
+      audit({ ...reqCtx(req), action: 'user.role_change', targetType: 'user', targetId: userId, details: { email: user.email, previousRole, newRole: role } });
       res.json({ success: true, message: `User role updated to ${role}`, data: { role } });
     } catch (error) {
       logger.error('Update user role error:', error);
@@ -883,6 +892,7 @@ const adminController = {
       });
 
       logger.info(`Password reset for user ${user.email} by admin ${req.user.id}`);
+      audit({ ...reqCtx(req), action: 'user.password_reset', targetType: 'user', targetId: userId, details: { email: user.email }, severity: 'warning' });
       res.json({ success: true, message: 'Password reset email sent' });
     } catch (error) {
       logger.error('Reset user password error:', error);
@@ -1039,6 +1049,7 @@ const adminController = {
           return res.status(400).json({ success: false, message: `Cannot cancel order with status: ${order.status}` });
         await order.update({ status: 'cancelled' });
         logger.info(`Order ${orderId} cancelled by admin ${req.user.id}`);
+        audit({ ...reqCtx(req), action: 'order.cancel', targetType: 'order', targetId: orderId, details: { source: 'alpaca', symbol: order.symbol, userId: order.user_id }, severity: 'warning' });
         return res.json({ success: true, message: 'Order cancelled', data: { status: 'cancelled' } });
       }
       if (source === 'mystocks') {
@@ -1048,6 +1059,7 @@ const adminController = {
           return res.status(400).json({ success: false, message: `Cannot cancel order with status: ${order.status}` });
         await order.update({ status: 'CANCELLED' });
         logger.info(`MsOrder ${orderId} cancelled by admin ${req.user.id}`);
+        audit({ ...reqCtx(req), action: 'order.cancel', targetType: 'order', targetId: orderId, details: { source: 'mystocks', symbol: order.symbol, userId: order.user_id }, severity: 'warning' });
         return res.json({ success: true, message: 'Order cancelled', data: { status: 'CANCELLED' } });
       }
       return res.status(400).json({ success: false, message: 'source must be alpaca or mystocks' });
@@ -1071,6 +1083,7 @@ const adminController = {
       if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
       await order.update({ flagged: true, flag_note: note.trim() });
       logger.info(`Order ${orderId} (${source}) flagged by admin ${req.user.id}`);
+      audit({ ...reqCtx(req), action: 'order.flag', targetType: 'order', targetId: orderId, details: { source, note: note.trim(), symbol: order.symbol }, severity: 'warning' });
       res.json({ success: true, message: 'Order flagged', data: { flagged: true, flagNote: note.trim() } });
     } catch (error) {
       logger.error('Flag order error:', error);
@@ -1090,6 +1103,7 @@ const adminController = {
       if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
       await order.update({ flagged: false, flag_note: null });
       logger.info(`Order ${orderId} (${source}) resolved by admin ${req.user.id}`);
+      audit({ ...reqCtx(req), action: 'order.resolve', targetType: 'order', targetId: orderId, details: { source, symbol: order.symbol } });
       res.json({ success: true, message: 'Order resolved', data: { flagged: false, flagNote: null } });
     } catch (error) {
       logger.error('Resolve order error:', error);
@@ -1173,11 +1187,176 @@ const adminController = {
       }
 
       logger.info(`Admin ${req.user.id} updated platform config: ${JSON.stringify(updates)}`);
+      audit({ ...reqCtx(req), action: 'config.update', targetType: 'platform', targetId: 'config', details: { changes: updates }, severity: 'warning' });
       const settings = await platformConfigService.getAllSettings();
       res.json({ success: true, message: 'Config updated', data: settings });
     } catch (error) {
       logger.error('updateConfig error:', error);
       res.status(500).json({ success: false, message: 'Failed to update config' });
+    }
+  },
+
+  // GET /api/v1/admin/audit-logs
+  getAuditLogs: async (req, res) => {
+    try {
+      const {
+        page = 1, limit = 50,
+        actorId, action, targetType, targetId,
+        severity, status, from, to,
+      } = req.query;
+
+      const where = {};
+      if (actorId) where.actor_id = actorId;
+      if (action) where.action = { [Op.iLike]: `${action}%` };
+      if (targetType) where.target_type = targetType;
+      if (targetId) where.target_id = targetId;
+      if (severity) where.severity = severity;
+      if (status) where.status = status;
+      if (from || to) {
+        where.created_at = {};
+        if (from) where.created_at[Op.gte] = new Date(from);
+        if (to) where.created_at[Op.lte] = new Date(to);
+      }
+
+      const offset = (parseInt(page) - 1) * parseInt(limit);
+      const { count, rows } = await AuditLog.findAndCountAll({
+        where,
+        include: [{
+          model: User,
+          as: 'actor',
+          attributes: ['id', 'first_name', 'last_name', 'email', 'role'],
+          required: false,
+        }],
+        order: [['created_at', 'DESC']],
+        limit: parseInt(limit),
+        offset,
+      });
+
+      res.json({
+        success: true,
+        data: {
+          logs: rows.map(l => ({
+            id: l.id,
+            actor: l.actor
+              ? { id: l.actor.id, name: `${l.actor.first_name} ${l.actor.last_name}`, email: l.actor.email, role: l.actor.role }
+              : { id: l.actorId, name: l.actorRole, email: null, role: l.actorRole },
+            action: l.action,
+            targetType: l.targetType,
+            targetId: l.targetId,
+            details: l.details,
+            ip: l.ip,
+            status: l.status,
+            errorMessage: l.errorMessage,
+            severity: l.severity,
+            createdAt: l.createdAt,
+          })),
+          pagination: {
+            total: count,
+            page: parseInt(page),
+            limit: parseInt(limit),
+            totalPages: Math.ceil(count / parseInt(limit)),
+          },
+        },
+      });
+    } catch (error) {
+      logger.error('getAuditLogs error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch audit logs' });
+    }
+  },
+
+  // GET /api/v1/admin/audit-logs/stats
+  getAuditLogStats: async (req, res) => {
+    try {
+      const { days = 7 } = req.query;
+      const since = new Date(Date.now() - parseInt(days) * 24 * 60 * 60 * 1000);
+
+      const [totalActions, totalErrors, totalWarnings, recentByAction] = await Promise.all([
+        AuditLog.count({ where: { created_at: { [Op.gte]: since } } }),
+        AuditLog.count({ where: { severity: 'error', created_at: { [Op.gte]: since } } }),
+        AuditLog.count({ where: { severity: 'warning', created_at: { [Op.gte]: since } } }),
+        AuditLog.findAll({
+          attributes: ['action', [fn('COUNT', col('id')), 'count']],
+          where: { created_at: { [Op.gte]: since } },
+          group: ['action'],
+          order: [[literal('"count"'), 'DESC']],
+          limit: 10,
+          raw: true,
+        }),
+      ]);
+
+      res.json({
+        success: true,
+        data: {
+          period_days: parseInt(days),
+          totalActions,
+          totalErrors,
+          totalWarnings,
+          topActions: recentByAction.map(r => ({ action: r.action, count: parseInt(r.count) })),
+        },
+      });
+    } catch (error) {
+      logger.error('getAuditLogStats error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch audit log stats' });
+    }
+  },
+
+  // GET /api/v1/admin/user-issues  — errors users encountered
+  getUserIssues: async (req, res) => {
+    try {
+      const { page = 1, limit = 30, userId, from, to } = req.query;
+
+      const where = {
+        severity: { [Op.in]: ['error', 'warning'] },
+        status: 'failure',
+      };
+      if (userId) where.actor_id = userId;
+      if (from || to) {
+        where.created_at = {};
+        if (from) where.created_at[Op.gte] = new Date(from);
+        if (to) where.created_at[Op.lte] = new Date(to);
+      }
+
+      const offset = (parseInt(page) - 1) * parseInt(limit);
+      const { count, rows } = await AuditLog.findAndCountAll({
+        where,
+        include: [{
+          model: User,
+          as: 'actor',
+          attributes: ['id', 'first_name', 'last_name', 'email'],
+          required: false,
+        }],
+        order: [['created_at', 'DESC']],
+        limit: parseInt(limit),
+        offset,
+      });
+
+      res.json({
+        success: true,
+        data: {
+          issues: rows.map(l => ({
+            id: l.id,
+            user: l.actor
+              ? { id: l.actor.id, name: `${l.actor.first_name} ${l.actor.last_name}`, email: l.actor.email }
+              : { id: l.actorId, name: 'Unknown', email: null },
+            action: l.action,
+            path: l.targetId,
+            errorMessage: l.errorMessage,
+            details: l.details,
+            severity: l.severity,
+            ip: l.ip,
+            occurredAt: l.createdAt,
+          })),
+          pagination: {
+            total: count,
+            page: parseInt(page),
+            limit: parseInt(limit),
+            totalPages: Math.ceil(count / parseInt(limit)),
+          },
+        },
+      });
+    } catch (error) {
+      logger.error('getUserIssues error:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch user issues' });
     }
   },
 };

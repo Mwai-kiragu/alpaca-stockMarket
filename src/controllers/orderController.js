@@ -4,6 +4,7 @@ const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
 const emailService = require('../services/emailService');
 const logger = require('../utils/logger');
+const { audit, reqCtx } = require('../utils/auditLogger');
 
 const platformConfigService = require('../services/platformConfigService');
 const { recordRevenue } = require('../services/revenueService');
@@ -175,6 +176,7 @@ const createOrder = async (req, res) => {
         );
         logger.info(`MyStocks wallet balance updated for user ${req.user.id}: ${data.newWalletBalance} (rows updated: ${updated})`);
       }
+      audit({ ...reqCtx(req), action: 'order.create', targetType: 'order', targetId: data?.orderId || null, details: { symbol, side, provider: 'mystocks', exchange } });
       return res.status(202).json({ success: true, provider: 'mystocks', data });
     }
 
@@ -388,6 +390,7 @@ const createOrder = async (req, res) => {
         side,
         quantity
       });
+      audit({ ...reqCtx(req), action: 'order.create', targetType: 'order', targetId: order.id, details: { symbol, side, quantity, orderType, provider: 'alpaca' } });
 
       // Send notification email
       try {
