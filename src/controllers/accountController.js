@@ -25,17 +25,38 @@ const getAccountInfo = async (req, res) => {
     const localCashUsd = localUsdBalance + (localKesBalance / exchangeRate);
 
     if (!user || !user.alpaca_account_id) {
-      // No Alpaca account — return MyStocks wallet + local wallet for African-only users
+      // No Alpaca account — return MyStocks wallet + portfolio for African-only users
       let msWallet = null;
+      let msPortfolio = null;
       try {
         const subAccountId = await ensureMyStocksSubAccount(req.user.id);
-        msWallet = await ms.getWallet(subAccountId);
+        [msWallet, msPortfolio] = await Promise.all([
+          ms.getWallet(subAccountId),
+          ms.getPortfolio(subAccountId)
+        ]);
       } catch (_) {}
 
       const apiBalance = parseFloat(msWallet?.wallet?.balance || msWallet?.balance || msWallet?.usdBalance || 0);
       const storedBalance = parseFloat(user.mystocks_wallet_balance || 0);
       const msUsdBalance = apiBalance > 0 ? apiBalance : storedBalance;
-      const totalUsd = localCashUsd + msUsdBalance;
+
+      // Compute holdings market value using full price fallback chain
+      const rawHoldings = msPortfolio
+        ? (Array.isArray(msPortfolio) ? msPortfolio
+          : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
+          : Array.isArray(msPortfolio?.positions) ? msPortfolio.positions : [])
+        : [];
+      const holdingsValue = rawHoldings.reduce((s, h) => {
+        const qty = parseFloat(h.quantity || h.qty || h.units || h.shares || 0);
+        if (qty <= 0) return s;
+        const unitPrice = parseFloat(h.currentPrice || h.price || h.localPrice || h.lastPrice || h.marketPrice || h.usdPrice || h.unitPrice || 0);
+        const totalVal = parseFloat(h.value || h.currentValue || h.totalValue || h.marketValue || 0);
+        const price = unitPrice || (totalVal > 0 ? totalVal / qty : 0);
+        return s + price * qty;
+      }, 0);
+
+      const totalCash = msUsdBalance + localCashUsd;
+      const totalEquity = totalCash + holdingsValue;
 
       const walletWithBalance = msWallet
         ? { ...msWallet, wallet: { ...(msWallet.wallet || {}), balance: msUsdBalance } }
@@ -45,7 +66,23 @@ const getAccountInfo = async (req, res) => {
         success: true,
         provider: 'mystocks',
         account: {
-          alpacaAccount: null,
+          alpacaAccount: {
+            portfolioValue: parseFloat(totalEquity.toFixed(4)),
+            portfolioValueKES: parseFloat((totalEquity * exchangeRate).toFixed(2)),
+            longMarketValue: parseFloat(holdingsValue.toFixed(4)),
+            longMarketValueKES: parseFloat((holdingsValue * exchangeRate).toFixed(2)),
+            cash: parseFloat(totalCash.toFixed(4)),
+            cashKES: parseFloat((totalCash * exchangeRate).toFixed(2)),
+            equity: parseFloat(totalEquity.toFixed(4)),
+            equityKES: parseFloat((totalEquity * exchangeRate).toFixed(2)),
+            buyingPower: parseFloat(totalCash.toFixed(4)),
+            buyingPowerKES: parseFloat((totalCash * exchangeRate).toFixed(2)),
+            dayChange: 0,
+            dayChangeKES: 0,
+            dayChangePercent: 0,
+            status: 'ACTIVE',
+            currency: 'USD'
+          },
           localWallet: {
             kesBalance: localKesBalance,
             usdBalance: localUsdBalance,
@@ -58,12 +95,12 @@ const getAccountInfo = async (req, res) => {
             africanMarketsEnabled: true,
             usMarketsEnabled: false
           },
-          account_mode: user?.account_mode || 'demo',
+          account_mode: user?.account_mode || 'live',
           demo_balance: parseFloat(user?.demo_balance || 0),
-          isDemo: (user?.account_mode || 'demo') === 'demo',
+          isDemo: false,
           exchangeRate,
-          totalEquity: totalUsd,
-          totalEquityKES: totalUsd * exchangeRate,
+          totalEquity: parseFloat(totalEquity.toFixed(4)),
+          totalEquityKES: parseFloat((totalEquity * exchangeRate).toFixed(2)),
           lastUpdated: new Date().toISOString()
         }
       });
