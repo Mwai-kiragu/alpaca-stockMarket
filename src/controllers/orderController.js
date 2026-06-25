@@ -110,44 +110,64 @@ const createOrder = async (req, res) => {
           return res.status(503).json({ success: false, message: 'Unable to fetch current price. Please try again.' });
         }
 
-        const exchangeRate = await exchangeService.getExchangeRate('USD', 'KES');
-        const tradeFeeRate = await platformConfigService.getSetting('trade_fee_rate');
+        const [exchangeRate, tradeFeeRate, wallet] = await Promise.all([
+          exchangeService.getExchangeRate('USD', 'KES'),
+          platformConfigService.getSetting('trade_fee_rate'),
+          Wallet.findOne({ where: { user_id: req.user.id } }),
+        ]);
+
         const grossKes = qty * currentPrice;
         const feeKes = Math.round(grossKes * tradeFeeRate * 100) / 100;
         const totalKes = grossKes + feeKes;
-
-        const wallet = await Wallet.findOne({ where: { user_id: req.user.id } });
         const kesBalance = parseFloat(wallet?.kes_balance || 0);
 
-        if (kesBalance < totalKes) {
+        // Fetch live MyStocks wallet balance — more accurate than cached value
+        // because previous orders may not have updated the cache correctly
+        let myStocksUsdBalance = parseFloat(user.mystocks_wallet_balance || 0);
+        try {
+          const msWallet = await ms.getWallet(subAccountId);
+          myStocksUsdBalance = parseFloat(msWallet?.wallet?.balance ?? msWallet?.balance ?? myStocksUsdBalance);
+        } catch (_) {
+          // fall back to cached value — don't block the order
+        }
+
+        const myStocksKesEquiv = Math.round(myStocksUsdBalance * exchangeRate * 100) / 100;
+        const shortfallKes = Math.max(0, Math.round((totalKes - myStocksKesEquiv) * 100) / 100);
+
+        if (kesBalance < shortfallKes) {
+          const totalAvailableKes = Math.round((kesBalance + myStocksKesEquiv) * 100) / 100;
           return res.status(400).json({
             success: false,
             message: 'Insufficient balance',
             required: `KES ${totalKes.toFixed(2)}`,
-            available: `KES ${kesBalance.toFixed(2)}`,
+            available: `KES ${totalAvailableKes.toFixed(2)}`,
           });
         }
 
-        // Convert KES → USD and deposit to MyStocks sub-account
-        const usdAmount = Math.round((totalKes / exchangeRate) * 10000) / 10000;
-        try {
-          await ms.depositToSubAccount(subAccountId, {
-            amount: usdAmount,
-            currency: 'USD',
-            localAmount: totalKes,
-            localCurrency: 'KES',
-            fxRate: exchangeRate,
-            reference: `ORDER_${req.user.id}_${Date.now()}`,
-          });
-          await wallet.update({ kes_balance: Math.max(0, kesBalance - totalKes) });
-          logger.info(`Funded MyStocks $${usdAmount} (KES ${totalKes}) for user ${req.user.id}`);
-        } catch (fundErr) {
-          logger.error(`MyStocks deposit failed for user ${req.user.id}: ${fundErr.message}`);
-          const msError = fundErr.response?.data?.error || fundErr.response?.data?.message || '';
-          const userMessage = msError.toLowerCase().includes('master wallet')
-            ? 'Trading services are temporarily unavailable. Please try again later or contact support.'
-            : 'Failed to fund trading account. Please try again.';
-          return res.status(502).json({ success: false, message: userMessage });
+        // Deposit only the shortfall — if MyStocks already covers the full cost skip the deposit
+        if (shortfallKes > 0) {
+          const usdAmount = Math.round((shortfallKes / exchangeRate) * 10000) / 10000;
+          try {
+            await ms.depositToSubAccount(subAccountId, {
+              amount: usdAmount,
+              currency: 'USD',
+              localAmount: shortfallKes,
+              localCurrency: 'KES',
+              fxRate: exchangeRate,
+              reference: `ORDER_${req.user.id}_${Date.now()}`,
+            });
+            await wallet.update({ kes_balance: Math.max(0, kesBalance - shortfallKes) });
+            logger.info(`Funded MyStocks $${usdAmount} (KES ${shortfallKes}) shortfall for user ${req.user.id}`);
+          } catch (fundErr) {
+            logger.error(`MyStocks deposit failed for user ${req.user.id}: ${fundErr.message}`);
+            const msError = fundErr.response?.data?.error || fundErr.response?.data?.message || '';
+            const userMessage = msError.toLowerCase().includes('master wallet')
+              ? 'Trading services are temporarily unavailable. Please try again later or contact support.'
+              : 'Failed to fund trading account. Please try again.';
+            return res.status(502).json({ success: false, message: userMessage });
+          }
+        } else {
+          logger.info(`MyStocks balance sufficient ($${myStocksUsdBalance}) for user ${req.user.id} — skipping deposit`);
         }
       }
 

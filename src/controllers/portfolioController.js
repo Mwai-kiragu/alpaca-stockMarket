@@ -1517,7 +1517,7 @@ const getPortfolioAllocation = async (req, res) => {
           name: h.name || h.symbol,
           value: parseFloat(value.toFixed(2)),
           valueKES: parseFloat((value * exchangeRate).toFixed(2)),
-          percentage: portfolioValue > 0 ? parseFloat(((value / portfolioValue) * 100).toFixed(2)) : 0,
+          percentage: marketValue > 0 ? parseFloat(((value / marketValue) * 100).toFixed(2)) : 0,
           quantity: Math.ceil(qty),   // int for Flutter model (ceil so 0.01 → 1, not 0)
           currentPrice: price,
           avgEntryPrice: parseFloat(cost.toFixed(8)),
@@ -1535,7 +1535,7 @@ const getPortfolioAllocation = async (req, res) => {
           acc[sector].count += 1;
           return acc;
         }, {})
-      ).map(s => ({ ...s, value: parseFloat(s.value.toFixed(2)), valueKES: parseFloat(s.valueKES.toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((s.value / portfolioValue) * 100).toFixed(2)) : 0 }));
+      ).map(s => ({ ...s, value: parseFloat(s.value.toFixed(2)), valueKES: parseFloat(s.valueKES.toFixed(2)), percentage: marketValue > 0 ? parseFloat(((s.value / marketValue) * 100).toFixed(2)) : 0 }));
 
       const byExchange = Object.values(
         normalizedHoldings.reduce((acc, { exchange, value }) => {
@@ -1545,14 +1545,14 @@ const getPortfolioAllocation = async (req, res) => {
           acc[exchange].count += 1;
           return acc;
         }, {})
-      ).map(e => ({ ...e, value: parseFloat(e.value.toFixed(2)), valueKES: parseFloat(e.valueKES.toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((e.value / portfolioValue) * 100).toFixed(2)) : 0 }));
+      ).map(e => ({ ...e, value: parseFloat(e.value.toFixed(2)), valueKES: parseFloat(e.valueKES.toFixed(2)), percentage: marketValue > 0 ? parseFloat(((e.value / marketValue) * 100).toFixed(2)) : 0 }));
 
       return res.json({
         success: true,
         provider: 'mystocks',
         allocation: {
           byAssetClass: [
-            ...(marketValue > 0 ? [{ name: 'African Equities', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((marketValue / portfolioValue) * 100).toFixed(2)) : 0, count: normalizedHoldings.length, stocks: byStock.map(s => s.symbol) }] : [])
+            ...(marketValue > 0 ? [{ name: 'African Equities', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: 100, count: normalizedHoldings.length, stocks: byStock.map(s => s.symbol) }] : [])
           ],
           bySector,
           byStock,
@@ -1625,14 +1625,11 @@ const getPortfolioAllocation = async (req, res) => {
       });
     }
 
-    // Total value for percentage calculations (includes cash)
-    const totalValue = portfolioValue;
-
     // Fetch additional data for each position (sector, industry)
     const positionDetails = await Promise.all(
       positions.map(async (position) => {
-        const marketValue = parseFloat(position.market_value);
-        const percentage = totalValue > 0 ? (marketValue / totalValue) * 100 : 0;
+        const posMarketValue = parseFloat(position.market_value);
+        const percentage = marketValue > 0 ? (posMarketValue / marketValue) * 100 : 0;
 
         // Try to get asset details for sector/industry info
         let sector = 'Unknown';
@@ -1663,9 +1660,9 @@ const getPortfolioAllocation = async (req, res) => {
 
         return {
           symbol: position.symbol,
-          name: position.symbol, // Could fetch company name
-          marketValue,
-          marketValueKES: marketValue * exchangeRate,
+          name: position.symbol,
+          marketValue: posMarketValue,
+          marketValueKES: posMarketValue * exchangeRate,
           percentage: parseFloat(percentage.toFixed(2)),
           quantity: parseFloat(position.qty),
           currentPrice: parseFloat(position.current_price),
@@ -1700,22 +1697,10 @@ const getPortfolioAllocation = async (req, res) => {
       assetClassGroups[key].stocks.push(pos.symbol);
     });
 
-    // Add Cash as an asset class if there's cash in the account
-    if (totalCash > 0) {
-      assetClassGroups['Cash'] = {
-        name: 'Cash',
-        value: totalCash,
-        valueKES: totalCash * exchangeRate,
-        percentage: 0,
-        count: 0,
-        stocks: []
-      };
-    }
-
-    // Calculate percentages for asset classes
+    // Calculate percentages for asset classes (holdings only — cash excluded so percentages sum to 100%)
     const byAssetClass = Object.values(assetClassGroups).map(group => ({
       ...group,
-      percentage: parseFloat(((group.value / totalValue) * 100).toFixed(2)),
+      percentage: parseFloat(((group.value / marketValue) * 100).toFixed(2)),
       value: parseFloat(group.value.toFixed(2)),
       valueKES: parseFloat(group.valueKES.toFixed(2))
     })).sort((a, b) => b.percentage - a.percentage);
@@ -1743,7 +1728,7 @@ const getPortfolioAllocation = async (req, res) => {
     // Calculate percentages for exchanges
     const byExchange = Object.values(exchangeGroups).map(group => ({
       ...group,
-      percentage: parseFloat(((group.value / totalValue) * 100).toFixed(2)),
+      percentage: parseFloat(((group.value / marketValue) * 100).toFixed(2)),
       value: parseFloat(group.value.toFixed(2)),
       valueKES: parseFloat(group.valueKES.toFixed(2))
     })).sort((a, b) => b.percentage - a.percentage);
@@ -1771,7 +1756,7 @@ const getPortfolioAllocation = async (req, res) => {
     // Calculate percentages for sectors
     const bySector = Object.values(sectorGroups).map(group => ({
       ...group,
-      percentage: parseFloat(((group.value / totalValue) * 100).toFixed(2)),
+      percentage: parseFloat(((group.value / marketValue) * 100).toFixed(2)),
       value: parseFloat(group.value.toFixed(2)),
       valueKES: parseFloat(group.valueKES.toFixed(2))
     })).sort((a, b) => b.percentage - a.percentage);
