@@ -130,6 +130,7 @@ const getPortfolio = async (req, res) => {
       let msPortfolio = null;
       let msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
       let pendingOrders = [];
+      let getAvgEntry = () => 0;
 
       try {
         if (user?.mystocks_sub_account_id) {
@@ -147,7 +148,7 @@ const getPortfolio = async (req, res) => {
           if (ordersData.status === 'fulfilled') {
             pendingOrders = Array.isArray(ordersData.value?.orders) ? ordersData.value.orders : [];
           }
-          const getAvgEntry = computeAvgEntryPrices(msOrdersData.status === 'fulfilled' ? msOrdersData.value : []);
+          getAvgEntry = computeAvgEntryPrices(msOrdersData.status === 'fulfilled' ? msOrdersData.value : []);
         }
       } catch (_) {}
 
