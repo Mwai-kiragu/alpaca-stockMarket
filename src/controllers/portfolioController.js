@@ -1199,8 +1199,11 @@ const getAssetTrend = async (req, res) => {
 
       // Current value = filled holdings market value + pending order amounts + cash
       const holdingsValue = holdings.reduce((s, h) => {
-        const price = parseFloat(h.currentPrice || h.price || h.usdPrice || 0);
         const qty = parseFloat(h.quantity || h.qty || h.units || h.shares || 0);
+        if (qty <= 0) return s;
+        const unitPrice = parseFloat(h.currentPrice || h.price || h.localPrice || h.lastPrice || h.marketPrice || h.usdPrice || h.unitPrice || 0);
+        const totalVal = parseFloat(h.value || h.currentValue || h.totalValue || h.marketValue || 0);
+        const price = unitPrice || (totalVal > 0 ? totalVal / qty : 0);
         return s + price * qty;
       }, 0);
       const pendingValue = pendingOrders.reduce((s, o) => s + parseFloat(o.totalAmount || 0), 0);
@@ -1462,12 +1465,16 @@ const getPortfolioAllocation = async (req, res) => {
       // African-only user — build allocation from MyStocks portfolio + wallet
       let holdings = [];
       let getAvgEntry = () => 0;
+      let msBalance = parseFloat(user?.mystocks_wallet_balance || 0);
       try {
         if (user?.mystocks_sub_account_id) {
-          const [msPortfolio, msOrdersForAvg] = await Promise.all([
+          const [msPortfolio, msWalletData, msOrdersForAvg] = await Promise.all([
             ms.getPortfolio(user.mystocks_sub_account_id),
+            ms.getWallet(user.mystocks_sub_account_id),
             MsOrder.findAll({ where: { user_id: req.user.id }, order: [['filled_at', 'ASC']] })
           ]);
+          const liveBalance = parseFloat(msWalletData?.wallet?.balance || msWalletData?.balance || 0);
+          if (liveBalance > 0) msBalance = liveBalance;
           getAvgEntry = computeAvgEntryPrices(msOrdersForAvg);
           const raw = Array.isArray(msPortfolio) ? msPortfolio
             : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
@@ -1475,8 +1482,6 @@ const getPortfolioAllocation = async (req, res) => {
           holdings = raw;
         }
       } catch (_) {}
-
-      const msBalance = parseFloat(user?.mystocks_wallet_balance || 0);
 
       // Normalize holdings with full price fallback chain (same as getPortfolio)
       const normalizedHoldings = holdings
