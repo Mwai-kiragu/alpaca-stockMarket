@@ -129,7 +129,8 @@ const getBars = async (req, res) => {
   const { symbol } = req.params;
 
   try {
-    const { timeframe = '1Day', start, end, limit = 100, exchange, range = '1M' } = req.query;
+    const { timeframe = '1Day', start, end, limit = 100, exchange, range = '1M', isPaperTrade } = req.query;
+    const paperMode = isPaperTrade === 'true';
 
     // African symbol detected by .KE/.NG/.ZA etc. suffix → MyStocks
     if (isAfricanSymbol(symbol)) {
@@ -258,22 +259,26 @@ const getBars = async (req, res) => {
           avgPaperPrice = totalQty > 0 ? totalCost / totalQty : 0;
         }
 
+        const realPos = realQty > 0.00001 ? {
+          quantity: parseFloat(realQty.toFixed(6)),
+          averageEntryPrice: parseFloat(avgRealPrice.toFixed(4)),
+          currentPrice,
+          unrealizedPL: currentPrice > 0 ? parseFloat(((currentPrice - avgRealPrice) * realQty).toFixed(4)) : null,
+          unrealizedPLPercent: currentPrice > 0 && avgRealPrice > 0 ? parseFloat((((currentPrice - avgRealPrice) / avgRealPrice) * 100).toFixed(2)) : null
+        } : null;
+        const paperPos = paperQty > 0.00001 ? {
+          quantity: parseFloat(paperQty.toFixed(6)),
+          averageEntryPrice: parseFloat(avgPaperPrice.toFixed(4)),
+          currentPrice,
+          unrealizedPL: currentPrice > 0 ? parseFloat(((currentPrice - avgPaperPrice) * paperQty).toFixed(4)) : null,
+          unrealizedPLPercent: currentPrice > 0 && avgPaperPrice > 0 ? parseFloat((((currentPrice - avgPaperPrice) / avgPaperPrice) * 100).toFixed(2)) : null
+        } : null;
+        const activePos = paperMode ? paperPos : realPos;
         ownership = {
-          hasPosition: realQty > 0.00001 || paperQty > 0.00001,
-          realPosition: realQty > 0.00001 ? {
-            quantity: parseFloat(realQty.toFixed(6)),
-            averageEntryPrice: parseFloat(avgRealPrice.toFixed(4)),
-            currentPrice,
-            unrealizedPL: currentPrice > 0 ? parseFloat(((currentPrice - avgRealPrice) * realQty).toFixed(4)) : null,
-            unrealizedPLPercent: currentPrice > 0 && avgRealPrice > 0 ? parseFloat((((currentPrice - avgRealPrice) / avgRealPrice) * 100).toFixed(2)) : null
-          } : null,
-          paperPosition: paperQty > 0.00001 ? {
-            quantity: parseFloat(paperQty.toFixed(6)),
-            averageEntryPrice: parseFloat(avgPaperPrice.toFixed(4)),
-            currentPrice,
-            unrealizedPL: currentPrice > 0 ? parseFloat(((currentPrice - avgPaperPrice) * paperQty).toFixed(4)) : null,
-            unrealizedPLPercent: currentPrice > 0 && avgPaperPrice > 0 ? parseFloat((((currentPrice - avgPaperPrice) / avgPaperPrice) * 100).toFixed(2)) : null
-          } : null
+          hasPosition: !!activePos,
+          realPosition: realPos,
+          paperPosition: paperPos,
+          ...(activePos && { quantity: activePos.quantity, averageEntryPrice: activePos.averageEntryPrice, unrealizedPL: activePos.unrealizedPL, unrealizedPLPercent: activePos.unrealizedPLPercent })
         };
       } catch (_) {}
 
@@ -2297,6 +2302,7 @@ const getCompanyInfo = async (req, res) => {
       const logo = slugData?.logo?.imageUrl || `/api/v1/assets/logo/${upperSymbol}`;
 
       // Build position from MsOrder + DemoOrder
+      const paperMode = req.query.isPaperTrade === 'true';
       let yourPosition = null;
       let isWatchlisted = false;
       const userId = req.user?.id;
@@ -2342,11 +2348,12 @@ const getCompanyInfo = async (req, res) => {
 
           const realPos = calcPosition(realOrders, 'local_price');
           const paperPos = calcPosition(paperOrders, 'price_usd');
+          const primaryPos = paperMode ? paperPos : realPos;
 
-          if (realPos || paperPos) {
+          if (primaryPos) {
             yourPosition = {
-              ...(realPos || paperPos),
-              source: realPos ? 'mystocks' : 'demo',
+              ...primaryPos,
+              source: paperMode ? 'demo' : 'mystocks',
               realPosition: realPos,
               paperPosition: paperPos
             };

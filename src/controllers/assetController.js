@@ -94,6 +94,14 @@ const getAssets = async (req, res) => {
         serviceUnavailable = isTimeout || status === 503 || status === 502 || status === 504;
       }
 
+      // MyStocks returns stocks and ETFs mixed — split them by name pattern
+      const isEtf = (a) => /\b(ETF|ETP|ETN|AMETF|AMET)\b/i.test(a.name || '');
+      if (category === 'etf') {
+        all = all.filter(isEtf);
+      } else if (!category || category === 'stock' || category === 'equity') {
+        all = all.filter(a => !isEtf(a));
+      }
+
       const pageNum = Math.max(1, parseInt(page, 10) || 1);
       const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
       const start = (pageNum - 1) * limitNum;
