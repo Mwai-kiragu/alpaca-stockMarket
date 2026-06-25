@@ -863,8 +863,103 @@ const handleOrderFill = async (order) => {
   }
 };
 
+const estimateOrder = async (req, res) => {
+  try {
+    const { symbol, quantity, exchange, limit_price: limitPrice } = req.body;
+
+    if (!symbol || !quantity) {
+      return res.status(400).json({ success: false, message: 'symbol and quantity are required' });
+    }
+    const qty = parseFloat(quantity);
+    if (!qty || isNaN(qty) || qty <= 0) {
+      return res.status(400).json({ success: false, message: 'Invalid quantity' });
+    }
+
+    const user = await User.findByPk(req.user.id, { attributes: ['id', 'mystocks_sub_account_id', 'alpaca_account_id'] });
+    const [exchangeRate, tradeFeeRate] = await Promise.all([
+      exchangeService.getExchangeRate('USD', 'KES'),
+      platformConfigService.getSetting('trade_fee_rate'),
+    ]);
+
+    if (isAfrican(exchange)) {
+      const msSymbol = symbol.toUpperCase();
+      const ticker = msSymbol.includes('.') ? msSymbol.split('.')[0] : msSymbol;
+      let pricePerShare = 0;
+      try {
+        const snap = await ms.getStocks({ search: ticker });
+        const all = Array.isArray(snap) ? snap : (snap?.stocks || []);
+        const stock = all.find(s => {
+          const sym = (s.symbol || '').toUpperCase();
+          return sym === msSymbol || sym === ticker;
+        }) || all[0];
+        if (stock) pricePerShare = parseFloat(stock.price || stock.currentPrice || 0);
+      } catch (_) {}
+
+      if (!pricePerShare || pricePerShare <= 0) {
+        return res.status(503).json({ success: false, message: 'Unable to fetch current price. Please try again.' });
+      }
+
+      const grossKes = qty * pricePerShare;
+      const commissionKes = Math.round(grossKes * tradeFeeRate * 100) / 100;
+      const totalKes = grossKes + commissionKes;
+
+      return res.json({
+        success: true,
+        provider: 'mystocks',
+        currency: 'KES',
+        symbol,
+        quantity: qty,
+        pricePerShare,
+        pricePerShareKes: pricePerShare,
+        grossAmount: parseFloat((grossKes / exchangeRate).toFixed(4)),
+        grossAmountKes: parseFloat(grossKes.toFixed(2)),
+        commission: parseFloat((commissionKes / exchangeRate).toFixed(4)),
+        commissionKes: parseFloat(commissionKes.toFixed(2)),
+        commissionRate: tradeFeeRate,
+        estimatedTotal: parseFloat((totalKes / exchangeRate).toFixed(4)),
+        estimatedTotalKes: parseFloat(totalKes.toFixed(2)),
+        exchangeRate,
+      });
+    }
+
+    // Alpaca path
+    const quote = await alpacaService.getLatestQuote(symbol);
+    let pricePerShare = limitPrice ? parseFloat(limitPrice) : (parseFloat(quote.ap) || parseFloat(quote.bp) || 0);
+
+    if (!pricePerShare || pricePerShare <= 0) {
+      return res.status(503).json({ success: false, message: 'Unable to fetch current price. Please try again.' });
+    }
+
+    const grossUsd = qty * pricePerShare;
+    const commissionUsd = Math.round(grossUsd * tradeFeeRate * 100) / 100;
+    const totalUsd = grossUsd + commissionUsd;
+
+    return res.json({
+      success: true,
+      provider: 'alpaca',
+      currency: 'USD',
+      symbol,
+      quantity: qty,
+      pricePerShare,
+      pricePerShareKes: parseFloat((pricePerShare * exchangeRate).toFixed(2)),
+      grossAmount: parseFloat(grossUsd.toFixed(4)),
+      grossAmountKes: parseFloat((grossUsd * exchangeRate).toFixed(2)),
+      commission: parseFloat(commissionUsd.toFixed(4)),
+      commissionKes: parseFloat((commissionUsd * exchangeRate).toFixed(2)),
+      commissionRate: tradeFeeRate,
+      estimatedTotal: parseFloat(totalUsd.toFixed(4)),
+      estimatedTotalKes: parseFloat((totalUsd * exchangeRate).toFixed(2)),
+      exchangeRate,
+    });
+  } catch (error) {
+    logger.error('Estimate order error:', error);
+    res.status(500).json({ success: false, message: 'Failed to estimate order cost' });
+  }
+};
+
 module.exports = {
   createOrder,
+  estimateOrder,
   getOrders,
   getOrder,
   cancelOrder,

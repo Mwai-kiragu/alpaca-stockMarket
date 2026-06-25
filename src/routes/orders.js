@@ -1,6 +1,7 @@
 const express = require('express');
 const {
   createOrder,
+  estimateOrder,
   getOrders,
   getOrder,
   cancelOrder,
@@ -11,6 +12,9 @@ const { orderValidation, paginationValidation } = require('../middleware/validat
 const { checkAccountStatus } = require('../middleware/checkAccountStatus');
 
 const router = express.Router();
+
+// Estimate order cost before placing (no KYC required — read-only price lookup)
+router.post('/estimate', auth, estimateOrder);
 
 // Trading operations require account status check
 router.post('/', auth, requireKYCOrMyStocks, checkAccountStatus, orderValidation, createOrder);
