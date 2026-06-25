@@ -132,9 +132,13 @@ const createOrder = async (req, res) => {
         }
 
         const myStocksKesEquiv = Math.round(myStocksUsdBalance * exchangeRate * 100) / 100;
-        const shortfallKes = Math.max(0, Math.round((totalKes - myStocksKesEquiv) * 100) / 100);
 
-        if (kesBalance < shortfallKes) {
+        // Shortfall for stock cost only — fee stays with the platform, never goes to MyStocks
+        const grossShortfallKes = Math.max(0, Math.round((grossKes - myStocksKesEquiv) * 100) / 100);
+        // User must have enough local KES to cover both the stock shortfall and the platform fee
+        const totalDeductKes = Math.round((grossShortfallKes + feeKes) * 100) / 100;
+
+        if (kesBalance < totalDeductKes) {
           const totalAvailableKes = Math.round((kesBalance + myStocksKesEquiv) * 100) / 100;
           return res.status(400).json({
             success: false,
@@ -144,20 +148,19 @@ const createOrder = async (req, res) => {
           });
         }
 
-        // Deposit only the shortfall — if MyStocks already covers the full cost skip the deposit
-        if (shortfallKes > 0) {
-          const usdAmount = Math.round((shortfallKes / exchangeRate) * 10000) / 10000;
+        // Deposit only the stock cost shortfall to MyStocks — fee is kept by the platform
+        if (grossShortfallKes > 0) {
+          const usdAmount = Math.round((grossShortfallKes / exchangeRate) * 10000) / 10000;
           try {
             await ms.depositToSubAccount(subAccountId, {
               amount: usdAmount,
               currency: 'USD',
-              localAmount: shortfallKes,
+              localAmount: grossShortfallKes,
               localCurrency: 'KES',
               fxRate: exchangeRate,
               reference: `ORDER_${req.user.id}_${Date.now()}`,
             });
-            await wallet.update({ kes_balance: Math.max(0, kesBalance - shortfallKes) });
-            logger.info(`Funded MyStocks $${usdAmount} (KES ${shortfallKes}) shortfall for user ${req.user.id}`);
+            logger.info(`Funded MyStocks $${usdAmount} (KES ${grossShortfallKes}) for user ${req.user.id}`);
           } catch (fundErr) {
             logger.error(`MyStocks deposit failed for user ${req.user.id}: ${fundErr.message}`);
             const msError = fundErr.response?.data?.error || fundErr.response?.data?.message || '';
@@ -168,6 +171,37 @@ const createOrder = async (req, res) => {
           }
         } else {
           logger.info(`MyStocks balance sufficient ($${myStocksUsdBalance}) for user ${req.user.id} — skipping deposit`);
+        }
+
+        // Deduct stock shortfall + platform fee from local KES wallet in one update
+        if (totalDeductKes > 0) {
+          await wallet.update({ kes_balance: Math.max(0, kesBalance - totalDeductKes) });
+        }
+
+        // Record platform commission — fee stays with platform, not sent to MyStocks
+        if (feeKes > 0 && wallet?.id) {
+          const feeUsd = Math.round((feeKes / exchangeRate) * 10000) / 10000;
+          const orderId = `MS_${req.user.id}_${Date.now()}`;
+          Transaction.create({
+            wallet_id: wallet.id,
+            type: 'fee',
+            amount: -feeKes,
+            currency: 'KES',
+            status: 'completed',
+            reference: `FEE_${orderId}`,
+            exchange_rate: exchangeRate,
+            description: `Platform commission (${(tradeFeeRate * 100).toFixed(1)}%) for BUY ${qty} ${msSymbol}`,
+            metadata: {
+              fee_type: 'commission',
+              commission_rate: `${(tradeFeeRate * 100).toFixed(1)}%`,
+              commission_amount_kes: feeKes,
+              commission_amount_usd: feeUsd,
+              symbol: msSymbol,
+              exchange: exchange?.toUpperCase() || 'NSE',
+            }
+          }).catch(err => logger.error(`Failed to record MS commission transaction: ${err.message}`));
+          recordRevenue('trade_fee', { userId: req.user.id, amountUsd: feeUsd, currency: 'KES', reference: orderId });
+          logger.info(`Platform commission KES ${feeKes} ($${feeUsd}) collected for user ${req.user.id} BUY ${msSymbol}`);
         }
       }
 
