@@ -130,6 +130,7 @@ const getPortfolio = async (req, res) => {
       let msPortfolio = null;
       let msUsdBalance = parseFloat(user?.mystocks_wallet_balance || 0);
       let pendingOrders = [];
+      let getAvgEntry = () => 0;
 
       try {
         if (user?.mystocks_sub_account_id) {
@@ -147,7 +148,7 @@ const getPortfolio = async (req, res) => {
           if (ordersData.status === 'fulfilled') {
             pendingOrders = Array.isArray(ordersData.value?.orders) ? ordersData.value.orders : [];
           }
-          const getAvgEntry = computeAvgEntryPrices(msOrdersData.status === 'fulfilled' ? msOrdersData.value : []);
+          getAvgEntry = computeAvgEntryPrices(msOrdersData.status === 'fulfilled' ? msOrdersData.value : []);
         }
       } catch (_) {}
 
@@ -182,14 +183,14 @@ const getPortfolio = async (req, res) => {
           positions.push({
             symbol: h.symbol,
             name: h.name || h.symbol,
-            qty,
-            avgEntryPrice: cost,
+            quantity: Math.ceil(qty),
+            averageEntryPrice: cost,
             currentPrice: price,
             marketValue,
             marketValueKES: marketValue * exchangeRate,
             unrealizedPL,
             unrealizedPLKES: unrealizedPL * exchangeRate,
-            unrealizedPLPC: cost > 0 ? (unrealizedPL / (qty * cost)) * 100 : 0,
+            unrealizedPLPercent: cost > 0 ? (unrealizedPL / (qty * cost)) * 100 : 0,
             exchange: h.exchange || 'NSE',
             currency: h.currency || 'KES',
             status: h.status ? h.status.toLowerCase() : 'filled',
@@ -207,14 +208,14 @@ const getPortfolio = async (req, res) => {
         positions.push({
           symbol: o.symbol,
           name: o.stockName || o.symbol,
-          qty,
-          avgEntryPrice: priceUsd,
+          quantity: Math.ceil(qty),
+          averageEntryPrice: priceUsd,
           currentPrice: priceUsd,
           marketValue: totalUsd,
           marketValueKES: totalUsd * exchangeRate,
           unrealizedPL: 0,
           unrealizedPLKES: 0,
-          unrealizedPLPC: 0,
+          unrealizedPLPercent: 0,
           exchange: o.exchange || 'NSE',
           currency: 'USD',
           status: 'pending',
@@ -254,14 +255,14 @@ const getPortfolio = async (req, res) => {
             return {
               symbol: p.symbol,
               name: p.symbol,
-              qty: p.totalQty,
-              avgEntryPrice: p.totalQty > 0 && p.totalCost > 0 ? p.totalCost / p.totalQty : 0,
+              quantity: Math.ceil(p.totalQty),
+              averageEntryPrice: p.totalQty > 0 && p.totalCost > 0 ? p.totalCost / p.totalQty : 0,
               currentPrice,
               marketValue,
               marketValueKES: marketValue * (exchangeRate || 1),
               unrealizedPL: 0,
               unrealizedPLKES: 0,
-              unrealizedPLPC: 0,
+              unrealizedPLPercent: 0,
               exchange: p.exchange,
               currency: p.currency,
               status: 'open',
@@ -1198,22 +1199,27 @@ const getAssetTrend = async (req, res) => {
 
       // Current value = filled holdings market value + pending order amounts + cash
       const holdingsValue = holdings.reduce((s, h) => {
-        const price = parseFloat(h.currentPrice || h.price || h.usdPrice || 0);
         const qty = parseFloat(h.quantity || h.qty || h.units || h.shares || 0);
+        if (qty <= 0) return s;
+        const unitPrice = parseFloat(h.currentPrice || h.price || h.localPrice || h.lastPrice || h.marketPrice || h.usdPrice || h.unitPrice || 0);
+        const totalVal = parseFloat(h.value || h.currentValue || h.totalValue || h.marketValue || 0);
+        const price = unitPrice || (totalVal > 0 ? totalVal / qty : 0);
         return s + price * qty;
       }, 0);
       const pendingValue = pendingOrders.reduce((s, o) => s + parseFloat(o.totalAmount || 0), 0);
       const currentValue = holdingsValue + pendingValue + msWalletBalance + localCashUsd;
-      const profit = currentValue - netInvested;
+      // Profit = investment performance only (exclude local cash so uninvested KES doesn't inflate P&L)
+      const investmentValue = holdingsValue + pendingValue + msWalletBalance;
+      const profit = investmentValue - netInvested;
 
-      // Build chart from db order history — cumulative portfolio value per day
+      // Build chart: add localCash as a stable baseline so historical points match the scale of today's value
       const dayMap = new Map();
       let running = 0;
       orders.forEach(o => {
         const day = new Date(o.filled_at || o.created_at).toISOString().split('T')[0];
         const cost = parseFloat(o.total_cost_usd || 0);
         running += o.side === 'BUY' ? cost : -cost;
-        dayMap.set(day, { date: day, value: Math.max(0, running) });
+        dayMap.set(day, { date: day, value: Math.max(0, running) + localCashUsd });
       });
 
       // Always include today's actual current value as the last point
@@ -1461,12 +1467,16 @@ const getPortfolioAllocation = async (req, res) => {
       // African-only user — build allocation from MyStocks portfolio + wallet
       let holdings = [];
       let getAvgEntry = () => 0;
+      let msBalance = parseFloat(user?.mystocks_wallet_balance || 0);
       try {
         if (user?.mystocks_sub_account_id) {
-          const [msPortfolio, msOrdersForAvg] = await Promise.all([
+          const [msPortfolio, msWalletData, msOrdersForAvg] = await Promise.all([
             ms.getPortfolio(user.mystocks_sub_account_id),
+            ms.getWallet(user.mystocks_sub_account_id),
             MsOrder.findAll({ where: { user_id: req.user.id }, order: [['filled_at', 'ASC']] })
           ]);
+          const liveBalance = parseFloat(msWalletData?.wallet?.balance || msWalletData?.balance || 0);
+          if (liveBalance > 0) msBalance = liveBalance;
           getAvgEntry = computeAvgEntryPrices(msOrdersForAvg);
           const raw = Array.isArray(msPortfolio) ? msPortfolio
             : Array.isArray(msPortfolio?.holdings) ? msPortfolio.holdings
@@ -1474,8 +1484,6 @@ const getPortfolioAllocation = async (req, res) => {
           holdings = raw;
         }
       } catch (_) {}
-
-      const msBalance = parseFloat(user?.mystocks_wallet_balance || 0);
 
       // Normalize holdings with full price fallback chain (same as getPortfolio)
       const normalizedHoldings = holdings
@@ -1539,20 +1547,11 @@ const getPortfolioAllocation = async (req, res) => {
         }, {})
       ).map(e => ({ ...e, value: parseFloat(e.value.toFixed(2)), valueKES: parseFloat(e.valueKES.toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((e.value / portfolioValue) * 100).toFixed(2)) : 0 }));
 
-      const cashEntry = msBalance + localCashUsd > 0 ? [{
-        name: 'Cash (MyStocks)',
-        value: parseFloat((msBalance + localCashUsd).toFixed(2)),
-        valueKES: parseFloat(((msBalance + localCashUsd) * exchangeRate).toFixed(2)),
-        percentage: portfolioValue > 0 ? parseFloat((((msBalance + localCashUsd) / portfolioValue) * 100).toFixed(2)) : 100,
-        count: 0, stocks: []
-      }] : [];
-
       return res.json({
         success: true,
         provider: 'mystocks',
         allocation: {
           byAssetClass: [
-            ...cashEntry,
             ...(marketValue > 0 ? [{ name: 'African Equities', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((marketValue / portfolioValue) * 100).toFixed(2)) : 0, count: normalizedHoldings.length, stocks: byStock.map(s => s.symbol) }] : [])
           ],
           bySector,

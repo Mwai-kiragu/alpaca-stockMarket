@@ -56,7 +56,15 @@ const socialRoutes = require('./routes/social');
 const app = express();
 const server = createServer(app);
 
-// Enable WebSocket support for native WebSocket connections
+// Socket.IO must be initialized BEFORE express-ws.
+// Both attach a listener to server's 'upgrade' event. Node.js fires them in registration order.
+// express-ws destroys unmatched upgrade sockets — if it runs first, Socket.IO never gets them.
+// By registering Socket.IO's upgrade handler first, /socket.io/ upgrades are handled correctly;
+// express-ws then handles /ws/ paths for its registered app.ws() routes.
+const io = websocketService.initialize(server);
+app.set('io', io);
+
+// Native WebSocket for payment notifications — registered after Socket.IO upgrade handler
 const expressWs = require('express-ws')(app, server);
 
 // Trust proxy to properly handle X-Forwarded-* headers
@@ -210,10 +218,6 @@ app.get('/', (req, res) => {
 });
 
 app.use(errorHandler);
-
-// Initialize WebSocket service (Socket.IO)
-const io = websocketService.initialize(server);
-app.set('io', io);
 
 // Register native WebSocket endpoint for payment notifications (Redis-based)
 app.ws('/ws/payment/:messageId', handlePaymentWebSocket);

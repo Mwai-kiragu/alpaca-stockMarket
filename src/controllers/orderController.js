@@ -492,27 +492,36 @@ const getOrders = async (req, res) => {
         offset
       });
 
+      const msStatusToAlpaca = { PENDING: 'pending_new', FILLED: 'filled', CANCELLED: 'canceled', EXPIRED: 'expired' };
       return res.json({
         success: true,
         provider: 'mystocks',
-        orders: msOrders.map(o => ({
-          id: o.id,
-          orderId: o.order_id,
-          symbol: o.symbol,
-          logo: `/api/v1/assets/logo/${o.symbol}`,
-          side: o.side,
-          quantity: parseFloat(o.quantity),
-          localPrice: parseFloat(o.local_price || 0),
-          usdPrice: parseFloat(o.usd_price || 0),
-          grossUsd: parseFloat(o.gross_usd || 0),
-          feeUsd: parseFloat(o.fee_usd || 0),
-          totalCostUsd: parseFloat(o.total_cost_usd || 0),
-          currency: o.currency,
-          status: o.status,
-          exchange: o.exchange,
-          filledAt: o.filled_at,
-          createdAt: o.created_at
-        })),
+        orders: msOrders.map(o => {
+          const usdPrice = parseFloat(o.usd_price || 0);
+          const createdAt = o.createdAt || o.created_at || null;
+          return {
+            id: o.id,
+            orderId: o.order_id,
+            symbol: o.symbol,
+            logo: `/api/v1/assets/logo/${o.symbol}`,
+            side: o.side.toLowerCase(),       // Flutter expects lowercase: 'buy' / 'sell'
+            quantity: parseFloat(o.quantity),
+            price: usdPrice,                  // Flutter: json['price']
+            averagePrice: usdPrice,           // Flutter: json['averagePrice']
+            limitPrice: usdPrice,
+            localPrice: parseFloat(o.local_price || 0),
+            usdPrice,
+            grossUsd: parseFloat(o.gross_usd || 0),
+            feeUsd: parseFloat(o.fee_usd || 0),
+            totalCostUsd: parseFloat(o.total_cost_usd || 0),
+            currency: o.currency,
+            status: msStatusToAlpaca[o.status] || o.status.toLowerCase(),
+            exchange: o.exchange,
+            filledAt: o.filled_at,
+            submittedAt: createdAt,           // Flutter: json['submittedAt'] → date display
+            createdAt
+          };
+        }),
         pagination: {
           currentPage: pageNum,
           totalPages: Math.ceil(count / limitNum),
