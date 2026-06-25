@@ -1,8 +1,10 @@
-const { User, Order, Wallet, MsOrder, DemoOrder } = require('../models');
+const { User, Order, Wallet, Transaction, MsOrder, DemoOrder } = require('../models');
+const { Op } = require('sequelize');
 const alpacaService = require('../services/alpacaService');
 const ms = require('../services/mystocksService');
 const exchangeService = require('../services/exchangeService');
 const logger = require('../utils/logger');
+const redisService = require('../config/redis');
 const { getProviderFlags } = require('../services/platformConfigService');
 
 const AFRICAN_EXCHANGES = new Set(['NSE', 'NGX', 'JSE', 'GSE', 'BRVM', 'LUSE', 'EGX', 'BSE', 'SEM']);
@@ -790,6 +792,47 @@ const getPosition = async (req, res) => {
   }
 };
 
+// Returns today's net deposits in USD (deposits - withdrawals), excluding trading activity.
+// Deposits/withdrawals distort naive % change — callers subtract this before computing return %.
+async function getTodayNetDepositsUsd(userId, exchangeRate) {
+  try {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const wallet = await Wallet.findOne({ where: { user_id: userId } });
+    if (!wallet) return 0;
+    const txns = await Transaction.findAll({
+      where: {
+        wallet_id: wallet.id,
+        type: { [Op.in]: ['deposit', 'withdrawal'] },
+        status: 'completed',
+        created_at: { [Op.gte]: todayStart },
+      },
+    });
+    const netKes = txns.reduce((sum, t) => {
+      const amt = Math.abs(parseFloat(t.amount));
+      return t.type === 'deposit' ? sum + amt : sum - amt;
+    }, 0);
+    // Transactions are stored in KES; divide by rate to get USD equivalent
+    return netKes / (exchangeRate || 1);
+  } catch (_) {
+    return 0;
+  }
+}
+
+// Returns { sodEquity } — the equity at the start of today (first request sets the baseline).
+// Stored in Redis so it survives within the trading day; TTL 25h so it always expires overnight.
+async function getSodEquity(userId, currentEquity) {
+  const today = new Date().toISOString().slice(0, 10);
+  const key = `equity_sod:${userId}:${today}`;
+  try {
+    const cached = await redisService.get(key);
+    if (cached !== null && cached !== undefined) return parseFloat(cached);
+    // First request today — lock in current equity as SOD baseline
+    await redisService.set(key, String(currentEquity), 90000);
+  } catch (_) {}
+  return currentEquity; // no change yet (same as SOD)
+}
+
 const getPerformance = async (req, res) => {
   try {
     const { period = '1M' } = req.query;
@@ -814,16 +857,21 @@ const getPerformance = async (req, res) => {
 
     // African-only user — compute performance from MsOrder history
     if (!user?.alpaca_account_id) {
-      const orders = await MsOrder.findAll({
-        where: {
-          user_id: req.user.id,
-          filled_at: { [MsOrder.sequelize.Sequelize.Op.between]: [startDate, endDate] }
-        },
-        order: [['filled_at', 'ASC']]
-      });
+      // Fetch all-time orders (for cost basis) and period orders (for trading stats) in parallel
+      const [orders, allMsOrders] = await Promise.all([
+        MsOrder.findAll({
+          where: {
+            user_id: req.user.id,
+            filled_at: { [Op.between]: [startDate, endDate] }
+          },
+          order: [['filled_at', 'ASC']]
+        }),
+        MsOrder.findAll({ where: { user_id: req.user.id }, order: [['filled_at', 'ASC']] })
+      ]);
 
       // currentEquity = cash balance + market value of current holdings
       let currentEquity = parseFloat(user?.mystocks_wallet_balance || 0);
+      let msHoldingsValue = 0; // market value of open positions (used for totalReturn)
       try {
         if (user?.mystocks_sub_account_id) {
           const [walletResult, portfolioResult] = await Promise.allSettled([
@@ -852,6 +900,7 @@ const getPerformance = async (req, res) => {
               return s + qty * price;
             }, 0);
           }
+          msHoldingsValue = holdingsValue;
           currentEquity = cashBalance + holdingsValue;
         }
       } catch (_) {}
@@ -859,7 +908,6 @@ const getPerformance = async (req, res) => {
       // Live portfolio returns no price data for these symbols — compute holdings value
       // the same way getPositions does: MsOrder net qty + ms.getStocks current price
       if (currentEquity <= 0) {
-        const allMsOrders = await MsOrder.findAll({ where: { user_id: req.user.id }, order: [['filled_at', 'ASC']] });
         const bySymbol = {};
         for (const o of allMsOrders) {
           const sym = o.symbol;
@@ -882,7 +930,8 @@ const getPerformance = async (req, res) => {
             } catch (_) { return 0; }
           })
         );
-        currentEquity = holdingValues.reduce((s, v) => s + v, 0);
+        msHoldingsValue = holdingValues.reduce((s, v) => s + v, 0);
+        currentEquity = msHoldingsValue;
       }
 
       const buyOrders = orders.filter(o => o.side === 'BUY');
@@ -930,6 +979,37 @@ const getPerformance = async (req, res) => {
       const totalTrades = orders.length;
       const avgTradeSize = totalTrades > 0 ? (totalBought + totalSold) / totalTrades : 0;
 
+      // --- Total Return (cost-basis method — deposit/withdrawal neutral) ---
+      // Compute avgEntryPrice and netQty for every symbol across all-time orders
+      const holdingsBasis = {};
+      for (const o of allMsOrders) {
+        const sym = o.symbol;
+        if (!holdingsBasis[sym]) holdingsBasis[sym] = { totalQty: 0, totalCost: 0 };
+        const qty = parseFloat(o.quantity);
+        const cost = parseFloat(o.total_cost_usd || (qty * parseFloat(o.usd_price || 0)));
+        if (o.side === 'BUY') {
+          holdingsBasis[sym].totalQty += qty;
+          holdingsBasis[sym].totalCost += cost;
+        } else {
+          const sellRatio = holdingsBasis[sym].totalQty > 0 ? Math.min(qty / holdingsBasis[sym].totalQty, 1) : 0;
+          holdingsBasis[sym].totalCost -= holdingsBasis[sym].totalCost * sellRatio;
+          holdingsBasis[sym].totalQty = Math.max(0, holdingsBasis[sym].totalQty - qty);
+        }
+      }
+      const totalCostBasis = Object.values(holdingsBasis)
+        .filter(h => h.totalQty > 0.0001)
+        .reduce((s, h) => s + h.totalCost, 0);
+      const totalReturn = msHoldingsValue - totalCostBasis;
+      const totalReturnPercent = totalCostBasis > 0 ? (totalReturn / totalCostBasis) * 100 : 0;
+
+      // --- Today's Return (SOD snapshot + deduct today's deposits/withdrawals) ---
+      const [sodEquity, todayNetDepositsUsd] = await Promise.all([
+        getSodEquity(req.user.id, currentEquity),
+        getTodayNetDepositsUsd(req.user.id, exchangeRate),
+      ]);
+      const todayReturn = currentEquity - sodEquity - todayNetDepositsUsd;
+      const todayReturnPercent = sodEquity > 0 ? (todayReturn / sodEquity) * 100 : 0;
+
       return res.json({
         success: true,
         provider: 'mystocks',
@@ -938,7 +1018,16 @@ const getPerformance = async (req, res) => {
           summary: {
             currentEquity: parseFloat(currentEquity.toFixed(4)),
             currentEquityKES: parseFloat((currentEquity * exchangeRate).toFixed(2)),
-            dayChange: 0, dayChangeKES: 0, dayChangePercent: 0,
+            // Today's return — market movement only, deposits/withdrawals excluded
+            todayReturn: parseFloat(todayReturn.toFixed(4)),
+            todayReturnKES: parseFloat((todayReturn * exchangeRate).toFixed(2)),
+            todayReturnPercent: parseFloat(todayReturnPercent.toFixed(2)),
+            // Total return — pure market gain/loss from cost basis, never distorted by cash flows
+            totalReturn: parseFloat(totalReturn.toFixed(4)),
+            totalReturnKES: parseFloat((totalReturn * exchangeRate).toFixed(2)),
+            totalReturnPercent: parseFloat(totalReturnPercent.toFixed(2)),
+            totalCostBasis: parseFloat(totalCostBasis.toFixed(4)),
+            totalCostBasisKES: parseFloat((totalCostBasis * exchangeRate).toFixed(2)),
             totalTrades,
             totalBought: parseFloat(totalBought.toFixed(4)),
             totalBoughtKES: parseFloat((totalBought * exchangeRate).toFixed(2)),
@@ -980,8 +1069,18 @@ const getPerformance = async (req, res) => {
     const totalSold = sellOrders.reduce((sum, order) => sum + (order.filled_quantity * order.average_price), 0);
 
     const currentEquity = parseFloat(account.equity || 0);
-    const dayChange = parseFloat(account.unrealized_pl || 0);
-    const dayChangePercent = currentEquity > 0 ? (dayChange / (currentEquity - dayChange)) * 100 : 0;
+    const lastEquity = parseFloat(account.last_equity || currentEquity);
+
+    // Total Return = unrealized P&L on open positions (market gains only, cost-basis based)
+    const totalReturn = parseFloat(account.unrealized_pl || 0);
+    const longMarketValue = parseFloat(account.long_market_value || 0);
+    const totalCostBasis = longMarketValue - totalReturn;
+    const totalReturnPercent = totalCostBasis > 0 ? (totalReturn / totalCostBasis) * 100 : 0;
+
+    // Today's Return = equity change since last close, minus any deposits/withdrawals made today
+    const todayNetDepositsUsd = await getTodayNetDepositsUsd(req.user.id, exchangeRate);
+    const todayReturn = (currentEquity - lastEquity) - todayNetDepositsUsd;
+    const todayReturnPercent = lastEquity > 0 ? (todayReturn / lastEquity) * 100 : 0;
 
     // Group orders by symbol for analysis
     const symbolPerformance = {};
@@ -1022,16 +1121,23 @@ const getPerformance = async (req, res) => {
         summary: {
           currentEquity,
           currentEquityKES: currentEquity * exchangeRate,
-          dayChange,
-          dayChangeKES: dayChange * exchangeRate,
-          dayChangePercent: parseFloat(dayChangePercent.toFixed(2)),
+          // Today's return — market movement only, today's deposits/withdrawals excluded
+          todayReturn: parseFloat(todayReturn.toFixed(4)),
+          todayReturnKES: parseFloat((todayReturn * exchangeRate).toFixed(2)),
+          todayReturnPercent: parseFloat(todayReturnPercent.toFixed(2)),
+          // Total return — unrealized P&L from cost basis, never inflated by deposits
+          totalReturn: parseFloat(totalReturn.toFixed(4)),
+          totalReturnKES: parseFloat((totalReturn * exchangeRate).toFixed(2)),
+          totalReturnPercent: parseFloat(totalReturnPercent.toFixed(2)),
+          totalCostBasis: parseFloat(totalCostBasis.toFixed(4)),
+          totalCostBasisKES: parseFloat((totalCostBasis * exchangeRate).toFixed(2)),
           totalTrades,
-          totalBought,
-          totalBoughtKES: totalBought * exchangeRate,
-          totalSold,
-          totalSoldKES: totalSold * exchangeRate,
-          netFlow: totalSold - totalBought,
-          netFlowKES: (totalSold - totalBought) * exchangeRate
+          totalBought: parseFloat(totalBought.toFixed(4)),
+          totalBoughtKES: parseFloat((totalBought * exchangeRate).toFixed(2)),
+          totalSold: parseFloat(totalSold.toFixed(4)),
+          totalSoldKES: parseFloat((totalSold * exchangeRate).toFixed(2)),
+          netFlow: parseFloat((totalSold - totalBought).toFixed(4)),
+          netFlowKES: parseFloat(((totalSold - totalBought) * exchangeRate).toFixed(2))
         },
         trading: {
           buyOrders: buyOrders.length,
