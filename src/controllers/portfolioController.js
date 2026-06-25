@@ -1208,16 +1208,18 @@ const getAssetTrend = async (req, res) => {
       }, 0);
       const pendingValue = pendingOrders.reduce((s, o) => s + parseFloat(o.totalAmount || 0), 0);
       const currentValue = holdingsValue + pendingValue + msWalletBalance + localCashUsd;
-      const profit = currentValue - netInvested;
+      // Profit = investment performance only (exclude local cash so uninvested KES doesn't inflate P&L)
+      const investmentValue = holdingsValue + pendingValue + msWalletBalance;
+      const profit = investmentValue - netInvested;
 
-      // Build chart from db order history — cumulative portfolio value per day
+      // Build chart: add localCash as a stable baseline so historical points match the scale of today's value
       const dayMap = new Map();
       let running = 0;
       orders.forEach(o => {
         const day = new Date(o.filled_at || o.created_at).toISOString().split('T')[0];
         const cost = parseFloat(o.total_cost_usd || 0);
         running += o.side === 'BUY' ? cost : -cost;
-        dayMap.set(day, { date: day, value: Math.max(0, running) });
+        dayMap.set(day, { date: day, value: Math.max(0, running) + localCashUsd });
       });
 
       // Always include today's actual current value as the last point
@@ -1545,20 +1547,11 @@ const getPortfolioAllocation = async (req, res) => {
         }, {})
       ).map(e => ({ ...e, value: parseFloat(e.value.toFixed(2)), valueKES: parseFloat(e.valueKES.toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((e.value / portfolioValue) * 100).toFixed(2)) : 0 }));
 
-      const cashEntry = msBalance + localCashUsd > 0 ? [{
-        name: 'Cash (MyStocks)',
-        value: parseFloat((msBalance + localCashUsd).toFixed(2)),
-        valueKES: parseFloat(((msBalance + localCashUsd) * exchangeRate).toFixed(2)),
-        percentage: portfolioValue > 0 ? parseFloat((((msBalance + localCashUsd) / portfolioValue) * 100).toFixed(2)) : 100,
-        count: 0, stocks: []
-      }] : [];
-
       return res.json({
         success: true,
         provider: 'mystocks',
         allocation: {
           byAssetClass: [
-            ...cashEntry,
             ...(marketValue > 0 ? [{ name: 'African Equities', value: parseFloat(marketValue.toFixed(2)), valueKES: parseFloat((marketValue * exchangeRate).toFixed(2)), percentage: portfolioValue > 0 ? parseFloat(((marketValue / portfolioValue) * 100).toFixed(2)) : 0, count: normalizedHoldings.length, stocks: byStock.map(s => s.symbol) }] : [])
           ],
           bySector,
